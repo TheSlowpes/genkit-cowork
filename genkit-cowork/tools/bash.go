@@ -18,8 +18,7 @@ import (
 )
 
 type execOptions struct {
-	OnData func(data []byte)
-	Env    []string
+	Env []string
 }
 
 // ExecOption configures command execution behaviour.
@@ -52,8 +51,8 @@ type BashSpawnContext struct {
 // before a command is executed.
 type BashSpawnHook func(BashSpawnContext) BashSpawnContext
 
-// WithCustomOperator injects a custom BashOperator implementation.
-func WithCustomOperator(operator BashOperator) BashToolOption {
+// WithCustomBashOperator injects a custom BashOperator implementation.
+func WithCustomBashOperator(operator BashOperator) BashToolOption {
 	return func(opts *bashToolOptions) {
 		opts.operator = operator
 	}
@@ -72,6 +71,12 @@ func WithCommandPrefix(prefix string) BashToolOption {
 func WithBeforeSpawnHook(hook BashSpawnHook) BashToolOption {
 	return func(opts *bashToolOptions) {
 		opts.beforeSpawn = hook
+	}
+}
+
+func WithCustomEnv(env []string) ExecOption {
+	return func(opts *execOptions) {
+		opts.Env = env
 	}
 }
 
@@ -193,7 +198,7 @@ func NewBashTool(g *genkit.Genkit, cwd string, opts ...BashToolOption) ai.Tool {
 			output, exitCode, execErr := options.operator.Exec(ctx, cmd, execCwd, input.Timeout, execOpts...)
 
 			// Process the output through truncation.
-			result := processBashOutput(output, exitCode, execErr)
+			result := processBashOutput(output, exitCode)
 			if execErr != nil {
 				return result, fmt.Errorf("command failed: %w", execErr)
 			}
@@ -206,7 +211,7 @@ func NewBashTool(g *genkit.Genkit, cwd string, opts ...BashToolOption) ai.Tool {
 // the output exceeds the truncation threshold, the full output is saved
 // to a temp file and the returned content contains only the tail with
 // an actionable notice pointing to the full output.
-func processBashOutput(output string, exitCode int, execErr error) BashToolOutput {
+func processBashOutput(output string, exitCode int) BashToolOutput {
 	if output == "" {
 		content := "(no output)"
 		if exitCode != 0 {
