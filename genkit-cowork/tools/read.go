@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -23,9 +24,9 @@ type ReadToolInput struct {
 // swapped for testing, sandboxing, or remote execution (e.g., SSH).
 type ReadOperator interface {
 	// ReadFile reads the entire contents of a file.
-	ReadFile(absolutePath string) ([]byte, error)
+	ReadFile(ctx context.Context, absolutePath string) ([]byte, error)
 	// Access checks whether a file is readable. Returns an error if not.
-	Access(absolutePath string) error
+	Access(ctx context.Context, absolutePath string) error
 	// DetectImageMimeType returns the image MIME type if the file is a
 	// supported image format, or "" for non-images.
 	DetectImageMimeType(absolutePath string) string
@@ -56,11 +57,11 @@ func WithCustomReadOperator(operator ReadOperator) ReadToolOption {
 // defaultReadOperator is the standard filesystem-backed implementation.
 type defaultReadOperator struct{}
 
-func (o *defaultReadOperator) ReadFile(absolutePath string) ([]byte, error) {
+func (o *defaultReadOperator) ReadFile(ctx context.Context, absolutePath string) ([]byte, error) {
 	return os.ReadFile(absolutePath)
 }
 
-func (o *defaultReadOperator) Access(absolutePath string) error {
+func (o *defaultReadOperator) Access(ctx context.Context, absolutePath string) error {
 	_, err := os.Stat(absolutePath)
 	return err
 }
@@ -93,14 +94,14 @@ func NewReadTool(g *genkit.Genkit, cwd string, opts ...ReadToolOption) ai.Tool {
 		"read",
 		description,
 		func(ctx *ai.ToolContext, input ReadToolInput) (*ai.MultipartToolResponse, error) {
-			return handleRead(input, cwd, &options)
+			return handleRead(ctx, input, cwd, &options)
 		},
 	)
 }
 
 // handleRead contains the core logic for the read tool, separated from the
 // Genkit registration for testability.
-func handleRead(input ReadToolInput, cwd string, options *readToolOptions) (*ai.MultipartToolResponse, error) {
+func handleRead(ctx context.Context, input ReadToolInput, cwd string, options *readToolOptions) (*ai.MultipartToolResponse, error) {
 	ops := options.operator
 
 	// Resolve path relative to cwd.
@@ -110,28 +111,36 @@ func handleRead(input ReadToolInput, cwd string, options *readToolOptions) (*ai.
 	}
 
 	// Check file is accessible.
-	if err := ops.Access(absolutePath); err != nil {
+	if err := ops.Access(ctx, absolutePath); err != nil {
 		return nil, fmt.Errorf("cannot read file: %w", err)
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("operation cancelled")
 	}
 
 	// Detect whether this is an image.
 	mimeType := ops.DetectImageMimeType(absolutePath)
 
 	if mimeType != "" {
-		return handleImageRead(absolutePath, mimeType, ops, options.autoResizeImages)
+		return handleImageRead(ctx, absolutePath, mimeType, ops, options.autoResizeImages)
 	}
-	return handleTextRead(absolutePath, input, ops)
+	return handleTextRead(ctx, absolutePath, input, ops)
 }
 
 // handleImageRead reads an image file, optionally resizes it, and returns
 // a multipart response containing a text note and the image data.
-func handleImageRead(absolutePath, mimeType string, ops ReadOperator, autoResize bool) (*ai.MultipartToolResponse, error) {
-	buffer, err := ops.ReadFile(absolutePath)
+func handleImageRead(ctx context.Context, absolutePath, mimeType string, ops ReadOperator, autoResize bool) (*ai.MultipartToolResponse, error) {
+	buffer, err := ops.ReadFile(ctx, absolutePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read image file: %w", err)
 	}
 
 	if autoResize {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("operation cancelled")
+		}
+
 		resized, err := media.AutoResizeImage(buffer, mimeType)
 		if err != nil {
 			return nil, fmt.Errorf("failed to process image: %w", err)
@@ -168,10 +177,14 @@ func handleImageRead(absolutePath, mimeType string, ops ReadOperator, autoResize
 // handleTextRead reads a text file with offset/limit pagination, applies
 // truncation, prefixes lines with their file line numbers, and returns
 // an actionable message when content is truncated.
-func handleTextRead(absolutePath string, input ReadToolInput, ops ReadOperator) (*ai.MultipartToolResponse, error) {
-	buffer, err := ops.ReadFile(absolutePath)
+func handleTextRead(ctx context.Context, absolutePath string, input ReadToolInput, ops ReadOperator) (*ai.MultipartToolResponse, error) {
+	buffer, err := ops.ReadFile(ctx, absolutePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("operation cancelled")
 	}
 
 	textContent := string(buffer)

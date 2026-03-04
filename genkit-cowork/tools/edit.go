@@ -1,7 +1,10 @@
 package tools
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
@@ -16,15 +19,32 @@ type EditToolOption func(*editToolOptions)
 // EditOperator abstracs file editing operations so implementations can be
 // swapped for testing, sandboxing, or remote execution (e.g., SSH).
 type EditOperator interface {
-	ReadFile(absolutePath string) ([]byte, error)
-	WriteFile(absolutePath, content string) error
-	Access(absolutePath string) error
+	ReadFile(ctx context.Context, absolutePath string) ([]byte, error)
+	WriteFile(ctx context.Context, absolutePath, content string) error
+	Access(ctx context.Context, absolutePath string) error
 }
 
 func WithCustomEditOperator(operator EditOperator) EditToolOption {
 	return func(opts *editToolOptions) {
 		opts.operator = operator
 	}
+}
+
+type defaultEditOperator struct{}
+
+func (o *defaultEditOperator) ReadFile(ctx context.Context, absolutePath string) ([]byte, error) {
+	return os.ReadFile(absolutePath)
+}
+
+func (o *defaultEditOperator) WriteFile(ctx context.Context, absolutePath, content string) error {
+	fileInfo, _ := os.Stat(absolutePath)
+	permissions := fileInfo.Mode()
+	return os.WriteFile(absolutePath, []byte(content), permissions)
+}
+
+func (o *defaultEditOperator) Access(ctx context.Context, absolutePath string) error {
+	_, err := os.Stat(absolutePath)
+	return err
 }
 
 // EditToolInput is the schema for the input to the EditTool. It specifies
@@ -47,7 +67,9 @@ type EditToolOutput struct {
 
 // NewEditTool creates a Genkit tool that executes find-and-replace edits on text files.
 func NewEditTool(g *genkit.Genkit, cwd string, opts ...EditToolOption) ai.Tool {
-	options := editToolOptions{}
+	options := editToolOptions{
+		operator: &defaultEditOperator{},
+	}
 	for _, opt := range opts {
 		opt(&options)
 	}
@@ -59,16 +81,94 @@ func NewEditTool(g *genkit.Genkit, cwd string, opts ...EditToolOption) ai.Tool {
 		"edit",
 		description,
 		func(ctx *ai.ToolContext, input EditToolInput) (EditToolOutput, error) {
-			return performEdit(input, cwd, &options)
+			return performEdit(ctx, input, cwd, &options)
 		},
 	)
 }
 
 // performEdit contains the core logic for the edit tool, separated from the
 // Genkit registration for testability.
-func performEdit(input EditToolInput, cwd string, options *editToolOptions) (EditToolOutput, error) {
+func performEdit(ctx context.Context, input EditToolInput, cwd string, options *editToolOptions) (EditToolOutput, error) {
 	ops := options.operator
 
 	// Resolve path relative to cwd
+	absolutePath := resolveToCwd(input.Path, cwd)
 
+	if err := ops.Access(ctx, absolutePath); err != nil {
+		return EditToolOutput{}, fmt.Errorf("cannot access file: %w", err)
+	}
+
+	if err := ctx.Err(); err != nil {
+		return EditToolOutput{}, fmt.Errorf("operation cancelled")
+	}
+
+	buffer, err := ops.ReadFile(ctx, absolutePath)
+	if err != nil {
+		return EditToolOutput{}, fmt.Errorf("failed to read file: %w", err)
+	}
+
+	rawContent := string(buffer)
+
+	if err := ctx.Err(); err != nil {
+		return EditToolOutput{}, fmt.Errorf("operation cancelled")
+	}
+
+	bom, content := stripBom(rawContent)
+
+	originalEnding := detectLineEnding(content)
+	normalizedContent := normalizeToLF(content)
+	normalizedOldText := normalizeToLF(input.OldText)
+	normalizedNewText := normalizeToLF(input.NewText)
+
+	matchResult := fuzzyFindText(normalizedContent, normalizedOldText)
+
+	if !matchResult.Found {
+		return EditToolOutput{}, fmt.Errorf("Could not find the exact text in %s. The old text must match exactly including all whitespace and newlines.", input.Path)
+	}
+
+	fuzzyContent := normalizeForFuzzyMatch(normalizedContent)
+	fuzzyOldText := normalizeForFuzzyMatch(normalizedOldText)
+	occurrences := len(strings.Split(fuzzyContent, fuzzyOldText)) - 1
+
+	if occurrences > 1 {
+		return EditToolOutput{}, fmt.Errorf("Found %d occurences of the text in %s. The text must be unique. Please provide more context to make it unique.", occurrences, input.Path)
+	}
+
+	if err := ctx.Err(); err != nil {
+		return EditToolOutput{}, fmt.Errorf("operation cancelled")
+	}
+
+	// Perform replacement using the matched text position
+	// When fuzzy matching was used, ContentForReplacement is the normalized version
+	baseContent := matchResult.ContentForReplacement
+	newContent := baseContent[:matchResult.Index] + normalizedNewText + baseContent[matchResult.Index+matchResult.MatchLength:]
+
+	if baseContent == newContent {
+		return EditToolOutput{}, fmt.Errorf("No changes made to %s. The replacement produced identical content. This might indicate an issue with special characters or the text not existing as expected", input.Path)
+	}
+
+	if err := ctx.Err(); err != nil {
+		return EditToolOutput{}, fmt.Errorf("operation cancelled")
+	}
+
+	finalContent := bom + restoreLineEndings(newContent, originalEnding)
+	if err := ops.WriteFile(ctx, absolutePath, finalContent); err != nil {
+		return EditToolOutput{}, fmt.Errorf("failed to write file: %w", err)
+	}
+
+	contextLines := CONTEXT_LINES
+
+	diffResult, firstLineChanged := generateDiffString(baseContent, newContent, &contextLines)
+
+	if firstLineChanged == nil {
+		firstLineChanged = new(int)
+	}
+
+	return EditToolOutput{
+		Content: fmt.Sprintf("Successfully replaced text in %s.", input.Path),
+		Details: EditToolDetails{
+			Diff:             diffResult,
+			FirstChangedLine: *firstLineChanged,
+		},
+	}, nil
 }

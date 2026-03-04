@@ -53,7 +53,7 @@ Tools define what agents can do. Each tool is registered with a Genkit instance 
 
 **Read** — Read file contents (text and images) with line-offset pagination and output truncation. Supports image MIME detection and auto-resizing. See `tools/read.go`.
 
-**Edit** — Modify existing files with precise string replacement operations. Planned.
+**Edit** — Find-and-replace editing with exact and fuzzy text matching, uniqueness validation, and unified diff output. See `tools/edit.go`.
 
 **Write** — Create new files. Planned.
 
@@ -61,7 +61,8 @@ Tools are created via constructor functions that return `ai.Tool`, which integra
 
 ```go
 bashTool := tools.NewBashTool(g, cwd, tools.WithCommandPrefix("..."))
-readTool := tools.NewReadTool(g, tools.WithCustomReadOperator(op))
+readTool := tools.NewReadTool(g, cwd, tools.WithCustomReadOperator(op))
+editTool := tools.NewEditTool(g, cwd)
 ```
 
 ### 3. Memory
@@ -105,6 +106,9 @@ genkit-cowork/
 ├── tools/           # Tool definitions (bash, read, edit, write)
 │   ├── bash.go      # Bash command execution tool
 │   ├── read.go      # File/image reading tool
+│   ├── edit.go      # Find-and-replace editing tool
+│   ├── edit-diff.go  # Text normalization, fuzzy matching, diff formatting
+│   ├── diff.go       # LCS-based line diff algorithm
 │   ├── truncate.go  # Output truncation utilities
 │   ├── path.go      # Path resolution utilities
 │   └── constants.go # Output truncation limits
@@ -118,7 +122,7 @@ genkit-cowork/
 
 **Functional Options** — All tool constructors accept variadic option functions (`BashToolOption`, `ReadToolOption`) that mutate a private options struct. This keeps the API clean while allowing extensive configuration.
 
-**Operator Interfaces** — `BashOperator` and `ReadOperator` abstract the actual I/O operations behind interfaces. Default implementations are provided, but consumers can inject custom operators for sandboxing, testing, or alternative execution environments.
+**Operator Interfaces** — `BashOperator`, `ReadOperator`, and `EditOperator` abstract the actual I/O operations behind interfaces. Default implementations are provided, but consumers can inject custom operators for sandboxing, testing, or alternative execution environments. All operator methods that perform I/O accept `context.Context` for cooperative cancellation.
 
 **Hook System** — Hooks (e.g., `BashSpawnHook`) allow callers to intercept and modify execution context before an operation runs. This pattern will extend to flows and other pillars.
 
@@ -133,7 +137,10 @@ genkit-cowork/
 | `tools/path.go` — path resolution (cwd-relative, ~ expansion, OS-agnostic) | Implemented |
 | `media/mime.go` — MIME detection and image auto-resize (CatmullRom scaling) | Implemented |
 | `utils/shell.go` — shell environment | Implemented |
-| Tools: Edit, Write | Planned |
+| `tools/edit.go` — find-and-replace with fuzzy matching, BOM/line-ending preservation | Implemented |
+| `tools/edit-diff.go` — text normalization, fuzzy matching, unified diff generation | Implemented |
+| `tools/diff.go` — LCS-based line diff algorithm | Implemented |
+| Tools: Write | Planned |
 | Flows | Planned |
 | Memory | Planned |
 | Skills | Planned |
@@ -147,4 +154,5 @@ genkit-cowork/
 - Use functional options for all public constructors
 - Define operator interfaces for any I/O or side-effecting operations
 - Keep tool handler logic in the `tools` package; supporting utilities in `media` and `utils`
+- All operator interface methods that perform I/O accept `context.Context` as their first parameter for cooperative cancellation
 - `main.go` is gitignored and used for local testing only

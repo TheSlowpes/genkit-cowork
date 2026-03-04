@@ -65,3 +65,14 @@ func expandPath(path string) string {
 
 	return path
 }
+
+// resolveToCwd resolves a path relative to the given cwd.
+// Handles ~ expansion and absolute paths.
+func resolveToCwd(filePath, cwd string) string {
+	expanded := expandPath(filePath)
+	if filepath.IsAbs(expanded) {
+		return filepath.Clean(expanded)
+	}
+
+	return filepath.Clean(filepath.Join(cwd, expanded))
+}
