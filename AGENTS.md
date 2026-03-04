@@ -1,0 +1,150 @@
+# genkit-cowork
+
+A coworking framework for [Firebase Genkit](https://github.com/firebase/genkit) (Go) that gives AI agents pluggable capabilities for autonomous and interactive work. The framework is built around four pillars — **Flows**, **Tools**, **Memory**, and **Skills** — each of which can be registered with a Genkit application independently or as a complete suite.
+
+## Architecture
+
+### Pillars
+
+```
+┌─────────────────────────────────────────────────┐
+│                 genkit-cowork                    │
+│                                                  │
+│   ┌───────────┐  ┌───────────┐                   │
+│   │   Flows   │  │   Tools   │                   │
+│   │           │  │           │                   │
+│   │  hooks    │  │  bash     │                   │
+│   │  schedule │  │  read     │                   │
+│   │  loop     │  │  edit     │                   │
+│   │  chat     │  │  write    │                   │
+│   └───────────┘  └───────────┘                   │
+│                                                  │
+│   ┌───────────┐  ┌───────────┐                   │
+│   │  Memory   │  │  Skills   │                   │
+│   │           │  │           │                   │
+│   │  sessions │  │  org      │                   │
+│   │  retrieval│  │  industry │                   │
+│   │  recall   │  │  domain   │                   │
+│   └───────────┘  └───────────┘                   │
+│                                                  │
+│          ┌─────────────────┐                     │
+│          │  Genkit Runtime  │                     │
+│          └─────────────────┘                     │
+└─────────────────────────────────────────────────┘
+```
+
+### 1. Flows
+
+Flows define how agents execute work. The framework prioritizes four flow structures:
+
+**Hooks** — Event-driven triggers that fire before or after actions. Hooks allow interception and mutation of execution context. The existing `BashSpawnHook` pattern in `tools/bash.go` is an early example: it receives a `BashSpawnContext` (command, working directory, environment) and returns a modified version before the command executes.
+
+**Schedules / Heartbeats** — Time-based periodic execution for background tasks. Schedules enable agents to perform recurring work such as monitoring, cleanup, syncing, or health checks without explicit user prompting.
+
+**Loop** — A continuous think/act/observe cycle for autonomous agent work. The loop flow allows an agent to reason about its current state, take an action using available tools, observe the result, and decide what to do next — repeating until a goal is met or a termination condition is reached.
+
+**Chat** — Conversational back-and-forth interaction with a user. Chat flows manage turn-taking, context threading, and the integration of tool use within a dialogue.
+
+### 2. Tools
+
+Tools define what agents can do. Each tool is registered with a Genkit instance and follows the functional options pattern for configuration and the operator/strategy interface pattern for testability and sandboxing.
+
+**Bash** — Execute shell commands with configurable timeout, working directory, environment, and spawn hooks. Custom operators can be injected to sandbox or mock execution. See `tools/bash.go`.
+
+**Read** — Read file contents (text and images) with line-offset pagination and output truncation. Supports image MIME detection and auto-resizing. See `tools/read.go`.
+
+**Edit** — Modify existing files with precise string replacement operations. Planned.
+
+**Write** — Create new files. Planned.
+
+Tools are created via constructor functions that return `ai.Tool`, which integrates directly with the Genkit tool system:
+
+```go
+bashTool := tools.NewBashTool(g, cwd, tools.WithCommandPrefix("..."))
+readTool := tools.NewReadTool(g, tools.WithCustomReadOperator(op))
+```
+
+### 3. Memory
+
+Memory defines what agents remember across and within sessions. The memory system uses a combination of RAG (Retrieval-Augmented Generation) for semantic search and markdown files for human-readable, editable state.
+
+**Sessions** — Markdown-based persistence of conversation and session state. Sessions capture the interaction history and working context so an agent can resume where it left off or hand off to another agent.
+
+**Retrieval** — RAG-powered search over knowledge bases and accumulated context. Retrieval enables agents to find relevant information from large bodies of prior work, documentation, or domain knowledge using vector similarity.
+
+**Recall** — Structured markdown files that store key decisions, facts, patterns, and lessons learned. Recall provides a persistent, inspectable record that agents can reference for consistency and that humans can review and edit directly.
+
+The combination of RAG and markdown ensures that memory is both semantically searchable by agents and transparently readable by humans.
+
+### 4. Skills
+
+Skills define what agents know. The skill system injects additional domain-specific context into agent capabilities, augmenting their behavior with specialized competence.
+
+Skills are pluggable modules that provide structured knowledge for particular areas of work. The framework prioritizes skills that assist in workplace scenarios — organizational context, industry-specific knowledge, and domain expertise.
+
+Skills are loaded and composed alongside the other pillars, allowing an agent to be configured with exactly the competencies required for its role.
+
+## Pluggability
+
+The framework is designed so that each pillar can be registered with a Genkit application independently. A consumer can adopt the full framework or pick individual pieces:
+
+**Full framework** — Register all four pillars to get a fully capable coworking agent.
+
+**Individual tools** — Register only the tools you need. Each tool constructor (`NewBashTool`, `NewReadTool`, etc.) returns a standalone `ai.Tool` that works with any Genkit instance.
+
+**Individual pillars** — Mix and match flows, tools, memory, and skills based on the use case. An application might use only the tools and memory pillars without flows or skills, or use chat flows with a custom tool set.
+
+All constructors accept functional options for configuration and operator/strategy interfaces for swapping implementations, making each component independently testable and customizable.
+
+## Codebase
+
+### Package Layout
+
+```
+genkit-cowork/
+├── tools/           # Tool definitions (bash, read, edit, write)
+│   ├── bash.go      # Bash command execution tool
+│   ├── read.go      # File/image reading tool
+│   ├── truncate.go  # Output truncation utilities
+│   ├── path.go      # Path resolution utilities
+│   └── constants.go # Output truncation limits
+├── media/           # Image detection and processing
+│   └── mime.go      # MIME type detection, image resizing
+└── utils/           # Shared utilities
+    └── shell.go     # Shell environment management
+```
+
+### Design Patterns
+
+**Functional Options** — All tool constructors accept variadic option functions (`BashToolOption`, `ReadToolOption`) that mutate a private options struct. This keeps the API clean while allowing extensive configuration.
+
+**Operator Interfaces** — `BashOperator` and `ReadOperator` abstract the actual I/O operations behind interfaces. Default implementations are provided, but consumers can inject custom operators for sandboxing, testing, or alternative execution environments.
+
+**Hook System** — Hooks (e.g., `BashSpawnHook`) allow callers to intercept and modify execution context before an operation runs. This pattern will extend to flows and other pillars.
+
+### Current State
+
+| Component | Status |
+|---|---|
+| `tools/bash.go` — command execution with spawn hooks | Implemented |
+| `tools/read.go` — text file reading with offset/limit, line-number prefixing, truncation | Implemented |
+| `tools/read.go` — image reading with auto-resize (JPEG, PNG, GIF, WebP) | Implemented |
+| `tools/truncate.go` — output truncation (line + byte limits) | Implemented |
+| `tools/path.go` — path resolution (cwd-relative, ~ expansion, OS-agnostic) | Implemented |
+| `media/mime.go` — MIME detection and image auto-resize (CatmullRom scaling) | Implemented |
+| `utils/shell.go` — shell environment | Implemented |
+| Tools: Edit, Write | Planned |
+| Flows | Planned |
+| Memory | Planned |
+| Skills | Planned |
+
+## Development
+
+### Conventions
+
+- Go module path: `github.com/TheSlowpes/genkit-cowork`
+- Primary dependency: `github.com/firebase/genkit/go v1.4.0`
+- Use functional options for all public constructors
+- Define operator interfaces for any I/O or side-effecting operations
+- Keep tool handler logic in the `tools` package; supporting utilities in `media` and `utils`
+- `main.go` is gitignored and used for local testing only
