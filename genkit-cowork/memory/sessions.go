@@ -12,7 +12,7 @@ import (
 
 type SessionMessage struct {
 	MessageID string        `json:"messageID"`
-	Origin    messageOrigin `json:"origin"`
+	Origin    MessageOrigin `json:"origin"`
 	Content   ai.Message    `json:"content"`
 	Timestamp time.Time     `json:"timestamp"`
 }
@@ -121,13 +121,14 @@ func (o *defaultSessionOperator) DeleteSession(ctx context.Context, sessionID st
 	return nil
 }
 
-type messageOrigin string
+type MessageOrigin string
 
 const (
-	ZoomMessage     messageOrigin = "zoom"
-	UIMessage       messageOrigin = "ui"
-	WhatsAppMessage messageOrigin = "whatsapp"
-	EmailMessage    messageOrigin = "email"
+	ZoomMessage     MessageOrigin = "zoom"
+	UIMessage       MessageOrigin = "ui"
+	WhatsAppMessage MessageOrigin = "whatsapp"
+	EmailMessage    MessageOrigin = "email"
+	ModelMessage    MessageOrigin = "model"
 )
 
 type SessionOption func(*sessionOptions)
