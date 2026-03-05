@@ -2,7 +2,9 @@ package skills
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/firebase/genkit/go/ai"
@@ -12,17 +14,16 @@ import (
 
 const provider = "skills"
 
-var _ api.DynamicPlugin = (*Skills)(nil)
+var _ api.Plugin = (*Skills)(nil)
 
 // SkillDefinition holds the parsed contents of the SKILL.md frontmatter block.
-// It represents a ingle discovered skill before its full content is loaded.
+// It represents a single discovered skill before its full content is loaded.
 type SkillDefinition struct {
-	// Name is the nique identifier r the skill (required).
-	// Must be lowercase lphanumeric ith hyphens, e.g. "my-skill".
+	// Name is the unique identifier or the skill (required).
+	// Must be lowercase alphanumeric with hyphens, e.g. "my-skill".
 	Name string `yaml:"name"`
 
-	// Description s a human-readable summary of what the skill does (required)
-	// Used as the tool description n Genkit's registry.
+	// Description is a human-readable summary of what the skill does (required)
 	Description string `yaml:"description"`
 
 	// License is an optional SPDX license identifier, e.g. "MIT".
@@ -30,6 +31,9 @@ type SkillDefinition struct {
 
 	// Metadata holds any additional key/value pairs from the frontmatter.
 	Metadata map[string]string `yaml:"metadata,omitempty"`
+
+	// Files is a map of all files in the skill directory, keyed by filename.
+	Files map[string]string
 
 	// dir is the absolute path to the skill's directory on disk.
 	// Unexported, set by the scanner, used by the ResolveAction to load the full body.
@@ -97,45 +101,66 @@ func (s *Skills) Init(ctx context.Context) []api.Action {
 	return nil
 }
 
-// ListActions implements api.DynamicPlugin.
-// Returns a descriptor for every skill currently in the cache.
-// Each skill is advertised as a tool action — no full Markdown is loaded here.
-func (s *Skills) ListActions(ctx context.Context) []api.ActionDesc {
-	descs := make([]api.ActionDesc, 0, len(s.cache))
-
-	for _, meta := range s.cache {
-		descs = append(descs, api.ActionDesc{
-			Key:         api.NewKey(api.ActionTypeTool, provider, meta.Name),
-			Description: meta.Description,
-		})
-	}
-
-	return descs
+// ListSkills returns the cached list of discovered skills.
+func (s *Skills) ListSkills() []*SkillDefinition {
+	return s.cache
 }
 
-// ResolveAction implements api.DynamicPlugin.
-// Called by Genkit's registry when a tool with the given name is needed.
-// Only at this point is the full SKILL.md body read from disk and the
-// ai.Tool defined and returned.
-//
-// Returns nil if the requested action type is not ActionTypeTool, or if
-// no skill with the given name exists in the cache.
-func (s *Skills) ResolveAction(atype api.ActionType, name string) api.Action {
-	if atype != api.ActionTypeTool {
-		return nil
-	}
+type ListSkillsInput struct {
+	Filter string `json:"filter,omitempty" jsonschema_description:"Optional filter string to only return skills whose name or description contains this substring."`
+}
 
-	meta := findSkill(s.cache, name)
-	if meta == nil {
-		return nil
-	}
+// ListSkillsTools is a wrapper around the ListSkills function
+func (s *Skills) ListSkillsTool(g *genkit.Genkit) ai.Tool {
+	return genkit.DefineTool(
+		g,
+		"list-skills",
+		"List all available skills with their metadata.",
+		func(ctx *ai.ToolContext, input ListSkillsInput) ([]*SkillDefinition, error) {
+			if input.Filter == "" {
+				return s.ListSkills(), nil
+			}
+			skills := s.ListSkills()
+			filtered := make([]*SkillDefinition, 0, len(skills))
+			for _, skill := range skills {
+				if strings.Contains(skill.Name, input.Filter) {
+					filtered = append(filtered, skill)
+				}
+			}
 
-	body, err := loadSkillBody(meta.dir)
-	if err != nil {
-		return nil
-	}
+			if len(filtered) == 0 {
+				return nil, fmt.Errorf("no skills found matching filter: %s", input.Filter)
+			}
 
-	skillName := meta.Name
-	skillBody := body
+			return filtered, nil
+		},
+	)
+}
 
+func (s *Skills) ResolveSkillTool(g *genkit.Genkit) ai.Tool {
+	return genkit.DefineMultipartTool(
+		g,
+		"resolve-skill",
+		"Resolve a skill name to its full content, including loading any files in the skill directory.",
+		func(ctx *ai.ToolContext, name string) (*ai.MultipartToolResponse, error) {
+			meta := findSkill(s.cache, name)
+			if meta == nil {
+				return nil, fmt.Errorf("no skill found with name %s", name)
+			}
+
+			body, err := loadSkillBody(meta.dir)
+			if err != nil {
+				return nil, fmt.Errorf("load skill body for %s: %w", name, err)
+			}
+
+			textPart := ai.NewTextPart(body)
+
+			response := &ai.MultipartToolResponse{
+				Content: []*ai.Part{textPart},
+				Output:  meta,
+			}
+
+			return response, nil
+		},
+	)
 }

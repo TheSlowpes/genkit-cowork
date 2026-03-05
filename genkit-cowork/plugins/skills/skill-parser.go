@@ -13,11 +13,11 @@ import (
 const skillFileName = "SKILL.md"
 
 // parseSkillMetadata reads a SKILL.md file at the given directory path,
-// extracts the YAML frontmatter block, and returns a populated SkillMeta.
+// extracts the YAML frontmatter block, and returns a populated SkillDefinition.
 //
 // It expects the file to start with a "---" delimiter line, followed by
 // YAML content, and closed by a second "---" line. Content after the
-// closing delimiter is ignored at this stage (loaded later by ResolveAction).
+// closing delimiter is ignored at this stage (loaded later by ResolveSkill).
 //
 // Returns an error if:
 //   - The file cannot be opened
@@ -49,8 +49,30 @@ func parseSkillMetadata(dir string) (*SkillDefinition, error) {
 		return nil, err
 	}
 
-	// store the directory so ResolveAction can load the full content later
+	// store the directory so ResolveSkill can load the full content later
 	meta.dir = dir
+
+	// store the full contents of the skill folder
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read skill directory %s: %w", dir, err)
+	}
+
+	meta.Files = make(map[string]string, len(files))
+
+	for _, file := range files {
+		if file.IsDir() {
+			subdirPath := filepath.Join(dir, file.Name())
+			subFiles, err := os.ReadDir(subdirPath)
+			if err != nil {
+				continue
+			}
+			for _, subFile := range subFiles {
+				meta.Files[filepath.Join(file.Name(), subFile.Name())] = filepath.Join(subdirPath, subFile.Name())
+			}
+		}
+		meta.Files[file.Name()] = filepath.Join(dir, file.Name())
+	}
 
 	return &meta, nil
 }
