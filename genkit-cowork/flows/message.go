@@ -23,7 +23,7 @@ type HandleMessageOutput struct {
 	Response  *ai.Message `json:"response"`
 }
 
-func HandleMessage(
+func HandleMessageFlow(
 	g *genkit.Genkit,
 	store *memory.Session,
 	opts ...ai.GenerateOption,
