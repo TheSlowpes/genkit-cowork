@@ -32,11 +32,12 @@ type MessageContext struct {
 }
 
 type ToolExecutionContext struct {
-	SessionID string        `json:"sessionID"`
-	ToolName  string        `json:"toolName"`
-	Input     any           `json:"input"`
-	Output    any           `json:"output,omitempty"`
-	Chunk     string        `json:"chunk,omitempty"`    // populated on tool-execution-update for streaming outputs
-	Duration  time.Duration `json:"duration,omitempty"` // populated on tool-execution-end
-	Error     error         `json:"error,omitempty"`    // populated on tool-execution-end if failed
+	SessionID         string         `json:"sessionID"`
+	ToolName          string         `json:"toolName"`
+	Input             any            `json:"input"`
+	Output            any            `json:"output,omitempty"`
+	InterruptMetadata map[string]any `json:"interruptMetadata,omitempty"` // populated on tool-execution-update if execution was interrupted, contains metadata about the interruption
+	Interrupted       bool           `json:"interrupted,omitempty"`       // populated on tool-execution-update if execution was interrupted
+	Duration          time.Duration  `json:"duration,omitempty"`          // populated on tool-execution-end
+	Error             error          `json:"error,omitempty"`             // populated on tool-execution-end if failed
 }

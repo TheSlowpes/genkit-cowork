@@ -66,7 +66,7 @@ Exists for a single model output. A message begins when the model starts generat
 Exists for a single tool call. Tool scope is nested inside message scope — a message may contain multiple tool calls, each with its own isolated scope. Tool scope holds the call input, intermediate progress, and the final result.
 
 - `tool-execution-start` — emitted when a tool call begins.
-- `tool-execution-update` — emitted for tools that report incremental progress.
+- `tool-execution-update` — emitted for tools that return interrupts
 - `tool-execution-end` — emitted when the tool call resolves with a result or error.
 
 > **Scope rule:** Data at a narrower scope never outlives its parent scope. Turn data is not visible outside the turn. Tool data is not visible outside its parent message. The agent scope is the only data that persists for the full lifetime of a Flow.
@@ -133,5 +133,3 @@ Flows are the experience layer of the application. They define the observable sh
 - State is scoped to its stage: agent, turn, message, and tool execution.
 - Hooks intercept stages in a blocking middleware chain, with static and runtime registration.
 - Flows compose via direct sub-flow invocation (scoped state) or events (loose coupling).
-
-> **Next concept to specify:** Skills — the discrete capabilities the agent loop can invoke during tool execution.

@@ -410,7 +410,6 @@ func TestSubscribe_ConcurrentSafety(t *testing.T) {
 	for range n {
 		wg.Go(
 			func() {
-				defer wg.Done()
 				Subscribe(bus, AgentStart, EventHandler[testContext](func(ctx context.Context, event *Event[testContext]) error {
 					return nil
 				}))
@@ -422,7 +421,6 @@ func TestSubscribe_ConcurrentSafety(t *testing.T) {
 	for range n {
 		wg.Go(
 			func() {
-				defer wg.Done()
 				EmitEvent(bus, ctx, AgentStart, testContext{})
 			})
 	}
