@@ -104,8 +104,7 @@ func NewAgentLoop(
 		opt(options)
 	}
 
-	return genkit.DefineFlow(
-		g,
+	return genkit.NewFlow(
 		"agentLoop",
 		func(ctx context.Context, input *AgentLoopInput) (*AgentLoopOutput, error) {
 			return agentLoopHandler(ctx, input, options)

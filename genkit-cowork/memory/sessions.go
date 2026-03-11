@@ -129,6 +129,7 @@ const (
 	WhatsAppMessage MessageOrigin = "whatsapp"
 	EmailMessage    MessageOrigin = "email"
 	ModelMessage    MessageOrigin = "model"
+	ToolMessage     MessageOrigin = "tool"
 )
 
 type SessionOption func(*sessionOptions)

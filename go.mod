@@ -3,7 +3,7 @@ module github.com/TheSlowpes/genkit-cowork
 go 1.25.2
 
 require (
-	github.com/firebase/genkit/go v1.4.0
+	github.com/firebase/genkit/go v1.4.1-0.20260309165757-4be4c4497785
 	github.com/google/uuid v1.6.0
 	golang.org/x/image v0.36.0
 	gopkg.in/yaml.v3 v3.0.1
