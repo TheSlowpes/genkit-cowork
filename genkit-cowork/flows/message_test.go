@@ -27,8 +27,8 @@ func TestHandleMessage_SingleTurnNoTools(t *testing.T) {
 		return textResponse("Hello from the agent!"), nil
 	})
 
-	flow := HandleMessageFlow(g, store,
-		WithDefaultAgentConfig(AgentConfig{Model: "test/msg-single"}),
+	flow := NewHandleMessageFlow(g, store,
+		WithDefaultAgentConfig(AgentLoopConfig{Model: "test/msg-single"}),
 	)
 
 	output, err := flow.Run(ctx, &HandleMessageInput{
@@ -86,8 +86,8 @@ func TestHandleMessage_SessionPersistence(t *testing.T) {
 		}
 	})
 
-	flow := HandleMessageFlow(g, store,
-		WithDefaultAgentConfig(AgentConfig{Model: "test/msg-persist"}),
+	flow := NewHandleMessageFlow(g, store,
+		WithDefaultAgentConfig(AgentLoopConfig{Model: "test/msg-persist"}),
 	)
 
 	// First message
@@ -128,8 +128,8 @@ func TestHandleMessage_NewSessionCreatedOnFirstMessage(t *testing.T) {
 		return textResponse("Welcome!"), nil
 	})
 
-	flow := HandleMessageFlow(g, store,
-		WithDefaultAgentConfig(AgentConfig{Model: "test/msg-new-sess"}),
+	flow := NewHandleMessageFlow(g, store,
+		WithDefaultAgentConfig(AgentLoopConfig{Model: "test/msg-new-sess"}),
 	)
 
 	output, err := flow.Run(ctx, &HandleMessageInput{
@@ -195,8 +195,8 @@ func TestHandleMessage_MultiTurnToolExecution(t *testing.T) {
 		},
 	)
 
-	flow := HandleMessageFlow(g, store,
-		WithDefaultAgentConfig(AgentConfig{
+	flow := NewHandleMessageFlow(g, store,
+		WithDefaultAgentConfig(AgentLoopConfig{
 			Model: "test/msg-tools",
 			Tools: []string{"calculator"},
 		}),
@@ -254,8 +254,8 @@ func TestHandleMessage_AllMessagesPersistedToSession(t *testing.T) {
 		},
 	)
 
-	flow := HandleMessageFlow(g, store,
-		WithDefaultAgentConfig(AgentConfig{
+	flow := NewHandleMessageFlow(g, store,
+		WithDefaultAgentConfig(AgentLoopConfig{
 			Model: "test/msg-persist-all",
 			Tools: []string{"echo"},
 		}),
@@ -325,8 +325,8 @@ func TestHandleMessage_DefaultConfigOnly(t *testing.T) {
 		return textResponse("default config"), nil
 	})
 
-	flow := HandleMessageFlow(g, store,
-		WithDefaultAgentConfig(AgentConfig{
+	flow := NewHandleMessageFlow(g, store,
+		WithDefaultAgentConfig(AgentLoopConfig{
 			Model:    "test/msg-default-cfg",
 			MaxTurns: 5,
 		}),
@@ -360,8 +360,8 @@ func TestHandleMessage_PerRequestConfigOverride(t *testing.T) {
 		return nil, nil
 	})
 
-	flow := HandleMessageFlow(g, store,
-		WithDefaultAgentConfig(AgentConfig{
+	flow := NewHandleMessageFlow(g, store,
+		WithDefaultAgentConfig(AgentLoopConfig{
 			Model:    "test/msg-default-model",
 			MaxTurns: 10,
 		}),
@@ -372,7 +372,7 @@ func TestHandleMessage_PerRequestConfigOverride(t *testing.T) {
 		TenantID:  "tenant-1",
 		Origin:    memory.UIMessage,
 		Content:   *ai.NewUserTextMessage("test"),
-		Config: &AgentConfig{
+		Config: &AgentLoopConfig{
 			Model: "test/msg-override-model",
 		},
 	})
@@ -393,14 +393,14 @@ func TestHandleMessage_PerRequestConfigWithNoDefault(t *testing.T) {
 		return textResponse("input config response"), nil
 	})
 
-	flow := HandleMessageFlow(g, store)
+	flow := NewHandleMessageFlow(g, store)
 
 	output, err := flow.Run(ctx, &HandleMessageInput{
 		SessionID: "sess-input-cfg",
 		TenantID:  "tenant-1",
 		Origin:    memory.UIMessage,
 		Content:   *ai.NewUserTextMessage("test"),
-		Config: &AgentConfig{
+		Config: &AgentLoopConfig{
 			Model: "test/msg-input-cfg",
 		},
 	})
@@ -422,7 +422,7 @@ func TestMergeAgentConfig_BothNil(t *testing.T) {
 }
 
 func TestMergeAgentConfig_BaseOnly(t *testing.T) {
-	base := &AgentConfig{Model: "base-model", MaxTurns: 5, Tools: []string{"tool-a"}}
+	base := &AgentLoopConfig{Model: "base-model", MaxTurns: 5, Tools: []string{"tool-a"}}
 	result := mergeAgentConfig(base, nil)
 	if result.Model != "base-model" {
 		t.Errorf("expected model 'base-model', got %q", result.Model)
@@ -436,7 +436,7 @@ func TestMergeAgentConfig_BaseOnly(t *testing.T) {
 }
 
 func TestMergeAgentConfig_OverrideOnly(t *testing.T) {
-	override := &AgentConfig{Model: "override-model", MaxTurns: 3}
+	override := &AgentLoopConfig{Model: "override-model", MaxTurns: 3}
 	result := mergeAgentConfig(nil, override)
 	if result.Model != "override-model" {
 		t.Errorf("expected model 'override-model', got %q", result.Model)
@@ -447,8 +447,8 @@ func TestMergeAgentConfig_OverrideOnly(t *testing.T) {
 }
 
 func TestMergeAgentConfig_OverrideReplacesModel(t *testing.T) {
-	base := &AgentConfig{Model: "base-model", MaxTurns: 5, Tools: []string{"tool-a"}}
-	override := &AgentConfig{Model: "new-model"}
+	base := &AgentLoopConfig{Model: "base-model", MaxTurns: 5, Tools: []string{"tool-a"}}
+	override := &AgentLoopConfig{Model: "new-model"}
 	result := mergeAgentConfig(base, override)
 	if result.Model != "new-model" {
 		t.Errorf("expected model 'new-model', got %q", result.Model)
@@ -463,8 +463,8 @@ func TestMergeAgentConfig_OverrideReplacesModel(t *testing.T) {
 }
 
 func TestMergeAgentConfig_OverrideReplacesTools(t *testing.T) {
-	base := &AgentConfig{Model: "base-model", Tools: []string{"tool-a", "tool-b"}}
-	override := &AgentConfig{Tools: []string{"tool-c"}}
+	base := &AgentLoopConfig{Model: "base-model", Tools: []string{"tool-a", "tool-b"}}
+	override := &AgentLoopConfig{Tools: []string{"tool-c"}}
 	result := mergeAgentConfig(base, override)
 	// Model should come from base (override is empty string)
 	if result.Model != "base-model" {
@@ -477,8 +477,8 @@ func TestMergeAgentConfig_OverrideReplacesTools(t *testing.T) {
 }
 
 func TestMergeAgentConfig_OverrideZeroFieldsDoNotReplace(t *testing.T) {
-	base := &AgentConfig{Model: "base-model", MaxTurns: 10}
-	override := &AgentConfig{MaxTurns: 0} // zero value should not override
+	base := &AgentLoopConfig{Model: "base-model", MaxTurns: 10}
+	override := &AgentLoopConfig{MaxTurns: 0} // zero value should not override
 	result := mergeAgentConfig(base, override)
 	if result.MaxTurns != 10 {
 		t.Errorf("expected maxTurns 10, got %d", result.MaxTurns)
@@ -508,8 +508,8 @@ func TestHandleMessage_InterruptAndResume(t *testing.T) {
 		},
 	)
 
-	flow := HandleMessageFlow(g, store,
-		WithDefaultAgentConfig(AgentConfig{
+	flow := NewHandleMessageFlow(g, store,
+		WithDefaultAgentConfig(AgentLoopConfig{
 			Model: "test/msg-int-p1",
 			Tools: []string{"confirm"},
 		}),
@@ -564,8 +564,8 @@ func TestHandleMessage_InterruptAndResume(t *testing.T) {
 	})
 	respondPart.Metadata = map[string]any{"interruptResponse": true}
 
-	flow2 := HandleMessageFlow(g2, store,
-		WithDefaultAgentConfig(AgentConfig{
+	flow2 := NewHandleMessageFlow(g2, store,
+		WithDefaultAgentConfig(AgentLoopConfig{
 			Model: "test/msg-int-p2",
 			Tools: []string{"confirm"},
 		}),
@@ -661,9 +661,9 @@ func TestHandleMessage_EventBusIntegration(t *testing.T) {
 		return nil
 	}))
 
-	flow := HandleMessageFlow(g, store,
+	flow := NewHandleMessageFlow(g, store,
 		WithHandleMessageEventBus(bus),
-		WithDefaultAgentConfig(AgentConfig{
+		WithDefaultAgentConfig(AgentLoopConfig{
 			Model: "test/msg-events",
 			Tools: []string{"echo"},
 		}),
@@ -737,8 +737,8 @@ func TestHandleMessage_MultipleMessagesAccumulateInSession(t *testing.T) {
 		return textResponse("Response " + string(rune('A'-1+call))), nil
 	})
 
-	flow := HandleMessageFlow(g, store,
-		WithDefaultAgentConfig(AgentConfig{Model: "test/msg-accum"}),
+	flow := NewHandleMessageFlow(g, store,
+		WithDefaultAgentConfig(AgentLoopConfig{Model: "test/msg-accum"}),
 	)
 
 	for i := range 3 {
@@ -797,8 +797,8 @@ func TestHandleMessage_DifferentOrigins(t *testing.T) {
 		return textResponse("ok"), nil
 	})
 
-	flow := HandleMessageFlow(g, store,
-		WithDefaultAgentConfig(AgentConfig{Model: "test/msg-origins"}),
+	flow := NewHandleMessageFlow(g, store,
+		WithDefaultAgentConfig(AgentLoopConfig{Model: "test/msg-origins"}),
 	)
 
 	origins := []memory.MessageOrigin{

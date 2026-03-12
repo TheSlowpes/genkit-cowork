@@ -16,7 +16,7 @@ type HandleMessageInput struct {
 	TenantID      string               `json:"tenantID"`
 	Origin        memory.MessageOrigin `json:"origin,omitempty"`
 	Content       ai.Message           `json:"content"`
-	Config        *AgentConfig         `json:"config,omitempty"`
+	Config        *AgentLoopConfig     `json:"config,omitempty"`
 	ToolResponses []*ai.Part           `json:"toolResponses,omitempty"`
 	ToolRestarts  []*ai.Part           `json:"toolRestarts,omitempty"`
 }
@@ -34,7 +34,7 @@ type handleMessageOptions struct {
 	bus           *EventBus
 	baseOpts      []ai.GenerateOption
 	loopOperator  AgentLoopOperator
-	defaultConfig *AgentConfig
+	defaultConfig *AgentLoopConfig
 }
 
 type HandleMessageOption func(*handleMessageOptions)
@@ -57,13 +57,13 @@ func WithHandleMessageLoopOperator(loopOperator AgentLoopOperator) HandleMessage
 	}
 }
 
-func WithDefaultAgentConfig(config AgentConfig) HandleMessageOption {
+func WithDefaultAgentConfig(config AgentLoopConfig) HandleMessageOption {
 	return func(opts *handleMessageOptions) {
 		opts.defaultConfig = &config
 	}
 }
 
-func HandleMessageFlow(
+func NewHandleMessageFlow(
 	g *genkit.Genkit,
 	store *memory.Session,
 	opts ...HandleMessageOption,
@@ -156,9 +156,9 @@ func HandleMessageFlow(
 	)
 }
 
-func mergeAgentConfig(base, override *AgentConfig) AgentConfig {
+func mergeAgentConfig(base, override *AgentLoopConfig) AgentLoopConfig {
 	if base == nil && override == nil {
-		return AgentConfig{}
+		return AgentLoopConfig{}
 	}
 	if base == nil {
 		return *override

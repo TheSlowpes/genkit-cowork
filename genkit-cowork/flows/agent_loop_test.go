@@ -119,7 +119,7 @@ func TestAgentLoop_SingleTurnNoTools(t *testing.T) {
 		&AgentLoopInput{
 			SessionID: "sess-1",
 			Messages:  []*ai.Message{ai.NewUserTextMessage("Hi")},
-			Config:    AgentConfig{Model: "test/single-turn"},
+			Config:    AgentLoopConfig{Model: "test/single-turn"},
 		},
 	)
 	if err != nil {
@@ -175,7 +175,7 @@ func TestAgentLoop_MultiTurnToolExecution(t *testing.T) {
 		&AgentLoopInput{
 			SessionID: "sess-2",
 			Messages:  []*ai.Message{ai.NewUserTextMessage("What is 6*7?")},
-			Config: AgentConfig{
+			Config: AgentLoopConfig{
 				Model: "test/multi-turn",
 				Tools: []string{"calculator"},
 			},
@@ -224,7 +224,7 @@ func TestAgentLoop_MaxTurnsSafetyLimit(t *testing.T) {
 		&AgentLoopInput{
 			SessionID: "sess-3",
 			Messages:  []*ai.Message{ai.NewUserTextMessage("loop forever")},
-			Config: AgentConfig{
+			Config: AgentLoopConfig{
 				Model:    "test/looper",
 				Tools:    []string{"loop-tool"},
 				MaxTurns: 3,
@@ -311,7 +311,7 @@ func TestAgentLoop_EventEmissionOrder(t *testing.T) {
 		&AgentLoopInput{
 			SessionID: "sess-4",
 			Messages:  []*ai.Message{ai.NewUserTextMessage("echo test")},
-			Config: AgentConfig{
+			Config: AgentLoopConfig{
 				Model: "test/event-test",
 				Tools: []string{"echo"},
 			},
@@ -354,7 +354,7 @@ func TestAgentLoop_NilEventBus(t *testing.T) {
 		&AgentLoopInput{
 			SessionID: "sess-5",
 			Messages:  []*ai.Message{ai.NewUserTextMessage("test")},
-			Config:    AgentConfig{Model: "test/no-bus"},
+			Config:    AgentLoopConfig{Model: "test/no-bus"},
 		},
 	)
 	if err != nil {
@@ -402,7 +402,7 @@ func TestAgentLoop_HookMutatesToolInput(t *testing.T) {
 		&AgentLoopInput{
 			SessionID: "sess-6",
 			Messages:  []*ai.Message{ai.NewUserTextMessage("do something dangerous")},
-			Config: AgentConfig{
+			Config: AgentLoopConfig{
 				Model: "test/hook-test",
 				Tools: []string{"bash"},
 			},
@@ -439,7 +439,7 @@ func TestAgentLoop_ToolNotFound(t *testing.T) {
 		&AgentLoopInput{
 			SessionID: "sess-7",
 			Messages:  []*ai.Message{ai.NewUserTextMessage("call missing tool")},
-			Config:    AgentConfig{Model: "test/missing-tool"},
+			Config:    AgentLoopConfig{Model: "test/missing-tool"},
 		},
 	)
 	if err == nil {
@@ -472,7 +472,7 @@ func TestAgentLoop_GenerateError(t *testing.T) {
 		&AgentLoopInput{
 			SessionID: "sess-8",
 			Messages:  []*ai.Message{ai.NewUserTextMessage("fail")},
-			Config:    AgentConfig{Model: "test/fail-model"},
+			Config:    AgentLoopConfig{Model: "test/fail-model"},
 		},
 	)
 	if err == nil {
@@ -527,7 +527,7 @@ func TestAgentLoop_MultipleToolCallsInOneTurn(t *testing.T) {
 		&AgentLoopInput{
 			SessionID: "sess-10",
 			Messages:  []*ai.Message{ai.NewUserTextMessage("read and run")},
-			Config: AgentConfig{
+			Config: AgentLoopConfig{
 				Model: "test/multi-tool",
 				Tools: []string{"read", "bash"},
 			},
@@ -567,7 +567,7 @@ func TestAgentLoop_ContextCancellation(t *testing.T) {
 		&AgentLoopInput{
 			SessionID: "sess-11",
 			Messages:  []*ai.Message{ai.NewUserTextMessage("cancel me")},
-			Config:    AgentConfig{Model: "test/cancel-model"},
+			Config:    AgentLoopConfig{Model: "test/cancel-model"},
 		},
 	)
 	if err == nil {
@@ -599,7 +599,7 @@ func TestAgentLoop_AgentContextPopulatedCorrectly(t *testing.T) {
 		&AgentLoopInput{
 			SessionID: "sess-12",
 			Messages:  []*ai.Message{ai.NewUserTextMessage("check context")},
-			Config: AgentConfig{
+			Config: AgentLoopConfig{
 				Model: "test/ctx-model",
 				Tools: []string{"tool-a", "tool-b"},
 			},
@@ -663,7 +663,7 @@ func TestAgentLoop_TurnContextPopulatedCorrectly(t *testing.T) {
 		&AgentLoopInput{
 			SessionID: "sess-13",
 			Messages:  []*ai.Message{ai.NewUserTextMessage("test turns")},
-			Config: AgentConfig{
+			Config: AgentLoopConfig{
 				Model: "test/turn-ctx",
 				Tools: []string{"noop"},
 			},
@@ -726,7 +726,7 @@ func TestAgentLoop_MaxTurnsZeroMeansUnlimited(t *testing.T) {
 		&AgentLoopInput{
 			SessionID: "sess-14",
 			Messages:  []*ai.Message{ai.NewUserTextMessage("go")},
-			Config: AgentConfig{
+			Config: AgentLoopConfig{
 				Model:    "test/unlimited",
 				Tools:    []string{"step"},
 				MaxTurns: 0, // unlimited
@@ -773,7 +773,7 @@ func TestAgentLoop_ToolExecutionContextDuration(t *testing.T) {
 		&AgentLoopInput{
 			SessionID: "sess-15",
 			Messages:  []*ai.Message{ai.NewUserTextMessage("slow tool")},
-			Config: AgentConfig{
+			Config: AgentLoopConfig{
 				Model: "test/duration-test",
 				Tools: []string{"slow"},
 			},
@@ -819,7 +819,7 @@ func TestAgentLoop_ToolInterrupt_SingleTool(t *testing.T) {
 		&AgentLoopInput{
 			SessionID: "sess-int-1",
 			Messages:  []*ai.Message{ai.NewUserTextMessage("delete the file")},
-			Config: AgentConfig{
+			Config: AgentLoopConfig{
 				Model: "test/int-single",
 				Tools: []string{"confirm"},
 			},
@@ -885,7 +885,7 @@ func TestAgentLoop_ToolInterrupt_BatchPartialComplete(t *testing.T) {
 		&AgentLoopInput{
 			SessionID: "sess-int-2",
 			Messages:  []*ai.Message{ai.NewUserTextMessage("read, confirm, delete")},
-			Config: AgentConfig{
+			Config: AgentLoopConfig{
 				Model: "test/int-batch",
 				Tools: []string{"read", "confirm", "bash"},
 			},
@@ -981,7 +981,7 @@ func TestAgentLoop_ToolInterrupt_EventEmission(t *testing.T) {
 		&AgentLoopInput{
 			SessionID: "sess-int-3",
 			Messages:  []*ai.Message{ai.NewUserTextMessage("confirm action")},
-			Config: AgentConfig{
+			Config: AgentLoopConfig{
 				Model: "test/int-events",
 				Tools: []string{"confirm"},
 			},
@@ -1047,7 +1047,7 @@ func TestAgentLoop_ToolInterrupt_ResumeWithRespond(t *testing.T) {
 		&AgentLoopInput{
 			SessionID: "sess-int-4",
 			Messages:  []*ai.Message{ai.NewUserTextMessage("deploy")},
-			Config: AgentConfig{
+			Config: AgentLoopConfig{
 				Model: "test/respond-p1",
 				Tools: []string{"confirm"},
 			},
@@ -1088,7 +1088,7 @@ func TestAgentLoop_ToolInterrupt_ResumeWithRespond(t *testing.T) {
 		&AgentLoopInput{
 			SessionID:     "sess-int-4",
 			Messages:      interruptOutput.History,
-			Config:        AgentConfig{Model: "test/respond-p2", Tools: []string{"confirm"}},
+			Config:        AgentLoopConfig{Model: "test/respond-p2", Tools: []string{"confirm"}},
 			ToolResponses: []*ai.Part{respondPart},
 		},
 	)
@@ -1145,7 +1145,7 @@ func TestAgentLoop_ToolInterrupt_ResumeWithRestart(t *testing.T) {
 		&AgentLoopInput{
 			SessionID: "sess-int-5",
 			Messages:  []*ai.Message{ai.NewUserTextMessage("deploy")},
-			Config: AgentConfig{
+			Config: AgentLoopConfig{
 				Model: "test/restart-p1",
 				Tools: []string{"confirm"},
 			},
@@ -1186,7 +1186,7 @@ func TestAgentLoop_ToolInterrupt_ResumeWithRestart(t *testing.T) {
 		&AgentLoopInput{
 			SessionID:    "sess-int-5",
 			Messages:     interruptOutput.History,
-			Config:       AgentConfig{Model: "test/restart-p2", Tools: []string{"confirm"}},
+			Config:       AgentLoopConfig{Model: "test/restart-p2", Tools: []string{"confirm"}},
 			ToolRestarts: []*ai.Part{restartPart},
 		},
 	)
@@ -1240,7 +1240,7 @@ func TestAgentLoop_ToolInterrupt_ResumeRestartReinterrupts(t *testing.T) {
 		&AgentLoopInput{
 			SessionID: "sess-int-6",
 			Messages:  []*ai.Message{ai.NewUserTextMessage("go")},
-			Config: AgentConfig{
+			Config: AgentLoopConfig{
 				Model: "test/reint-p1",
 				Tools: []string{"confirm"},
 			},
@@ -1278,7 +1278,7 @@ func TestAgentLoop_ToolInterrupt_ResumeRestartReinterrupts(t *testing.T) {
 		&AgentLoopInput{
 			SessionID:    "sess-int-6",
 			Messages:     interruptOutput.History,
-			Config:       AgentConfig{Model: "test/reint-p2", Tools: []string{"confirm"}},
+			Config:       AgentLoopConfig{Model: "test/reint-p2", Tools: []string{"confirm"}},
 			ToolRestarts: []*ai.Part{restartPart},
 		},
 	)
@@ -1324,7 +1324,7 @@ func TestAgentLoop_ToolInterrupt_PendingOutputHandled(t *testing.T) {
 		&AgentLoopInput{
 			SessionID: "sess-int-7",
 			Messages:  []*ai.Message{ai.NewUserTextMessage("read and confirm")},
-			Config: AgentConfig{
+			Config: AgentLoopConfig{
 				Model: "test/pending-p1",
 				Tools: []string{"read", "confirm"},
 			},
@@ -1372,7 +1372,7 @@ func TestAgentLoop_ToolInterrupt_PendingOutputHandled(t *testing.T) {
 		&AgentLoopInput{
 			SessionID:     "sess-int-7",
 			Messages:      interruptOutput.History,
-			Config:        AgentConfig{Model: "test/pending-p2", Tools: []string{"read", "confirm"}},
+			Config:        AgentLoopConfig{Model: "test/pending-p2", Tools: []string{"read", "confirm"}},
 			ToolResponses: []*ai.Part{respondPart},
 		},
 	)

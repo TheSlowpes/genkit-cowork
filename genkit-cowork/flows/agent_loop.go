@@ -11,7 +11,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 )
 
-type AgentConfig struct {
+type AgentLoopConfig struct {
 	Model        string      `json:"model,omitempty"`
 	Tools        []string    `json:"tools,omitempty"`
 	SystemPrompt ai.PromptFn `json:"-"`
@@ -77,11 +77,11 @@ func WithCustomAgentLoopOperator(operator AgentLoopOperator) AgentLoopOption {
 }
 
 type AgentLoopInput struct {
-	SessionID     string        `json:"sessionID"`
-	Messages      []*ai.Message `json:"messages"`
-	Config        AgentConfig   `json:"config"`
-	ToolResponses []*ai.Part    `json:"toolResponses,omitempty"`
-	ToolRestarts  []*ai.Part    `json:"toolRestarts,omitempty"`
+	SessionID     string          `json:"sessionID"`
+	Messages      []*ai.Message   `json:"messages"`
+	Config        AgentLoopConfig `json:"config"`
+	ToolResponses []*ai.Part      `json:"toolResponses,omitempty"`
+	ToolRestarts  []*ai.Part      `json:"toolRestarts,omitempty"`
 }
 
 type AgentLoopOutput struct {

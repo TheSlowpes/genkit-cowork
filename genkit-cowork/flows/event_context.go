@@ -7,11 +7,11 @@ import (
 )
 
 type AgentContext struct {
-	SessionID string      `json:"sessionID"`
-	ModelName string      `json:"modelName"`
-	Tools     []string    `json:"tools"`
-	Config    AgentConfig `json:"config"`
-	Error     error       `json:"error,omitempty"` // populated on agent-end if failed
+	SessionID string          `json:"sessionID"`
+	ModelName string          `json:"modelName"`
+	Tools     []string        `json:"tools"`
+	Config    AgentLoopConfig `json:"config"`
+	Error     error           `json:"error,omitempty"` // populated on agent-end if failed
 }
 
 type TurnContext struct {
