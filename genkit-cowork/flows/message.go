@@ -57,7 +57,7 @@ func WithHandleMessageLoopOperator(loopOperator AgentLoopOperator) HandleMessage
 	}
 }
 
-func WithDefaultAgentConfig(config AgentLoopConfig) HandleMessageOption {
+func WithCustomAgentConfig(config AgentLoopConfig) HandleMessageOption {
 	return func(opts *handleMessageOptions) {
 		opts.defaultConfig = &config
 	}

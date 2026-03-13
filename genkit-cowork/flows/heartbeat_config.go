@@ -1,10 +1,12 @@
 package flows
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	"github.com/TheSlowpes/genkit-cowork/genkit-cowork/memory"
+	"github.com/firebase/genkit/go/ai"
 )
 
 type HearbeatTarget string
@@ -85,7 +87,7 @@ type HeartbeatConfig struct {
 	ActiveHours *ActiveHours  `json:"activeHours,omitempty"`
 
 	AgentConfig *AgentLoopConfig     `json:"agentConfig,omitempty"`
-	Prompt      string               `json:"prompt,omitempty"`
+	Prompt      ai.PromptFn          `json:"prompt,omitempty"`
 	SessionID   string               `json:"sessionID,omitempty"`
 	AckMaxChars int                  `json:"ackMaxChars,omitempty"`
 	Target      HearbeatTarget       `json:"target,omitempty"`
@@ -95,11 +97,15 @@ type HeartbeatConfig struct {
 
 const DefaultPrompt = "Read HEARTBEAT.md if it exists. Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK"
 
-func (c *HeartbeatConfig) resolvedPrompt() string {
-	if c.Prompt != "" {
-		return c.Prompt
+func (c *HeartbeatConfig) resolvedPrompt(ctx context.Context, a any) (string, error) {
+	if c.Prompt != nil {
+		prompt, err := c.Prompt(ctx, a)
+		if err != nil {
+			return "", fmt.Errorf("resolving prompt")
+		}
+		return prompt, nil
 	}
-	return DefaultPrompt
+	return DefaultPrompt, nil
 }
 
 func (c *HeartbeatConfig) resolvedAckMaxChars() int {
