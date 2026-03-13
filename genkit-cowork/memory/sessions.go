@@ -124,12 +124,13 @@ func (o *defaultSessionOperator) DeleteSession(ctx context.Context, sessionID st
 type MessageOrigin string
 
 const (
-	ZoomMessage     MessageOrigin = "zoom"
-	UIMessage       MessageOrigin = "ui"
-	WhatsAppMessage MessageOrigin = "whatsapp"
-	EmailMessage    MessageOrigin = "email"
-	ModelMessage    MessageOrigin = "model"
-	ToolMessage     MessageOrigin = "tool"
+	ZoomMessage      MessageOrigin = "zoom"
+	UIMessage        MessageOrigin = "ui"
+	WhatsAppMessage  MessageOrigin = "whatsapp"
+	EmailMessage     MessageOrigin = "email"
+	ModelMessage     MessageOrigin = "model"
+	ToolMessage      MessageOrigin = "tool"
+	HeartbeatMessage MessageOrigin = "heartbeat"
 )
 
 type SessionOption func(*sessionOptions)

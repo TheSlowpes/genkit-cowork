@@ -3,6 +3,7 @@ package flows
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,7 +28,8 @@ type Heartbeat struct {
 type HeartbeatInput struct {
 	SessionID   string           `json:"sessionID"`
 	AgentConfig *AgentLoopConfig `json:"agentConfig,omitempty"`
-	TenantID    string           `json:"tenantID,omitempty"`
+	TenantID    string           `json:"tenantID"`
+	RunAt       time.Time        `json:"runAt"`
 }
 
 type heartbeatOptions struct {
@@ -37,44 +39,56 @@ type heartbeatOptions struct {
 	operator      AgentLoopOperator
 }
 
-type HeartbeatOptions func(*heartbeatOptions)
+type HeartbeatOption func(*heartbeatOptions)
 
-func WithHeartbeatEventBus(bus *EventBus) HeartbeatOptions {
+func WithHeartbeatEventBus(bus *EventBus) HeartbeatOption {
 	return func(opts *heartbeatOptions) {
 		opts.bus = bus
 	}
 }
 
-func WithHeartbeatOnResult(onResult func(*HeartbeatOutput)) HeartbeatOptions {
+func WithHeartbeatOnResult(onResult func(*HeartbeatOutput)) HeartbeatOption {
 	return func(opts *heartbeatOptions) {
 		opts.onResult = onResult
 	}
 }
 
-func WithHeartbeatLoopOperator(loopOperator AgentLoopOperator) HeartbeatOptions {
+func WithHeartbeatLoopOperator(loopOperator AgentLoopOperator) HeartbeatOption {
 	return func(opts *heartbeatOptions) {
 		opts.operator = loopOperator
 	}
 }
 
-func WithCustomHeartbeatAgentConfig(config AgentLoopConfig) HeartbeatOptions {
+func WithCustomHeartbeatAgentConfig(config AgentLoopConfig) HeartbeatOption {
 	return func(opts *heartbeatOptions) {
 		opts.defaultConfig = &config
 	}
 }
 
-func NewHeartbeatFlow(
+func NewHeartbeat(
 	g *genkit.Genkit,
 	store *memory.Session,
-	opts ...HeartbeatOptions,
-) *core.Flow[*HeartbeatInput, *HeartbeatOutput, struct{}] {
+	cfg HeartbeatConfig,
+	opts ...HeartbeatOption,
+) *Heartbeat {
 	options := &heartbeatOptions{
 		operator: &defaultAgentLoopOperator{g: g},
 	}
 	for _, opt := range opts {
 		opt(options)
 	}
-	return genkit.DefineFlow(
+
+	if options.onResult == nil {
+		options.onResult = func(*HeartbeatOutput) {}
+	}
+
+	h := &Heartbeat{
+		cfg:      &cfg,
+		onResult: options.onResult,
+		stopCh:   make(chan struct{}),
+	}
+
+	h.flow = genkit.DefineFlow(
 		g,
 		"heartbeat",
 		func(ctx context.Context, input *HeartbeatInput) (*HeartbeatOutput, error) {
@@ -94,16 +108,57 @@ func NewHeartbeatFlow(
 
 			ctx = session.NewContext(ctx, sess)
 
-			var history []*ai.Message
+			history := make([]*ai.Message, 0, len(sess.State().Messages))
 			for _, msg := range sess.State().Messages {
 				history = append(history, &msg.Content)
 			}
+			priorHistoryLen := len(history)
 
 			resolvedConfig := mergeAgentConfig(options.defaultConfig, input.AgentConfig)
-			_ = resolvedConfig
-			return nil, nil
+			loopInput := &AgentLoopInput{
+				SessionID: input.SessionID,
+				Messages:  history,
+				Config:    resolvedConfig,
+			}
+
+			agentLoop := NewAgentLoop(
+				g,
+				WithEventBus(options.bus),
+				WithCustomAgentLoopOperator(options.operator),
+			)
+
+			loopOutput, err := agentLoop.Run(ctx, loopInput)
+			if err != nil {
+				result := errorResult(input.SessionID, input.RunAt, err)
+				return &result, nil
+			}
+
+			newMessages := loopOutput.History[priorHistoryLen:]
+
+			var sessionMessages []memory.SessionMessage
+			for _, msg := range newMessages {
+				origin := originForRole(msg.Role, memory.HeartbeatMessage)
+				sessionMessages = append(sessionMessages, memory.SessionMessage{
+					Origin:  origin,
+					Content: *msg,
+				})
+			}
+
+			state := sess.State()
+			state.Messages = append(state.Messages, sessionMessages...)
+			if err := sess.UpdateState(ctx, state); err != nil {
+				return nil, fmt.Errorf("update session state: %w", err)
+			}
+
+			rawContent := extractText(loopOutput.Response)
+
+			result := evaluateHeartbeatResult(input.SessionID, input.RunAt, rawContent, loopOutput.Turns, h.cfg)
+
+			return &result, nil
 		},
 	)
+
+	return h
 }
 
 func (h *Heartbeat) Start(ctx context.Context) {
@@ -138,8 +193,19 @@ func (h *Heartbeat) Stop() {
 	})
 }
 
-func (h *Heartbeat) tryRun(ctx context.Context, tickTime time.Time) HeartbeatOutput {
+func (h *Heartbeat) tryRun(ctx context.Context, runAt time.Time) (*HeartbeatOutput, error) {
+	sessionID := h.sessionID()
 
+	tenantID := h.cfg.TenantID
+
+	input := &HeartbeatInput{
+		SessionID:   sessionID,
+		TenantID:    tenantID,
+		AgentConfig: h.cfg.AgentConfig,
+		RunAt:       runAt,
+	}
+
+	return h.flow.Run(ctx, input)
 }
 
 func (h *Heartbeat) Run(ctx context.Context, tickTime time.Time) {
@@ -158,8 +224,13 @@ func (h *Heartbeat) Run(ctx context.Context, tickTime time.Time) {
 	}
 	defer h.running.Store(false)
 
-	result := h.tryRun(ctx, tickTime)
-	h.onResult(&result)
+	result, err := h.tryRun(ctx, tickTime)
+	if err != nil {
+		errResult := errorResult(sessionID, tickTime, err)
+		h.onResult(&errResult)
+		return
+	}
+	h.onResult(result)
 }
 
 func (h *Heartbeat) sessionID() string {
@@ -167,4 +238,17 @@ func (h *Heartbeat) sessionID() string {
 		return h.cfg.SessionID
 	}
 	return "heartbeat"
+}
+
+func extractText(msg *ai.Message) string {
+	if msg == nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, part := range msg.Content {
+		if part.IsText() {
+			b.WriteString(part.Text)
+		}
+	}
+	return b.String()
 }

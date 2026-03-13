@@ -28,7 +28,7 @@ func TestHandleMessage_SingleTurnNoTools(t *testing.T) {
 	})
 
 	flow := NewHandleMessageFlow(g, store,
-		WithDefaultAgentConfig(AgentLoopConfig{Model: "test/msg-single"}),
+		WithCustomAgentConfig(AgentLoopConfig{Model: "test/msg-single"}),
 	)
 
 	output, err := flow.Run(ctx, &HandleMessageInput{
@@ -87,7 +87,7 @@ func TestHandleMessage_SessionPersistence(t *testing.T) {
 	})
 
 	flow := NewHandleMessageFlow(g, store,
-		WithDefaultAgentConfig(AgentLoopConfig{Model: "test/msg-persist"}),
+		WithCustomAgentConfig(AgentLoopConfig{Model: "test/msg-persist"}),
 	)
 
 	// First message
@@ -129,7 +129,7 @@ func TestHandleMessage_NewSessionCreatedOnFirstMessage(t *testing.T) {
 	})
 
 	flow := NewHandleMessageFlow(g, store,
-		WithDefaultAgentConfig(AgentLoopConfig{Model: "test/msg-new-sess"}),
+		WithCustomAgentConfig(AgentLoopConfig{Model: "test/msg-new-sess"}),
 	)
 
 	output, err := flow.Run(ctx, &HandleMessageInput{
@@ -196,7 +196,7 @@ func TestHandleMessage_MultiTurnToolExecution(t *testing.T) {
 	)
 
 	flow := NewHandleMessageFlow(g, store,
-		WithDefaultAgentConfig(AgentLoopConfig{
+		WithCustomAgentConfig(AgentLoopConfig{
 			Model: "test/msg-tools",
 			Tools: []string{"calculator"},
 		}),
@@ -255,7 +255,7 @@ func TestHandleMessage_AllMessagesPersistedToSession(t *testing.T) {
 	)
 
 	flow := NewHandleMessageFlow(g, store,
-		WithDefaultAgentConfig(AgentLoopConfig{
+		WithCustomAgentConfig(AgentLoopConfig{
 			Model: "test/msg-persist-all",
 			Tools: []string{"echo"},
 		}),
@@ -326,7 +326,7 @@ func TestHandleMessage_DefaultConfigOnly(t *testing.T) {
 	})
 
 	flow := NewHandleMessageFlow(g, store,
-		WithDefaultAgentConfig(AgentLoopConfig{
+		WithCustomAgentConfig(AgentLoopConfig{
 			Model:    "test/msg-default-cfg",
 			MaxTurns: 5,
 		}),
@@ -361,7 +361,7 @@ func TestHandleMessage_PerRequestConfigOverride(t *testing.T) {
 	})
 
 	flow := NewHandleMessageFlow(g, store,
-		WithDefaultAgentConfig(AgentLoopConfig{
+		WithCustomAgentConfig(AgentLoopConfig{
 			Model:    "test/msg-default-model",
 			MaxTurns: 10,
 		}),
@@ -509,7 +509,7 @@ func TestHandleMessage_InterruptAndResume(t *testing.T) {
 	)
 
 	flow := NewHandleMessageFlow(g, store,
-		WithDefaultAgentConfig(AgentLoopConfig{
+		WithCustomAgentConfig(AgentLoopConfig{
 			Model: "test/msg-int-p1",
 			Tools: []string{"confirm"},
 		}),
@@ -565,7 +565,7 @@ func TestHandleMessage_InterruptAndResume(t *testing.T) {
 	respondPart.Metadata = map[string]any{"interruptResponse": true}
 
 	flow2 := NewHandleMessageFlow(g2, store,
-		WithDefaultAgentConfig(AgentLoopConfig{
+		WithCustomAgentConfig(AgentLoopConfig{
 			Model: "test/msg-int-p2",
 			Tools: []string{"confirm"},
 		}),
@@ -663,7 +663,7 @@ func TestHandleMessage_EventBusIntegration(t *testing.T) {
 
 	flow := NewHandleMessageFlow(g, store,
 		WithHandleMessageEventBus(bus),
-		WithDefaultAgentConfig(AgentLoopConfig{
+		WithCustomAgentConfig(AgentLoopConfig{
 			Model: "test/msg-events",
 			Tools: []string{"echo"},
 		}),
@@ -738,7 +738,7 @@ func TestHandleMessage_MultipleMessagesAccumulateInSession(t *testing.T) {
 	})
 
 	flow := NewHandleMessageFlow(g, store,
-		WithDefaultAgentConfig(AgentLoopConfig{Model: "test/msg-accum"}),
+		WithCustomAgentConfig(AgentLoopConfig{Model: "test/msg-accum"}),
 	)
 
 	for i := range 3 {
@@ -798,7 +798,7 @@ func TestHandleMessage_DifferentOrigins(t *testing.T) {
 	})
 
 	flow := NewHandleMessageFlow(g, store,
-		WithDefaultAgentConfig(AgentLoopConfig{Model: "test/msg-origins"}),
+		WithCustomAgentConfig(AgentLoopConfig{Model: "test/msg-origins"}),
 	)
 
 	origins := []memory.MessageOrigin{

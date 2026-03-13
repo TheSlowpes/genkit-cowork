@@ -1,135 +1,134 @@
-# Flows — The Experience Layer
+# Flows — Experience Layer (Concept + Current State)
 
-*Genkit Application — Conceptual Documentation*
-
----
-
-## 1. What is a Flow?
-
-A Flow is the primary unit of observable behaviour in the application. It represents a complete, stateful agent experience — from the moment a user or system initiates an interaction, through every model call and tool execution, to the point the model signals it is done.
-
-Flows are not just function wrappers. They are structured lifecycles: self-contained arenas in which an agent loop runs, state accumulates, and hooks can observe or reshape what is happening at every meaningful moment.
-
-> **Design intent:** If something is happening that a developer, operator, or observer should be able to see, influence, or react to — it happens inside a Flow.
+*This document captures both the intended design of Flows and the behavior currently implemented in `genkit-cowork/flows`.*
 
 ---
 
-## 2. The Agent Loop
+## 1. Design Intent
 
-At the core of every Flow is an agent loop. This is the cycle the model moves through as it reasons, calls tools, receives results, and decides whether to continue or stop.
+A Flow is the primary unit of observable agent behavior. It is not just a function call; it is a lifecycle that:
 
-The loop is model-driven. The model itself determines when it is done — not an external counter or a hard-coded predicate. When the model has no further tool calls to make, it produces a final response and the loop concludes naturally.
+- carries state across steps,
+- provides clear stage boundaries,
+- exposes interception points for operators,
+- and makes autonomous work inspectable and controllable.
 
-### Loop stages, in order
+The intent is that anything important in agent execution should happen inside a Flow boundary, where it can be observed, constrained, and extended.
 
-1. A turn begins.
-2. The model receives the current state (history, context, prior tool results).
-3. The model produces a message, optionally including one or more tool calls.
-4. Each tool call is executed and its result is recorded.
-5. If the model issued tool calls, the loop continues to the next turn.
-6. If the model issued no tool calls, the loop ends and the Flow concludes.
+In practical terms, Flows provide:
 
-> **Key principle:** The loop has no fixed iteration count. It runs for as many turns as the model needs. Hooks are the mechanism for shaping that process — not for replacing the model's judgment about when to stop.
-
----
-
-## 3. Lifecycle Stages and State Scopes
-
-Every meaningful transition in the agent loop is a named lifecycle stage. Each stage has a corresponding state scope — a structured slice of data that belongs to that stage and that stage alone.
-
-The scopes nest hierarchically, mirroring the natural containment of the loop:
-
-### Agent scope
-
-Exists for the full duration of a Flow. Contains everything that must survive across turns: the full conversation history, accumulated tool results, session context, and flow-level metadata such as start time and step count.
-
-- `agent-start` — emitted once when the Flow is first entered.
-- `agent-end` — emitted once when the Flow fully completes or fails.
-
-### Turn scope
-
-Exists for a single pass through the loop. Contains the input the model received for this turn and everything produced during it — messages and tool calls — before those results are folded back into agent scope for the next turn.
-
-- `turn-start` — emitted at the beginning of each loop iteration.
-- `turn-end` — emitted when all messages and tool calls in a turn have resolved.
-
-### Message scope
-
-Exists for a single model output. A message begins when the model starts generating and ends when it is complete. For streaming flows, message state accumulates incrementally.
-
-- `message-start` — emitted when the model begins generating output.
-- `message-update` — emitted as the model streams tokens or partial content.
-- `message-end` — emitted when the model's output is finalised.
-
-### Tool execution scope
-
-Exists for a single tool call. Tool scope is nested inside message scope — a message may contain multiple tool calls, each with its own isolated scope. Tool scope holds the call input, intermediate progress, and the final result.
-
-- `tool-execution-start` — emitted when a tool call begins.
-- `tool-execution-update` — emitted for tools that return interrupts
-- `tool-execution-end` — emitted when the tool call resolves with a result or error.
-
-> **Scope rule:** Data at a narrower scope never outlives its parent scope. Turn data is not visible outside the turn. Tool data is not visible outside its parent message. The agent scope is the only data that persists for the full lifetime of a Flow.
+- **Structured execution** — clear beginning, progress points, and completion.
+- **Scoped state** — agent, turn, message, and tool execution concerns stay separated.
+- **Composable behavior** — higher-level experiences are built from reusable flow units.
+- **Operational hooks** — logging, policy checks, mutation, and side effects attach to lifecycle stages.
 
 ---
 
-## 4. Hooks — The Middleware Layer
+## 2. Implemented Flow Types
 
-Hooks are the mechanism by which a developer intervenes in the agent loop. Every lifecycle stage — every start, update, and end event listed above — is a hookable point.
+The project currently implements three concrete flow layers:
 
-Hooks follow a middleware pattern. When a lifecycle stage fires, the registered hooks for that stage execute in order. Each hook receives the current state for that scope, can read it, and can modify it before returning. The loop does not proceed until the hook has finished.
-
-### What hooks can do
-
-- Read any field in the current scope's state.
-- Modify fields in the current scope's state before the next stage runs.
-- Halt the loop entirely by returning an error or terminal signal.
-- Emit side effects: logging, metrics, external notifications.
-- Inject data into state that subsequent hooks or the model will see.
-
-### Hook registration
-
-Hooks can be registered in two ways, and both may be in use simultaneously:
-
-#### Static registration
-
-Hooks declared as part of the Flow definition. These are the default behaviours that run every time this Flow executes, regardless of how it was invoked. Examples include standard logging, safety checks, or mandatory context injection.
-
-#### Runtime registration
-
-Hooks injected at the moment a Flow is invoked. These override or extend the static defaults for that specific invocation. This is the mechanism for per-request customisation — for example, attaching a tracing hook for a specific debug session, or inserting a user-specific context hook without modifying the Flow definition itself.
-
-> **Execution order:** Static hooks run first, then runtime overrides. Within each group, hooks execute in registration order. Every hook is blocking — the loop waits for each hook to complete before moving to the next stage.
+1. **Agent loop (`agentLoop`)**
+   - Core think/act loop that calls the model, executes tool requests, and continues until the model stops requesting tools.
+2. **Message handling (`handleMessage`)**
+   - Session-aware wrapper around `agentLoop` for user/chat style turns.
+   - Loads or creates a session, appends incoming messages, runs the loop, and persists new history.
+3. **Heartbeat (`heartbeat`)**
+   - Periodic/background execution path that runs the loop against existing session context.
+   - Supports schedule interval, active-hour windows, and delivery filtering (`ack`, `alert`, `skipped`, `error`).
 
 ---
 
-## 5. Flow Composability
+## 3. Agent Loop Contract
 
-Flows are composable. A Flow may invoke another Flow as a sub-flow, creating a parent-child relationship. This allows complex experiences to be built from smaller, reusable, independently-defined units.
+`agentLoop` is model-driven and turn-based:
 
-### State scoping in sub-flows
+1. Emit `agent-start`.
+2. For each turn, emit `turn-start`.
+3. Call model generation with history, configured tools, and model/system options.
+4. Emit `message-start` and `message-end` for the model response.
+5. If no tool requests are present, emit `turn-end`, then finish.
+6. If tool requests are present, execute each tool call, append a tool message, emit `turn-end`, and continue.
+7. Emit `agent-end` on completion (or before returning on generation failure).
 
-When a parent Flow invokes a sub-flow, the sub-flow receives a scoped view of the parent's agent state — not the full state, and not an empty slate. The sub-flow can read the slice of parent state made available to it, and can write into its own state, but it cannot reach outside its scope to modify parent state directly.
+Additional behavior:
 
-When the sub-flow completes, its result is returned to the parent, which decides how to incorporate it. The parent's agent scope is updated at that point, not before.
-
-> **Isolation guarantee:** A sub-flow cannot corrupt parent state mid-execution. The handoff is explicit and happens only at sub-flow completion.
-
-### Event-driven composition
-
-Flows also interact through events. Every lifecycle stage transition emits an event, and other Flows (or other parts of the system) may subscribe to those events. This allows loosely coupled coordination: a Flow can react to something another Flow did without being directly invoked by it.
-
-This is distinct from direct sub-flow invocation. Event-driven composition is appropriate when the relationship between Flows is observational — one Flow cares about what another produced, but does not need to control it or wait for it to finish before proceeding.
+- Optional `MaxTurns` guard returns an error when exceeded.
+- Resume support via `toolResponses` and `toolRestarts` on the first turn.
+- Interrupt support: if a tool returns an interrupt error, the loop returns `FinishReasonInterrupted` and surfaces interrupt parts.
 
 ---
 
-## 6. Summary
+## 4. Event and Context Model
 
-Flows are the experience layer of the application. They define the observable shape of what the agent does, structured around a model-driven loop with a precise lifecycle. The conceptual contract in brief:
+Flow observability uses `EventBus` with typed event payloads.
 
-- A Flow is a stateful, lifecycle-managed agent loop.
-- The model drives the loop — it signals completion via tool-calling behaviour.
-- Every transition in the loop is a named stage that emits an event.
-- State is scoped to its stage: agent, turn, message, and tool execution.
-- Hooks intercept stages in a blocking middleware chain, with static and runtime registration.
-- Flows compose via direct sub-flow invocation (scoped state) or events (loose coupling).
+Defined event types:
+
+- `agent-start`, `agent-end`
+- `turn-start`, `turn-end`
+- `message-start`, `message-update`, `message-end`
+- `tool-execution-start`, `tool-execution-update`, `tool-execution-end`
+
+Important implementation notes:
+
+- `message-update` is defined but not currently emitted by `agentLoop` (no token streaming events yet).
+- `tool-execution-update` is currently emitted for tool interrupts.
+- Event handlers run synchronously in registration order.
+- `tool-execution-start` can mutate tool input through returned event data (`event.Data.Input`), and that mutated input is used for execution.
+- Most event emission call sites currently ignore handler errors; events are primarily observational in the current implementation.
+
+---
+
+## 5. Session-Coupled Flows
+
+Both `handleMessage` and `heartbeat` persist loop output into session state:
+
+- Load existing session by `SessionID`, or create one with `TenantID`.
+- Build model history from stored session messages.
+- Run `agentLoop`.
+- Persist only newly generated messages back to the session.
+
+Origin mapping in persisted messages:
+
+- User role uses inbound origin.
+- Model role maps to `model` origin.
+- Tool role maps to `tool` origin.
+- Heartbeat writes user-equivalent entries with `heartbeat` origin.
+
+---
+
+## 6. Heartbeat Runtime Behavior
+
+`Heartbeat` is a managed runner around the `heartbeat` flow:
+
+- `Start(ctx)` creates a ticker using configured `Interval`.
+- `Run(ctx, tickTime)` enforces:
+  - active-hours filtering (`outside_hours` skip),
+  - single-flight guard (`busy` skip),
+  - execution and result callback.
+- `Wake(ctx)` triggers immediate asynchronous run.
+- `Stop()` closes the internal stop channel once.
+
+Heartbeat output classification:
+
+- `HEARTBEAT_OK` token => `ack` (if stripped content length is within `AckMaxChars`).
+- Otherwise => `alert`.
+- Runtime skip/error paths => `skipped` / `error`.
+
+---
+
+## 7. Current Boundaries and Intended Direction
+
+The current flow system is functional but intentionally narrow:
+
+- Event-driven hooks exist through `EventBus`, but there is no separate static-vs-runtime hook registry abstraction yet.
+- Direct sub-flow orchestration and explicit parent/child scoped-state composition are not implemented as a first-class flow API.
+- Streaming message lifecycle (`message-update`) is planned by type definition but not yet active in the loop.
+
+Intended direction:
+
+- Keep the model-driven loop as the core execution primitive.
+- Expand lifecycle coverage to include streaming updates and richer turn/message telemetry.
+- Formalize flow composition (sub-flows and scoped handoff contracts) as a first-class API.
+- Evolve hooks toward clearer policy/middleware ergonomics while preserving synchronous determinism where needed.

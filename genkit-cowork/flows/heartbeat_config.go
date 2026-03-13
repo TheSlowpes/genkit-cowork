@@ -1,7 +1,6 @@
 package flows
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -9,11 +8,11 @@ import (
 	"github.com/firebase/genkit/go/ai"
 )
 
-type HearbeatTarget string
+type HeartbeatTarget string
 
 const (
-	HearbeatTargetNone HearbeatTarget = "none"
-	HearbeatTargetLast HearbeatTarget = "last"
+	HeartbeatTargetNone HeartbeatTarget = "none"
+	HeartbeatTargetLast HeartbeatTarget = "last"
 )
 
 type ActiveHours struct {
@@ -68,14 +67,14 @@ func (a *ActiveHours) Contains(t time.Time) bool {
 	return nowMins >= startMins && nowMins < endMins
 }
 
-type HeartBeatDelivery struct {
+type HeartbeatDelivery struct {
 	ShowOk       bool `json:"showOk"`
 	ShowAlerts   bool `json:"showAlerts"`
 	UseIndicator bool `json:"useIndicator"`
 }
 
-func DefaultHeartBeatDelivery() HeartBeatDelivery {
-	return HeartBeatDelivery{
+func DefaultHeartbeatDelivery() HeartbeatDelivery {
+	return HeartbeatDelivery{
 		ShowOk:       false,
 		ShowAlerts:   true,
 		UseIndicator: true,
@@ -87,25 +86,13 @@ type HeartbeatConfig struct {
 	ActiveHours *ActiveHours  `json:"activeHours,omitempty"`
 
 	AgentConfig *AgentLoopConfig     `json:"agentConfig,omitempty"`
-	Prompt      ai.PromptFn          `json:"prompt,omitempty"`
+	Prompt      ai.PromptFn          `json:"-"`
 	SessionID   string               `json:"sessionID,omitempty"`
+	TenantID    string               `json:"tenantID,omitempty"`
 	AckMaxChars int                  `json:"ackMaxChars,omitempty"`
-	Target      HearbeatTarget       `json:"target,omitempty"`
+	Target      HeartbeatTarget      `json:"target,omitempty"`
 	To          memory.MessageOrigin `json:"to,omitempty"`
-	Delivery    HeartBeatDelivery    `json:"delivery"`
-}
-
-const DefaultPrompt = "Read HEARTBEAT.md if it exists. Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK"
-
-func (c *HeartbeatConfig) resolvedPrompt(ctx context.Context, a any) (string, error) {
-	if c.Prompt != nil {
-		prompt, err := c.Prompt(ctx, a)
-		if err != nil {
-			return "", fmt.Errorf("resolving prompt")
-		}
-		return prompt, nil
-	}
-	return DefaultPrompt, nil
+	Delivery    HeartbeatDelivery    `json:"delivery"`
 }
 
 func (c *HeartbeatConfig) resolvedAckMaxChars() int {

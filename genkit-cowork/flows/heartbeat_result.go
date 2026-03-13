@@ -19,6 +19,7 @@ type SkipReason string
 const (
 	SkipReasonBusy         SkipReason = "busy"
 	SkipReasonOutsideHours SkipReason = "outside_hours"
+	SkipReasonErrors       SkipReason = "errors"
 )
 
 const heartbeatOKToken = "HEARTBEAT_OK"
@@ -32,7 +33,8 @@ type HeartbeatOutput struct {
 	DeliveryContent string     `json:"deliveryContent,omitempty"`
 	ShouldDeliver   bool       `json:"shouldDeliver"`
 	SkipReason      SkipReason `json:"skipReason,omitempty"`
-	Err             error      `json:"error,omitempty"`
+	Err             error      `json:"-"`
+	ErrMessage      string     `json:"error,omitempty"`
 	Turns           int        `json:"turns,omitempty"`
 }
 
@@ -60,14 +62,14 @@ func parseHeartbeatResponse(raw string, ackMaxChars int) (kind HeartbeatResultKi
 	return HeartbeatAlert, remaining
 }
 
-func evaluateHearbeatResult(
+func evaluateHeartbeatResult(
 	sessionID string,
 	runAt time.Time,
 	rawContent string,
 	turns int,
 	cfg *HeartbeatConfig,
 ) HeartbeatOutput {
-	kind, stripped := parseHeartbeatResponse(rawContent, cfg.AckMaxChars)
+	kind, stripped := parseHeartbeatResponse(rawContent, cfg.resolvedAckMaxChars())
 
 	result := HeartbeatOutput{
 		Kind:            kind,
@@ -82,7 +84,7 @@ func evaluateHearbeatResult(
 	return result
 }
 
-func shouldDeliver(kind HeartbeatResultKind, delivery HeartBeatDelivery) bool {
+func shouldDeliver(kind HeartbeatResultKind, delivery HeartbeatDelivery) bool {
 	switch kind {
 	case HeartbeatAck:
 		return delivery.ShowOk
@@ -104,9 +106,10 @@ func skippedResult(sessionID string, reason SkipReason) HeartbeatOutput {
 
 func errorResult(sessionID string, runAt time.Time, err error) HeartbeatOutput {
 	return HeartbeatOutput{
-		Kind:      HeartbeatError,
-		SessionID: sessionID,
-		RunAt:     runAt,
-		Err:       err,
+		Kind:       HeartbeatError,
+		SessionID:  sessionID,
+		RunAt:      runAt,
+		Err:        err,
+		ErrMessage: err.Error(),
 	}
 }

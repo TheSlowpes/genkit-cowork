@@ -35,15 +35,15 @@ A coworking framework for [Firebase Genkit](https://github.com/firebase/genkit) 
 
 ### 1. Flows
 
-Flows define how agents execute work. The framework prioritizes four flow structures:
+Flows define how agents execute work. The current implementation in `genkit-cowork/flows` includes:
 
-**Hooks** — Event-driven triggers that fire before or after actions. Hooks allow interception and mutation of execution context. The existing `BashSpawnHook` pattern in `tools/bash.go` is an early example: it receives a `BashSpawnContext` (command, working directory, environment) and returns a modified version before the command executes.
+**Agent Loop (`agentLoop`)** — A model-driven turn loop that generates model responses, executes tool requests, appends tool responses, and continues until no more tool requests are returned. Supports max-turn limits, tool interrupt handling, and resume inputs (`toolResponses`, `toolRestarts`).
 
-**Schedules / Heartbeats** — Time-based periodic execution for background tasks. Schedules enable agents to perform recurring work such as monitoring, cleanup, syncing, or health checks without explicit user prompting.
+**Message Flow (`handleMessage`)** — Session-backed chat-style flow that loads or creates session state, appends incoming message content, runs the agent loop, and persists newly generated messages.
 
-**Loop** — A continuous think/act/observe cycle for autonomous agent work. The loop flow allows an agent to reason about its current state, take an action using available tools, observe the result, and decide what to do next — repeating until a goal is met or a termination condition is reached.
+**Heartbeat Flow (`heartbeat`)** — Periodic/background flow that runs the agent loop against current session state and classifies results as `ack`, `alert`, `skipped`, or `error` based on heartbeat response parsing.
 
-**Chat** — Conversational back-and-forth interaction with a user. Chat flows manage turn-taking, context threading, and the integration of tool use within a dialogue.
+**Flow Events (`EventBus`)** — Typed event lifecycle with synchronous subscribers for `agent`, `turn`, `message`, and `tool-execution` stages. `tool-execution-start` handlers can mutate tool input before execution.
 
 ### 2. Tools
 
@@ -103,6 +103,14 @@ All constructors accept functional options for configuration and operator/strate
 
 ```
 genkit-cowork/
+├── flows/           # Flow definitions (agent loop, message, heartbeat, events)
+│   ├── agent_loop.go      # Core model/tool execution loop
+│   ├── message.go         # Session-backed message handling flow
+│   ├── heartbeat.go       # Scheduled/background heartbeat flow wrapper
+│   ├── event.go           # Event bus and typed lifecycle events
+│   ├── event_context.go   # Event payload/context types
+│   ├── heartbeat_config.go # Heartbeat scheduling/delivery config
+│   └── heartbeat_result.go # Heartbeat result parsing and classification
 ├── tools/           # Tool definitions (bash, read, edit, write)
 │   ├── bash.go      # Bash command execution tool
 │   ├── read.go      # File/image reading tool
@@ -130,6 +138,11 @@ genkit-cowork/
 
 | Component | Status |
 |---|---|
+| `flows/agent_loop.go` — model/tool turn loop, interrupts, resume support | Implemented |
+| `flows/message.go` — session-backed message flow over agent loop | Implemented |
+| `flows/heartbeat.go` — periodic/background heartbeat flow | Implemented |
+| `flows/event.go` + `flows/event_context.go` — typed flow lifecycle events | Implemented |
+| `flows/heartbeat_config.go` + `flows/heartbeat_result.go` — heartbeat config and result classification | Implemented |
 | `tools/bash.go` — command execution with spawn hooks | Implemented |
 | `tools/read.go` — text file reading with offset/limit, line-number prefixing, truncation | Implemented |
 | `tools/read.go` — image reading with auto-resize (JPEG, PNG, GIF, WebP) | Implemented |
@@ -141,7 +154,6 @@ genkit-cowork/
 | `tools/edit-diff.go` — text normalization, fuzzy matching, unified diff generation | Implemented |
 | `tools/diff.go` — LCS-based line diff algorithm | Implemented |
 | Tools: Write | Planned |
-| Flows | Planned |
 | Memory | Planned |
 | Skills | Planned |
 
