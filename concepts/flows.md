@@ -26,7 +26,7 @@ In practical terms, Flows provide:
 
 ## 2. Implemented Flow Types
 
-The project currently implements three concrete flow layers:
+The project currently implements four concrete flow layers:
 
 1. **Agent loop (`agentLoop`)**
    - Core think/act loop that calls the model, executes tool requests, and continues until the model stops requesting tools.
@@ -36,6 +36,11 @@ The project currently implements three concrete flow layers:
 3. **Heartbeat (`heartbeat`)**
    - Periodic/background execution path that runs the loop against existing session context.
    - Supports schedule interval, active-hour windows, and delivery filtering (`ack`, `alert`, `skipped`, `error`).
+   - Preserves the full `*ai.Message` response (including media and documents) for downstream delivery.
+4. **Send reply (`sendReply`)**
+   - Channel-routed reply delivery flow that dispatches agent output to external messaging channels.
+   - Routes via a `ChannelHandler` registry keyed by `MessageOrigin` (e.g., WhatsApp, Zoom, email).
+   - Supports multi-tenant sender identity and channel-specific destination routing.
 
 ---
 
@@ -116,15 +121,64 @@ Heartbeat output classification:
 - Otherwise => `alert`.
 - Runtime skip/error paths => `skipped` / `error`.
 
+`HeartbeatOutput` preserves the full `Response *ai.Message` from the agent loop. This ensures downstream consumers (such as the send reply flow) have access to the complete model response, including any media parts or structured content, not just the extracted text.
+
 ---
 
-## 7. Current Boundaries and Intended Direction
+## 7. Send Reply Flow
 
-The current flow system is functional but intentionally narrow:
+`sendReply` is a channel-routed delivery flow that dispatches agent output to external messaging channels (WhatsApp, Zoom, email, etc.).
+
+### Routing Model
+
+Handlers are registered via a `map[memory.MessageOrigin]ChannelHandler` keyed by message origin. When the flow receives a `SendReplyInput`, it looks up the handler for the input's `Channel`. If no handler is registered, the reply is skipped with a reason.
+
+### ChannelHandler Interface
+
+Each channel implements three methods:
+
+- `Setup(ctx, tenantID)` — One-time initialization for a tenant (e.g., authenticate, validate credentials).
+- `SendReply(ctx, input)` — Deliver a reply to the channel. The input carries the full `*ai.Message` content, sender identity, and destination routing.
+- `Acknowledge(ctx, input)` — Send a lightweight acknowledgment (e.g., a typing indicator or read receipt). Not invoked by the flow directly; available for caller orchestration.
+
+### Skip Conditions
+
+The flow skips delivery (returns `Skipped: true`) when:
+
+- No handler is registered for the input channel.
+- The `Target` is `HeartbeatTargetNone` or empty.
+
+### Input/Output Structure
+
+`SendReplyInput` carries:
+
+- `Sender` — Multi-tenant identity with `TenantID`, `DisplayName`, and optional `Username`.
+- `Content` — The full `*ai.Message` (not just text), preserving media and structured parts.
+- `Channel` — The `MessageOrigin` used for handler routing.
+- `Target` — The heartbeat target classification that triggered this reply.
+- `Destination` — Channel-specific routing with `ChatID`, optional `MessageID`, and optional `ThreadID`.
+
+`SendReplyOutput` reports whether the message was `Delivered`, `Skipped`, and an optional `Reason`.
+
+### SetupSenders Helper
+
+`SetupSenders(ctx, tenantID, senders)` iterates all registered handlers and calls `Setup` on each. Fails fast on the first error.
+
+### Options
+
+- `WithReplyInThread()` — Signals that replies should be threaded where the channel supports it. Wired into options but not yet consumed by flow logic.
+
+---
+
+## 8. Current Boundaries and Intended Direction
+
+The current flow system is functional and covers the core execution, session management, background heartbeat, and channel delivery paths:
 
 - Event-driven hooks exist through `EventBus`, but there is no separate static-vs-runtime hook registry abstraction yet.
 - Direct sub-flow orchestration and explicit parent/child scoped-state composition are not implemented as a first-class flow API.
 - Streaming message lifecycle (`message-update`) is planned by type definition but not yet active in the loop.
+- The `sendReply` flow handles outbound delivery routing, but orchestration of heartbeat-to-reply wiring is left to the caller.
+- `WithReplyInThread` is accepted as an option but not yet consumed by the flow handler logic.
 
 Intended direction:
 
@@ -132,3 +186,4 @@ Intended direction:
 - Expand lifecycle coverage to include streaming updates and richer turn/message telemetry.
 - Formalize flow composition (sub-flows and scoped handoff contracts) as a first-class API.
 - Evolve hooks toward clearer policy/middleware ergonomics while preserving synchronous determinism where needed.
+- Wire `replyInThread` into channel handler dispatch and extend `Destination` routing as channel-specific needs emerge.

@@ -3,6 +3,8 @@ package flows
 import (
 	"strings"
 	"time"
+
+	"github.com/firebase/genkit/go/ai"
 )
 
 type HeartbeatResultKind string
@@ -29,13 +31,14 @@ type HeartbeatOutput struct {
 	SessionID string              `json:"sessionID,omitempty"`
 	RunAt     time.Time           `json:"runAt"`
 
-	RawContent      string     `json:"rawContent,omitempty"`
-	DeliveryContent string     `json:"deliveryContent,omitempty"`
-	ShouldDeliver   bool       `json:"shouldDeliver"`
-	SkipReason      SkipReason `json:"skipReason,omitempty"`
-	Err             error      `json:"-"`
-	ErrMessage      string     `json:"error,omitempty"`
-	Turns           int        `json:"turns,omitempty"`
+	Response        *ai.Message `json:"response,omitempty"`
+	RawContent      string      `json:"rawContent,omitempty"`
+	DeliveryContent string      `json:"deliveryContent,omitempty"`
+	ShouldDeliver   bool        `json:"shouldDeliver"`
+	SkipReason      SkipReason  `json:"skipReason,omitempty"`
+	Err             error       `json:"-"`
+	ErrMessage      string      `json:"error,omitempty"`
+	Turns           int         `json:"turns,omitempty"`
 }
 
 func parseHeartbeatResponse(raw string, ackMaxChars int) (kind HeartbeatResultKind, stripped string) {
@@ -68,6 +71,7 @@ func evaluateHeartbeatResult(
 	rawContent string,
 	turns int,
 	cfg *HeartbeatConfig,
+	response *ai.Message,
 ) HeartbeatOutput {
 	kind, stripped := parseHeartbeatResponse(rawContent, cfg.resolvedAckMaxChars())
 
@@ -75,6 +79,7 @@ func evaluateHeartbeatResult(
 		Kind:            kind,
 		SessionID:       sessionID,
 		RunAt:           runAt,
+		Response:        response,
 		RawContent:      rawContent,
 		DeliveryContent: stripped,
 		Turns:           turns,

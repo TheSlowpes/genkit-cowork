@@ -152,7 +152,7 @@ func NewHeartbeat(
 
 			rawContent := extractText(loopOutput.Response)
 
-			result := evaluateHeartbeatResult(input.SessionID, input.RunAt, rawContent, loopOutput.Turns, h.cfg)
+			result := evaluateHeartbeatResult(input.SessionID, input.RunAt, rawContent, loopOutput.Turns, h.cfg, loopOutput.Response)
 
 			return &result, nil
 		},

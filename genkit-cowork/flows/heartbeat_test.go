@@ -395,7 +395,11 @@ func TestEvaluateHeartbeatResult_Ack(t *testing.T) {
 		Delivery: DefaultHeartbeatDelivery(),
 	}
 	runAt := time.Date(2026, 3, 13, 12, 0, 0, 0, time.UTC)
-	result := evaluateHeartbeatResult("sess-1", runAt, "HEARTBEAT_OK all good", 1, cfg)
+	response := &ai.Message{
+		Role:    ai.RoleModel,
+		Content: []*ai.Part{ai.NewTextPart("HEARTBEAT_OK all good")},
+	}
+	result := evaluateHeartbeatResult("sess-1", runAt, "HEARTBEAT_OK all good", 1, cfg, response)
 
 	if result.Kind != HeartbeatAck {
 		t.Errorf("expected HeartbeatAck, got %v", result.Kind)
@@ -405,6 +409,9 @@ func TestEvaluateHeartbeatResult_Ack(t *testing.T) {
 	}
 	if result.RunAt != runAt {
 		t.Errorf("expected RunAt %v, got %v", runAt, result.RunAt)
+	}
+	if result.Response != response {
+		t.Error("expected Response to be set to the provided ai.Message")
 	}
 	if result.RawContent != "HEARTBEAT_OK all good" {
 		t.Errorf("expected raw content preserved, got %q", result.RawContent)
@@ -426,7 +433,7 @@ func TestEvaluateHeartbeatResult_Alert(t *testing.T) {
 		Delivery: DefaultHeartbeatDelivery(),
 	}
 	runAt := time.Date(2026, 3, 13, 12, 0, 0, 0, time.UTC)
-	result := evaluateHeartbeatResult("sess-2", runAt, "Database connection failing", 3, cfg)
+	result := evaluateHeartbeatResult("sess-2", runAt, "Database connection failing", 3, cfg, nil)
 
 	if result.Kind != HeartbeatAlert {
 		t.Errorf("expected HeartbeatAlert, got %v", result.Kind)
@@ -450,7 +457,7 @@ func TestEvaluateHeartbeatResult_AckWithCustomMaxChars(t *testing.T) {
 	}
 	runAt := time.Now()
 	// "a long message" is > 5 chars, so even with OK token it becomes alert
-	result := evaluateHeartbeatResult("sess-3", runAt, "HEARTBEAT_OK a long message", 1, cfg)
+	result := evaluateHeartbeatResult("sess-3", runAt, "HEARTBEAT_OK a long message", 1, cfg, nil)
 	if result.Kind != HeartbeatAlert {
 		t.Errorf("expected HeartbeatAlert when remaining exceeds custom maxChars, got %v", result.Kind)
 	}
@@ -461,7 +468,7 @@ func TestEvaluateHeartbeatResult_AckWithShowOkDelivery(t *testing.T) {
 		Delivery: HeartbeatDelivery{ShowOk: true, ShowAlerts: true},
 	}
 	runAt := time.Now()
-	result := evaluateHeartbeatResult("sess-4", runAt, "HEARTBEAT_OK fine", 1, cfg)
+	result := evaluateHeartbeatResult("sess-4", runAt, "HEARTBEAT_OK fine", 1, cfg, nil)
 	if result.Kind != HeartbeatAck {
 		t.Errorf("expected HeartbeatAck, got %v", result.Kind)
 	}
@@ -848,6 +855,12 @@ func TestHeartbeatRun_SuccessfulAckResult(t *testing.T) {
 	// Default delivery: ShowOk=false
 	if result.ShouldDeliver {
 		t.Error("expected ShouldDeliver=false with default delivery for Ack")
+	}
+	if result.Response == nil {
+		t.Fatal("expected Response to be set")
+	}
+	if result.Response.Role != ai.RoleModel {
+		t.Errorf("expected Response role to be model, got %v", result.Response.Role)
 	}
 }
 

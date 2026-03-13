@@ -55,7 +55,7 @@ Tools define what agents can do. Each tool is registered with a Genkit instance 
 
 **Edit** — Find-and-replace editing with exact and fuzzy text matching, uniqueness validation, and unified diff output. See `tools/edit.go`.
 
-**Write** — Create new files. Planned.
+**Write** — Create or overwrite files with automatic parent directory creation. Custom operators can be injected for sandboxing or testing. See `tools/write.go`.
 
 Tools are created via constructor functions that return `ai.Tool`, which integrates directly with the Genkit tool system:
 
@@ -63,6 +63,7 @@ Tools are created via constructor functions that return `ai.Tool`, which integra
 bashTool := tools.NewBashTool(g, cwd, tools.WithCommandPrefix("..."))
 readTool := tools.NewReadTool(g, cwd, tools.WithCustomReadOperator(op))
 editTool := tools.NewEditTool(g, cwd)
+writeTool := tools.NewWriteTool(g, cwd)
 ```
 
 ### 3. Memory
@@ -79,9 +80,15 @@ The combination of RAG and markdown ensures that memory is both semantically sea
 
 ### 4. Skills
 
-Skills define what agents know. The skill system injects additional domain-specific context into agent capabilities, augmenting their behavior with specialized competence.
+Skills define what agents know. The skill system is implemented as a Genkit plugin (`plugins/skills/`) that discovers, parses, and serves domain-specific knowledge from `SKILL.md` files.
 
-Skills are pluggable modules that provide structured knowledge for particular areas of work. The framework prioritizes skills that assist in workplace scenarios — organizational context, industry-specific knowledge, and domain expertise.
+**Plugin Registration** — The `Skills` struct implements `api.Plugin` and is registered via `genkit.WithPlugins()`. On `Init`, it scans the configured `SkillsDir` (default `./skills`) for subdirectories containing `SKILL.md` files with YAML frontmatter (`name`, `description`, optional `license` and `metadata`).
+
+**Discovery** — `discoverSkills` walks top-level subdirectories, parses each `SKILL.md` via `parseSkillMetadata`, validates required fields, and catalogs all files in the skill directory (including one level of subdirectories). Invalid skills are silently skipped.
+
+**Tools** — The plugin provides two tools:
+- `ListSkillsTool(g)` — Returns discovered skills with optional name substring filter. Tool name: `list-skills`.
+- `ResolveSkillTool(g)` — Loads the full Markdown body and metadata for a named skill. Body content is loaded lazily (not during Init). Tool name: `resolve-skill`.
 
 Skills are loaded and composed alongside the other pillars, allowing an agent to be configured with exactly the competencies required for its role.
 
@@ -103,10 +110,11 @@ All constructors accept functional options for configuration and operator/strate
 
 ```
 genkit-cowork/
-├── flows/           # Flow definitions (agent loop, message, heartbeat, events)
+├── flows/           # Flow definitions (agent loop, message, heartbeat, reply, events)
 │   ├── agent_loop.go      # Core model/tool execution loop
 │   ├── message.go         # Session-backed message handling flow
 │   ├── heartbeat.go       # Scheduled/background heartbeat flow wrapper
+│   ├── reply.go           # Channel-routed reply delivery flow
 │   ├── event.go           # Event bus and typed lifecycle events
 │   ├── event_context.go   # Event payload/context types
 │   ├── heartbeat_config.go # Heartbeat scheduling/delivery config
@@ -115,13 +123,21 @@ genkit-cowork/
 │   ├── bash.go      # Bash command execution tool
 │   ├── read.go      # File/image reading tool
 │   ├── edit.go      # Find-and-replace editing tool
+│   ├── write.go     # File creation with auto-mkdir
 │   ├── edit-diff.go  # Text normalization, fuzzy matching, diff formatting
 │   ├── diff.go       # LCS-based line diff algorithm
 │   ├── truncate.go  # Output truncation utilities
 │   ├── path.go      # Path resolution utilities
 │   └── constants.go # Output truncation limits
+├── plugins/         # Genkit plugins
+│   └── skills/      # Skill discovery and serving
+│       ├── skills.go        # Plugin struct, Init, tool registration
+│       ├── skill_parser.go  # SKILL.md frontmatter parsing
+│       └── skill_scanner.go # Directory scanning, skill discovery
 ├── media/           # Image detection and processing
 │   └── mime.go      # MIME type detection, image resizing
+├── memory/          # Session persistence
+│   └── sessions.go  # Session store, message origins
 └── utils/           # Shared utilities
     └── shell.go     # Shell environment management
 ```
@@ -130,7 +146,7 @@ genkit-cowork/
 
 **Functional Options** — All tool constructors accept variadic option functions (`BashToolOption`, `ReadToolOption`) that mutate a private options struct. This keeps the API clean while allowing extensive configuration.
 
-**Operator Interfaces** — `BashOperator`, `ReadOperator`, and `EditOperator` abstract the actual I/O operations behind interfaces. Default implementations are provided, but consumers can inject custom operators for sandboxing, testing, or alternative execution environments. All operator methods that perform I/O accept `context.Context` for cooperative cancellation.
+**Operator Interfaces** — `BashOperator`, `ReadOperator`, `EditOperator`, and `WriteOperator` abstract the actual I/O operations behind interfaces. Default implementations are provided, but consumers can inject custom operators for sandboxing, testing, or alternative execution environments. All operator methods that perform I/O accept `context.Context` for cooperative cancellation.
 
 **Hook System** — Hooks (e.g., `BashSpawnHook`) allow callers to intercept and modify execution context before an operation runs. This pattern will extend to flows and other pillars.
 
@@ -141,21 +157,24 @@ genkit-cowork/
 | `flows/agent_loop.go` — model/tool turn loop, interrupts, resume support | Implemented |
 | `flows/message.go` — session-backed message flow over agent loop | Implemented |
 | `flows/heartbeat.go` — periodic/background heartbeat flow | Implemented |
+| `flows/reply.go` — channel-routed reply delivery flow | Implemented |
 | `flows/event.go` + `flows/event_context.go` — typed flow lifecycle events | Implemented |
 | `flows/heartbeat_config.go` + `flows/heartbeat_result.go` — heartbeat config and result classification | Implemented |
 | `tools/bash.go` — command execution with spawn hooks | Implemented |
 | `tools/read.go` — text file reading with offset/limit, line-number prefixing, truncation | Implemented |
 | `tools/read.go` — image reading with auto-resize (JPEG, PNG, GIF, WebP) | Implemented |
+| `tools/write.go` — file creation with auto-mkdir, operator interface | Implemented |
 | `tools/truncate.go` — output truncation (line + byte limits) | Implemented |
 | `tools/path.go` — path resolution (cwd-relative, ~ expansion, OS-agnostic) | Implemented |
-| `media/mime.go` — MIME detection and image auto-resize (CatmullRom scaling) | Implemented |
-| `utils/shell.go` — shell environment | Implemented |
 | `tools/edit.go` — find-and-replace with fuzzy matching, BOM/line-ending preservation | Implemented |
 | `tools/edit-diff.go` — text normalization, fuzzy matching, unified diff generation | Implemented |
 | `tools/diff.go` — LCS-based line diff algorithm | Implemented |
-| Tools: Write | Planned |
-| Memory | Planned |
-| Skills | Planned |
+| `media/mime.go` — MIME detection and image auto-resize (CatmullRom scaling) | Implemented |
+| `utils/shell.go` — shell environment | Implemented |
+| `memory/sessions.go` — session store with persistence modes, operator interface | Implemented |
+| `plugins/skills/` — skill discovery, parsing, list-skills and resolve-skill tools | Implemented |
+| Memory: Retrieval (RAG) | Planned |
+| Memory: Recall (structured markdown) | Planned |
 
 ## Development
 
