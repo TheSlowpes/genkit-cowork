@@ -4,16 +4,18 @@
 
 ---
 
-## 1. Design Intent
+## 1. What is a Flow?
 
-A Flow is the primary unit of observable agent behavior. It is not just a function call; it is a lifecycle that:
+A Flow is the primary unit of observable agent behavior. It represents a complete, stateful agent experience. From the moment a user or system
+initiates an interaction, through every model call and tool execution, to the point the model signals it is done.
 
 - carries state across steps,
 - provides clear stage boundaries,
 - exposes interception points for operators,
 - and makes autonomous work inspectable and controllable.
 
-The intent is that anything important in agent execution should happen inside a Flow boundary, where it can be observed, constrained, and extended.
+>**Design intent** If somethis is happening that a developer, operator, or observer should be able to see, influence, or react to; it happens
+> inside a flow
 
 In practical terms, Flows provide:
 
@@ -46,7 +48,10 @@ The project currently implements four concrete flow layers:
 
 ## 3. Agent Loop Contract
 
-`agentLoop` is model-driven and turn-based:
+At the core of every Flow is an agent loop. This is the cycle the model moves through as it reasons, call tools, receives results, and
+decides whether to continue or stop.
+
+agentLoop stages, in order:
 
 1. Emit `agent-start`.
 2. For each turn, emit `turn-start`.
