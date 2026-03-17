@@ -236,8 +236,21 @@ import "github.com/TheSlowpes/genkit-cowork/genkit-cowork/plugins/skills"
 
 g, _ := genkit.Init(ctx,
     genkit.WithDefaultModel("googleai/gemini-2.0-flash"),
-    genkit.WithPlugins(&skills.Skills{SkillsDir: "./skills"}),
+    genkit.WithPlugins(&skills.Skills{
+        SkillsDir:     "./skills", // optional; falls back to default search paths
+        AllowedSkills: []string{"my-skill"}, // optional whitelist; all skills exposed when empty
+    }),
 )
+```
+
+When `SkillsDir` is not set, the plugin searches for the first existing directory among: `./skills`, `./SKILLS`, `./.agent/skills`, `./agent/skills`, `./docs/skills`. If none are found, the plugin starts with an empty skill set and does not panic.
+
+After `Init`, register the tool with a Genkit instance:
+
+```go
+s := &skills.Skills{SkillsDir: "./skills"}
+// after genkit.Init with the plugin...
+skillTool := s.SkillTool(g)
 ```
 
 ### Skill Format
@@ -257,16 +270,17 @@ Skill content in Markdown...
 
 ### Tools
 
-The plugin provides two tools for agent use:
+The plugin provides a single tool for agent use:
 
 | Tool | Name | Description |
 |------|------|-------------|
-| `ListSkillsTool(g)` | `list-skills` | Returns discovered skills with optional name filter |
-| `ResolveSkillTool(g)` | `resolve-skill` | Loads the full Markdown body and metadata for a skill by name |
+| `SkillTool(g)` | `resolve-skill` | Lists all available skills in the tool description; accepts a skill name and returns the full SKILL.md body and metadata |
 
 ### Discovery
 
-On `Init`, the plugin scans top-level subdirectories of `SkillsDir` for `SKILL.md` files, parses frontmatter, validates required fields (`name`, `description`), and catalogs all files in the skill directory. Invalid skills are silently skipped. Skill body content is loaded lazily only when `resolve-skill` is called.
+On `Init`, the plugin resolves the skills directory (checking `defaultSkillsDirs` when `SkillsDir` is unset), then scans top-level subdirectories for `SKILL.md` files, parses frontmatter, validates required fields (`name`, `description`), and catalogs all files in the skill directory (including one level of subdirectories). Invalid skills are silently skipped. Skill body content is loaded lazily only when `resolve-skill` is called.
+
+When `AllowedSkills` is non-empty, only skills whose names appear in that list are exposed by `SkillTool` and `ListSkills`.
 
 ## Design Patterns
 
