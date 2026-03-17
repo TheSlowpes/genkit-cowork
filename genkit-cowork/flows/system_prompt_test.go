@@ -37,18 +37,22 @@ func TestDefaultSystemPrompt_ContainsExpectedSections(t *testing.T) {
 	checks := []string{
 		"capable assistant",
 		"get work done",
-		"Available tools:",
 		"Guidelines:",
-		"- bash: Execute bash commands",
-		"- read: Read file contents",
-		"- edit: Make surgical edits to files",
-		"- write: Create or overwrite files",
 		"Current date:",
 		"Current working directory:",
 	}
 	for _, want := range checks {
 		if !strings.Contains(text, want) {
 			t.Errorf("expected prompt to contain %q\nfull prompt:\n%s", want, text)
+		}
+	}
+
+	// Tool list and skills are sent by Genkit natively — they must not appear
+	// as redundant text sections in the system prompt.
+	absent := []string{"Available tools:", "# Skills"}
+	for _, unwanted := range absent {
+		if strings.Contains(text, unwanted) {
+			t.Errorf("prompt must not contain %q (Genkit sends this natively)\nfull prompt:\n%s", unwanted, text)
 		}
 	}
 }
@@ -68,64 +72,22 @@ func TestDefaultSystemPrompt_CwdIsPresent(t *testing.T) {
 	}
 }
 
-// --- Tests: SelectedTools ---
+// --- Tests: SelectedTools drives guidelines ---
 
-func TestBuildSystemPrompt_SelectedToolsOverridesDefaults(t *testing.T) {
+func TestBuildSystemPrompt_SelectedToolsDriveGuidelines(t *testing.T) {
+	// When only bash+read are selected, the edit/write guidelines must be absent.
 	text := invokePromptFn(t, SystemPromptOptions{
 		SelectedTools: []string{"bash", "read"},
 	})
 
-	if !strings.Contains(text, "- bash:") {
-		t.Error("expected bash in tools list")
+	if !strings.Contains(text, "Use bash for file operations like ls, find, grep") {
+		t.Error("expected bash guideline when bash is selected")
 	}
-	if !strings.Contains(text, "- read:") {
-		t.Error("expected read in tools list")
+	if strings.Contains(text, "Use edit for surgical") {
+		t.Error("did not expect edit guideline when edit is not selected")
 	}
-	if strings.Contains(text, "- edit:") {
-		t.Error("did not expect edit in tools list when not selected")
-	}
-	if strings.Contains(text, "- write:") {
-		t.Error("did not expect write in tools list when not selected")
-	}
-}
-
-func TestBuildSystemPrompt_EmptyToolsShowsNone(t *testing.T) {
-	// Passing a non-nil but empty slice forces "no tools" instead of defaults.
-	text := promptFromOpts(SystemPromptOptions{
-		SelectedTools: []string{},
-	})
-	// With empty tools the defaults kick in and the function still lists defaults.
-	// An explicitly empty slice is treated the same as nil → defaults are used.
-	if !strings.Contains(text, "- bash:") {
-		t.Error("expected default tools when SelectedTools is empty")
-	}
-}
-
-// --- Tests: ToolSnippets ---
-
-func TestBuildSystemPrompt_ToolSnippetOverridesDescription(t *testing.T) {
-	text := invokePromptFn(t, SystemPromptOptions{
-		SelectedTools: []string{"bash", "custom-tool"},
-		ToolSnippets: map[string]string{
-			"bash":        "Run shell commands with a 30s timeout",
-			"custom-tool": "My custom domain tool",
-		},
-	})
-
-	if !strings.Contains(text, "- bash: Run shell commands with a 30s timeout") {
-		t.Error("expected custom bash snippet in tools list")
-	}
-	if !strings.Contains(text, "- custom-tool: My custom domain tool") {
-		t.Error("expected custom-tool snippet in tools list")
-	}
-}
-
-func TestBuildSystemPrompt_UnknownToolFallsBackToName(t *testing.T) {
-	text := invokePromptFn(t, SystemPromptOptions{
-		SelectedTools: []string{"unknown-tool"},
-	})
-	if !strings.Contains(text, "- unknown-tool: unknown-tool") {
-		t.Error("expected unknown tool to fall back to its name as the description")
+	if strings.Contains(text, "Use write only for new files") {
+		t.Error("did not expect write guideline when write is not selected")
 	}
 }
 
@@ -238,9 +200,6 @@ func TestBuildSystemPrompt_CustomPromptReplacesDefaultBody(t *testing.T) {
 	if !strings.Contains(text, custom) {
 		t.Error("expected custom prompt to appear in output")
 	}
-	if strings.Contains(text, "Available tools:") {
-		t.Error("did not expect 'Available tools:' section when CustomPrompt is set")
-	}
 	if strings.Contains(text, "Guidelines:") {
 		t.Error("did not expect 'Guidelines:' section when CustomPrompt is set")
 	}
@@ -309,61 +268,6 @@ func TestBuildSystemPrompt_NoContextFilesSection(t *testing.T) {
 	text := invokePromptFn(t, SystemPromptOptions{})
 	if strings.Contains(text, "# Project Context") {
 		t.Error("did not expect Project Context section when no context files provided")
-	}
-}
-
-// --- Tests: Skills ---
-
-func TestBuildSystemPrompt_SkillsSection_WithReadTool(t *testing.T) {
-	text := invokePromptFn(t, SystemPromptOptions{
-		SelectedTools: []string{"bash", "read", "edit", "write"},
-		Skills: []SystemPromptSkill{
-			{Name: "go-testing", Description: "Best practices for Go testing."},
-			{Name: "git-workflow", Description: "Standard git branching strategy."},
-		},
-	})
-	for _, want := range []string{
-		"# Skills",
-		"- go-testing: Best practices for Go testing.",
-		"- git-workflow: Standard git branching strategy.",
-		"resolve-skill",
-	} {
-		if !strings.Contains(text, want) {
-			t.Errorf("expected %q in skills section\nfull prompt:\n%s", want, text)
-		}
-	}
-}
-
-func TestBuildSystemPrompt_SkillsSection_WithoutReadTool(t *testing.T) {
-	text := invokePromptFn(t, SystemPromptOptions{
-		SelectedTools: []string{"bash", "edit", "write"},
-		Skills: []SystemPromptSkill{
-			{Name: "go-testing", Description: "Best practices for Go testing."},
-		},
-	})
-	if strings.Contains(text, "# Skills") {
-		t.Error("did not expect skills section when read tool is absent")
-	}
-}
-
-func TestBuildSystemPrompt_SkillsSection_AbsentWhenNoSkills(t *testing.T) {
-	text := invokePromptFn(t, SystemPromptOptions{
-		SelectedTools: []string{"bash", "read", "edit", "write"},
-	})
-	if strings.Contains(text, "# Skills") {
-		t.Error("did not expect skills section when Skills slice is empty")
-	}
-}
-
-func TestBuildSystemPrompt_SkillsSection_DefaultToolsIncludeRead(t *testing.T) {
-	// Default tools include "read", so skills should appear when SelectedTools is empty.
-	text := invokePromptFn(t, SystemPromptOptions{
-		Skills: []SystemPromptSkill{
-			{Name: "domain-skill", Description: "A domain skill."},
-		},
-	})
-	if !strings.Contains(text, "# Skills") {
-		t.Error("expected skills section when SelectedTools is empty (defaults include read)")
 	}
 }
 
