@@ -131,10 +131,10 @@ func NewHandleMessageFlow(
 
 			var sessionMessages []memory.SessionMessage
 			for _, msg := range newMessages {
-				origin := originForRole(msg.Role, input.Origin)
 				sessionMessages = append(sessionMessages, memory.SessionMessage{
-					Origin:  origin,
+					Origin:  originForRole(msg.Role, input.Origin),
 					Content: *msg,
+					Kind:    memory.KindForMessage(msg.Role),
 				})
 			}
 

@@ -13,13 +13,15 @@ import (
 type SessionMessage struct {
 	MessageID string        `json:"messageID"`
 	Origin    MessageOrigin `json:"origin"`
+	Kind      MessageKind   `json:"kind"`
 	Content   ai.Message    `json:"content"`
 	Timestamp time.Time     `json:"timestamp"`
 }
 
 type SessionState struct {
-	TenantID string           `json:"tenantID"`
-	Messages []SessionMessage `json:"messages"`
+	TenantID          string           `json:"tenantID"`
+	Messages          []SessionMessage `json:"messages"`
+	LastConsolidateAt time.Time        `json:"lastConsolidateAt"`
 }
 
 // SessionOperator abstracts the storage backend.
@@ -53,8 +55,9 @@ func (o *defaultSessionOperator) SaveState(ctx context.Context, sessionID string
 	copy(msgs, state.Messages)
 
 	o.store[sessionID] = SessionState{
-		TenantID: state.TenantID,
-		Messages: msgs,
+		TenantID:          state.TenantID,
+		Messages:          msgs,
+		LastConsolidateAt: state.LastConsolidateAt,
 	}
 	return nil
 }
@@ -71,8 +74,9 @@ func (o *defaultSessionOperator) LoadState(ctx context.Context, sessionID string
 	filtered := filterMessages(state.Messages, mode, nMessages)
 
 	return &SessionState{
-		TenantID: state.TenantID,
-		Messages: filtered,
+		TenantID:          state.TenantID,
+		Messages:          filtered,
+		LastConsolidateAt: state.LastConsolidateAt,
 	}, nil
 }
 
@@ -132,6 +136,34 @@ const (
 	ToolMessage      MessageOrigin = "tool"
 	HeartbeatMessage MessageOrigin = "heartbeat"
 )
+
+type MessageKind string
+
+const (
+	// KindEpisodic covers raw conversation rutns: user input, model replies,
+	// and hearbeat-initiated exchanges. These are the ground-truth record of
+	// what was said and when.
+	KindEpisodic MessageKind = "episodic"
+
+	// KindSemantic covers consolidated insights written by the ConsolidationFlow.
+	KindSemantic MessageKind = "semantic"
+
+	// KindProcedural covers task execution patterns: sequences that succeeded,
+	// sequences that failed, and what distinguished them. Written explicitly
+	// by procedural logging paths.
+	KindProcedural MessageKind = "procedural"
+
+	// KindInstrumental covers tool call records: the tool name, input, output,
+	// and success/failure outcome. Written by tool-result paths.
+	KindInstrumental MessageKind = "instrumental"
+)
+
+func KindForMessage(role ai.Role) MessageKind {
+	if role == ai.RoleTool {
+		return KindInstrumental
+	}
+	return KindEpisodic
+}
 
 type SessionOption func(*sessionOptions)
 
@@ -196,11 +228,16 @@ func (s *Session) Get(ctx context.Context, sessionID string) (*session.Data[Sess
 
 func (s *Session) Save(ctx context.Context, sessionID string, data *session.Data[SessionState]) error {
 	for i := range data.State.Messages {
-		if data.State.Messages[i].MessageID == "" {
-			data.State.Messages[i].MessageID = uuid.NewString()
+		msg := &data.State.Messages[i]
+
+		if msg.MessageID == "" {
+			msg.MessageID = uuid.New().String()
 		}
-		if data.State.Messages[i].Timestamp.IsZero() {
-			data.State.Messages[i].Timestamp = time.Now()
+		if msg.Timestamp.IsZero() {
+			msg.Timestamp = time.Now()
+		}
+		if msg.Kind == "" {
+			msg.Kind = KindForMessage(msg.Content.Role)
 		}
 	}
 

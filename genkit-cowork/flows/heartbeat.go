@@ -137,10 +137,10 @@ func NewHeartbeat(
 
 			var sessionMessages []memory.SessionMessage
 			for _, msg := range newMessages {
-				origin := originForRole(msg.Role, memory.HeartbeatMessage)
 				sessionMessages = append(sessionMessages, memory.SessionMessage{
-					Origin:  origin,
+					Origin:  originForRole(msg.Role, memory.HeartbeatMessage),
 					Content: *msg,
+					Kind:    memory.KindForMessage(msg.Role),
 				})
 			}
 
