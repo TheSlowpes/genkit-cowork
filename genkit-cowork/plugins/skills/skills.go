@@ -16,6 +16,16 @@ const provider = "skills"
 
 var _ api.Plugin = (*Skills)(nil)
 
+// defaultSkillsDirs is the ordered list of directory paths tried when SkillsDir
+// is not explicitly set. The first path that exists and is a directory wins.
+var defaultSkillsDirs = []string{
+	"./skills",
+	"./SKILLS",
+	"./.agent/skills",
+	"./agent/skills",
+	"./docs/skills",
+}
+
 // SkillDefinition holds the parsed contents of the SKILL.md frontmatter block.
 // It represents a single discovered skill before its full content is loaded.
 type SkillDefinition struct {
@@ -36,7 +46,7 @@ type SkillDefinition struct {
 	Files map[string]string
 
 	// dir is the absolute path to the skill's directory on disk.
-	// Unexported, set by the scanner, used by the ResolveAction to load the full body.
+	// Unexported, set by the scanner, used by SkillTool to load the full body.
 	dir string
 }
 
@@ -44,10 +54,16 @@ type SkillDefinition struct {
 // Pass it to genkit.WithPlugins() to register all skills from a directory.
 type Skills struct {
 	// SkillsDir is the absolute or relative path to the directory containing skill subdirectories.
+	// When empty, Init walks defaultSkillsDirs and picks the first existing one.
 	SkillsDir string
 
+	// AllowedSkills is an optional whitelist of skill names.
+	// When non-empty, only skills whose Name appears in this slice are exposed
+	// by SkillTool and ListSkills. All other discovered skills are hidden.
+	AllowedSkills []string
+
 	// cache holds the scanned list of skills.
-	// Populated on Init and reused by ListActions.
+	// Populated on Init and reused by ListSkills and SkillTool.
 	cache []*SkillDefinition
 
 	mu      sync.Mutex
@@ -61,25 +77,38 @@ func (s *Skills) Name() string {
 }
 
 // Init implements genkit.Plugin.
-// Validades that the provided skills dir exists and performs the initial skill scan
-// populating the cache so ListActions and ResolveAction are fast.
+// Resolves the skills directory (trying defaultSkillsDirs when SkillsDir is
+// unset), scans it for SKILL.md files, and populates the internal cache.
 //
-// Returns an error if the dir s missing or unreadable.
-// Individual skills that fail to load during the scan will be skipped,
-// but will not cause Init to fail.
+// Init does NOT panic when no directory is found; the cache simply stays empty
+// and SkillTool will describe zero available skills.
+//
+// Panics only if SkillsDir is explicitly set but does not exist or is not a
+// directory, or if the directory cannot be read.
+// Individual skills that fail to parse are silently skipped.
 func (s *Skills) Init(ctx context.Context) []api.Action {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.initted {
 		panic("Skills plugin Init called more than once")
 	}
+	s.initted = true
 
-	// Defaults to "./skills/" if not set, but can be overridden by the user.
+	// Resolve skills directory.
 	if s.SkillsDir == "" {
-		s.SkillsDir = "./skills"
+		for _, dir := range defaultSkillsDirs {
+			info, err := os.Stat(dir)
+			if err == nil && info.IsDir() {
+				s.SkillsDir = dir
+				break
+			}
+		}
 	}
 
-	s.initted = true
+	// If still unresolved, leave the cache empty and return without error.
+	if s.SkillsDir == "" {
+		return nil
+	}
 
 	info, err := os.Stat(s.SkillsDir)
 	if err != nil {
@@ -96,56 +125,71 @@ func (s *Skills) Init(ctx context.Context) []api.Action {
 
 	s.cache = skills
 
-	// Init returns nil actions — all actions are resolved dynamically via
-	// ListActions and ResolveAction rather than being registered eagerly.
+	// Init returns nil actions — tools are registered by the caller via SkillTool.
 	return nil
 }
 
-// ListSkills returns the cached list of discovered skills.
+// ListSkills returns the cached skills visible to the plugin, respecting
+// the AllowedSkills whitelist when it is non-empty.
 func (s *Skills) ListSkills() []*SkillDefinition {
-	return s.cache
+	return s.availableSkills()
 }
 
-type ListSkillsInput struct {
-	Filter string `json:"filter,omitempty" jsonschema_description:"Optional filter string to only return skills whose name or description contains this substring."`
+// availableSkills returns the cached skills filtered by AllowedSkills.
+// When AllowedSkills is empty, all discovered skills are returned.
+func (s *Skills) availableSkills() []*SkillDefinition {
+	if len(s.AllowedSkills) == 0 {
+		return s.cache
+	}
+	allowed := make(map[string]bool, len(s.AllowedSkills))
+	for _, name := range s.AllowedSkills {
+		allowed[name] = true
+	}
+	filtered := make([]*SkillDefinition, 0, len(s.AllowedSkills))
+	for _, skill := range s.cache {
+		if allowed[skill.Name] {
+			filtered = append(filtered, skill)
+		}
+	}
+	return filtered
 }
 
-// ListSkillsTools is a wrapper around the ListSkills function
-func (s *Skills) ListSkillsTool(g *genkit.Genkit) ai.Tool {
-	return genkit.DefineTool(
-		g,
-		"list-skills",
-		"List all available skills with their metadata.",
-		func(ctx *ai.ToolContext, input ListSkillsInput) ([]*SkillDefinition, error) {
-			if input.Filter == "" {
-				return s.ListSkills(), nil
-			}
-			skills := s.ListSkills()
-			filtered := make([]*SkillDefinition, 0, len(skills))
-			for _, skill := range skills {
-				if strings.Contains(skill.Name, input.Filter) {
-					filtered = append(filtered, skill)
-				}
-			}
+// buildSkillsDescription returns a multi-line string that enumerates all
+// available skills so the model can see them directly in the tool description.
+func (s *Skills) buildSkillsDescription() string {
+	skills := s.availableSkills()
 
-			if len(filtered) == 0 {
-				return nil, fmt.Errorf("no skills found matching filter: %s", input.Filter)
-			}
-
-			return filtered, nil
-		},
-	)
+	var sb strings.Builder
+	sb.WriteString("Resolve a skill by name to load its full Markdown content.\n\nAvailable skills:\n")
+	if len(skills) == 0 {
+		sb.WriteString("(none)\n")
+	} else {
+		for _, skill := range skills {
+			sb.WriteString(fmt.Sprintf("- %s: %s\n", skill.Name, skill.Description))
+		}
+	}
+	return sb.String()
 }
 
-func (s *Skills) ResolveSkillTool(g *genkit.Genkit) ai.Tool {
+// SkillTool returns a single Genkit tool that exposes all available skills.
+// The tool description is generated at registration time and lists every
+// visible skill (name + description) so the model can decide which one to
+// resolve without a separate listing call.
+//
+// The tool accepts a skill name and returns the full SKILL.md body together
+// with the SkillDefinition metadata.
+func (s *Skills) SkillTool(g *genkit.Genkit) ai.Tool {
+	skills := s.availableSkills()
+	description := s.buildSkillsDescription()
+
 	return genkit.DefineMultipartTool(
 		g,
 		"resolve-skill",
-		"Resolve a skill name to its full content, including loading any files in the skill directory.",
+		description,
 		func(ctx *ai.ToolContext, name string) (*ai.MultipartToolResponse, error) {
-			meta := findSkill(s.cache, name)
+			meta := findSkill(skills, name)
 			if meta == nil {
-				return nil, fmt.Errorf("no skill found with name %s", name)
+				return nil, fmt.Errorf("no skill found with name %q", name)
 			}
 
 			body, err := loadSkillBody(meta.dir)
@@ -153,14 +197,10 @@ func (s *Skills) ResolveSkillTool(g *genkit.Genkit) ai.Tool {
 				return nil, fmt.Errorf("load skill body for %s: %w", name, err)
 			}
 
-			textPart := ai.NewTextPart(body)
-
-			response := &ai.MultipartToolResponse{
-				Content: []*ai.Part{textPart},
+			return &ai.MultipartToolResponse{
+				Content: []*ai.Part{ai.NewTextPart(body)},
 				Output:  meta,
-			}
-
-			return response, nil
+			}, nil
 		},
 	)
 }
