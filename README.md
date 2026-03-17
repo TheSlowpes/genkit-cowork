@@ -190,8 +190,8 @@ The framework is built around four pillars:
 │   │  Memory   │  │  Skills   │                   │
 │   │           │  │           │                   │
 │   │  sessions │  │  discover │                   │
-│   │  retrieval│  │  list     │                   │
-│   │  recall   │  │  resolve  │                   │
+│   │  file     │  │  list     │                   │
+│   │  vector   │  │  resolve  │                   │
 │   └───────────┘  └───────────┘                   │
 │                                                  │
 │          ┌─────────────────┐                     │
@@ -204,6 +204,7 @@ Each pillar can be adopted independently. Use the full framework or pick individ
 
 - **Tools only** — register `NewBashTool`, `NewReadTool`, `NewEditTool`, `NewWriteTool` with any Genkit instance.
 - **Flows only** — use the agent loop, message handling, heartbeat, or reply flows.
+- **Memory only** — use `NewSession` with in-memory, file-backed, or vector-augmented operators.
 - **Skills only** — register the `Skills` plugin to discover and serve domain knowledge.
 - **Mix and match** — combine pillars based on your use case.
 
@@ -224,6 +225,65 @@ Each pillar can be adopted independently. Use the full framework or pick individ
 | Read | `NewReadTool(g, cwd, ...opts)` | File/image reading with pagination, truncation, auto-resize |
 | Edit | `NewEditTool(g, cwd, ...opts)` | Find-and-replace with exact/fuzzy matching, unified diff |
 | Write | `NewWriteTool(g, cwd, ...opts)` | File creation with auto-mkdir, operator interface |
+
+## Memory
+
+Memory is implemented through a `Session` store plus pluggable `SessionOperator` backends.
+
+### Core types
+
+| Type | Constructor / API | Description |
+|------|-------------------|-------------|
+| Session store | `NewSession(...opts)` | Implements `session.Store[SessionState]` for Genkit flows |
+| Persistence mode | `WithPersistenceMode(mode, n)` | Load behavior: `All`, `SlidingWindow`, `TailEndsPruning` |
+| In-memory backend | default (`defaultSessionOperator`) | Process-local map-based state storage |
+| File backend | `NewFileSessionOperator(rootDir)` | Durable JSON state at `rootDir/{sessionID}/state.json` |
+| Vector wrapper | `NewVectorOperator(base, backend, rootDir)` | Wraps a base operator and indexes new messages for semantic retrieval |
+| Local vector backend | `NewLocalVecBackend(g, name, cfg)` | `localvec`-based implementation of `VectorBackend` |
+
+### File-backed sessions
+
+`NewFileSessionOperator` provides durable session state with per-session locks, atomic writes, append-only validation, and tenant consistency checks.
+
+```go
+fileOp := memory.NewFileSessionOperator("./data/sessions")
+store := memory.NewSession(
+    memory.WithCustomSessionOperator(fileOp),
+    memory.WithPersistenceMode(memory.SlidingWindow, 100),
+)
+```
+
+### Vector-augmented retrieval
+
+`VectorOperator` composes on top of a base `SessionOperator`. It indexes new messages by `messageID` and supports semantic lookup with `Search`.
+
+```go
+fileOp := memory.NewFileSessionOperator("./data/sessions")
+
+vecBackend, _ := memory.NewLocalVecBackend(g, "session-memory", memory.LocalVecConfig{
+    Embedder: embedder, // any ai.Embedder
+})
+
+vecOp := memory.NewVectorOperator(fileOp, vecBackend, "./data/sessions")
+
+store := memory.NewSession(memory.WithCustomSessionOperator(vecOp))
+
+results, err := vecOp.Search(ctx, "session-1", "customer asked about invoice", 5)
+_ = results
+_ = err
+```
+
+### Stored message model
+
+Each `SessionMessage` stores `MessageID`, `Origin`, `Kind`, `Content`, and `Timestamp`.
+
+- `Kind` is auto-derived when missing: tool-role messages become `instrumental`, others default to `episodic`.
+- Additional kinds (`semantic`, `procedural`) are available for higher-level memory workflows.
+- `Session.Save` auto-fills missing `MessageID` and `Timestamp`.
+
+### Examples
+
+- `examples/pgvector/main.go` shows the most basic pgvector wiring by wrapping the Genkit PostgreSQL plugin as a `memory.VectorBackend` and plugging it into `memory.NewVectorOperator`.
 
 ## Skills
 
@@ -304,8 +364,11 @@ genkit-cowork/
 │       └── skill_scanner.go   # Directory scanning, skill discovery
 ├── media/              # Image detection and processing
 │   └── mime.go               # MIME detection, image resizing
-├── memory/             # Session persistence
-│   └── sessions.go           # Session store, message origins
+├── memory/             # Session persistence and retrieval
+│   ├── sessions.go           # Session store, message models, persistence modes
+│   ├── file-sessions.go      # File-backed SessionOperator (JSON + atomic write)
+│   ├── vector-sessions.go    # VectorOperator wrapper + semantic search
+│   └── vector-backend.go     # Vector backend interface + localvec backend
 └── utils/              # Shared utilities
     └── shell.go              # Shell environment management
 ```
