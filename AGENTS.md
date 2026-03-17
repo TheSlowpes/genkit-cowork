@@ -82,13 +82,12 @@ The combination of RAG and markdown ensures that memory is both semantically sea
 
 Skills define what agents know. The skill system is implemented as a Genkit plugin (`plugins/skills/`) that discovers, parses, and serves domain-specific knowledge from `SKILL.md` files.
 
-**Plugin Registration** — The `Skills` struct implements `api.Plugin` and is registered via `genkit.WithPlugins()`. On `Init`, it scans the configured `SkillsDir` (default `./skills`) for subdirectories containing `SKILL.md` files with YAML frontmatter (`name`, `description`, optional `license` and `metadata`).
+**Plugin Registration** — The `Skills` struct implements `api.Plugin` and is registered via `genkit.WithPlugins()`. On `Init`, it resolves `SkillsDir` (trying `./skills`, `./SKILLS`, `./.agent/skills`, `./agent/skills`, `./docs/skills` when unset) and scans it for subdirectories containing `SKILL.md` files with YAML frontmatter (`name`, `description`, optional `license` and `metadata`). When `AllowedSkills` is non-empty, only the named skills are exposed.
 
 **Discovery** — `discoverSkills` walks top-level subdirectories, parses each `SKILL.md` via `parseSkillMetadata`, validates required fields, and catalogs all files in the skill directory (including one level of subdirectories). Invalid skills are silently skipped.
 
-**Tools** — The plugin provides two tools:
-- `ListSkillsTool(g)` — Returns discovered skills with optional name substring filter. Tool name: `list-skills`.
-- `ResolveSkillTool(g)` — Loads the full Markdown body and metadata for a named skill. Body content is loaded lazily (not during Init). Tool name: `resolve-skill`.
+**Tools** — The plugin provides a single tool:
+- `SkillTool(g)` — Lists all available skills (name + description) in the tool description and accepts a skill name to load the full Markdown body and metadata. Tool name: `resolve-skill`.
 
 Skills are loaded and composed alongside the other pillars, allowing an agent to be configured with exactly the competencies required for its role.
 
@@ -172,7 +171,7 @@ genkit-cowork/
 | `media/mime.go` — MIME detection and image auto-resize (CatmullRom scaling) | Implemented |
 | `utils/shell.go` — shell environment | Implemented |
 | `memory/sessions.go` — session store with persistence modes, operator interface | Implemented |
-| `plugins/skills/` — skill discovery, parsing, list-skills and resolve-skill tools | Implemented |
+| `plugins/skills/` — skill discovery, parsing, single `resolve-skill` tool with built-in listing | Implemented |
 | Memory: Retrieval (RAG) | Planned |
 | Memory: Recall (structured markdown) | Planned |
 
