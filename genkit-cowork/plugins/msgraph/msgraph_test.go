@@ -3,6 +3,8 @@ package msgraph
 import (
 	"context"
 	"testing"
+
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/fake"
 )
 
 // fakeClient is a no-op GraphClient used in tests to avoid real HTTP calls.
@@ -20,7 +22,7 @@ func (f *fakeClient) GetCalendarEvents(_ context.Context, _ int) ([]CalendarEven
 	}, nil
 }
 
-func (f *fakeClient) GetDriveItem(_ context.Context, itemPath string) (*DriveItem, error) {
+func (f *fakeClient) GetDriveItem(_ context.Context, _, _ string) (*DriveItem, error) {
 	return &DriveItem{
 		ID:      "abc",
 		Name:    "report.txt",
@@ -28,7 +30,7 @@ func (f *fakeClient) GetDriveItem(_ context.Context, itemPath string) (*DriveIte
 	}, nil
 }
 
-func (f *fakeClient) UpdateDriveItem(_ context.Context, _ string, _ []byte) error {
+func (f *fakeClient) UpdateDriveItem(_ context.Context, _, _ string, _ []byte) error {
 	return nil
 }
 
@@ -47,6 +49,17 @@ func TestInit_WithAccessToken(t *testing.T) {
 
 	if m.client == nil {
 		t.Fatal("expected client to be set after Init")
+	}
+}
+
+func TestInit_WithCredential(t *testing.T) {
+	// Use azcore/fake.TokenCredential to avoid real network calls.
+	cred := &fake.TokenCredential{}
+	m := &MSGraph{Credential: cred}
+	m.Init(nil)
+
+	if m.client == nil {
+		t.Fatal("expected client to be set after Init with Credential")
 	}
 }
 
@@ -71,11 +84,11 @@ func TestInit_PanicsOnSecondCall(t *testing.T) {
 	m.Init(nil)
 }
 
-func TestInit_PanicsWithoutAccessTokenOrFactory(t *testing.T) {
+func TestInit_PanicsWithoutAnyAuth(t *testing.T) {
 	m := &MSGraph{}
 	defer func() {
 		if r := recover(); r == nil {
-			t.Error("expected panic when AccessToken and ClientFactory are both missing")
+			t.Error("expected panic when AccessToken, Credential, and ClientFactory are all missing")
 		}
 	}()
 	m.Init(nil)
@@ -85,6 +98,17 @@ func TestInit_FactoryTakesPrecedenceOverEmptyToken(t *testing.T) {
 	// ClientFactory set but AccessToken empty — should not panic.
 	m := &MSGraph{ClientFactory: fakeFactory}
 	m.Init(nil) // must not panic
+
+	if m.client == nil {
+		t.Fatal("expected client to be set")
+	}
+}
+
+func TestInit_CredentialTakesPrecedenceOverAccessToken(t *testing.T) {
+	// When Credential is set, AccessToken is unused for SDK auth.
+	cred := &fake.TokenCredential{}
+	m := &MSGraph{AccessToken: "ignored", Credential: cred}
+	m.Init(nil)
 
 	if m.client == nil {
 		t.Fatal("expected client to be set")
@@ -156,7 +180,7 @@ func TestFakeClient_GetCalendarEvents(t *testing.T) {
 
 func TestFakeClient_GetDriveItem(t *testing.T) {
 	c := &fakeClient{}
-	item, err := c.GetDriveItem(context.Background(), "/me/drive/root:/report.txt:")
+	item, err := c.GetDriveItem(context.Background(), "drive-id-123", "item-id-456")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -170,7 +194,8 @@ func TestFakeClient_GetDriveItem(t *testing.T) {
 
 func TestFakeClient_UpdateDriveItem(t *testing.T) {
 	c := &fakeClient{}
-	if err := c.UpdateDriveItem(context.Background(), "/me/drive/root:/report.txt:", []byte("new content")); err != nil {
+	if err := c.UpdateDriveItem(context.Background(), "drive-id-123", "item-id-456", []byte("new content")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+

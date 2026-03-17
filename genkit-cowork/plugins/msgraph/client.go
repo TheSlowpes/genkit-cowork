@@ -2,15 +2,15 @@ package msgraph
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
 	"time"
-)
 
-const graphBaseURL = "https://graph.microsoft.com/v1.0"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+	msgraphsdkgo "github.com/microsoftgraph/msgraph-sdk-go"
+	graphmodels "github.com/microsoftgraph/msgraph-sdk-go/models"
+	graphusers "github.com/microsoftgraph/msgraph-sdk-go/users"
+)
 
 // GraphClient is the interface that abstracts all Microsoft Graph API calls
 // made by the plugin's tools. Inject a custom implementation in tests or to
@@ -24,49 +24,43 @@ type GraphClient interface {
 	// user. top limits the number of results (0 means use the server default).
 	GetCalendarEvents(ctx context.Context, top int) ([]CalendarEvent, error)
 
-	// GetDriveItem returns the metadata and text content of a OneDrive item
-	// identified by itemPath (e.g. "/me/drive/root:/Documents/report.txt:").
-	GetDriveItem(ctx context.Context, itemPath string) (*DriveItem, error)
+	// GetDriveItem returns the metadata and text content of a OneDrive item.
+	// driveID is the ID of the drive and itemID is the item's unique ID within
+	// that drive.
+	GetDriveItem(ctx context.Context, driveID, itemID string) (*DriveItem, error)
 
 	// UpdateDriveItem replaces the content of a OneDrive item identified by
-	// itemPath with content.
-	UpdateDriveItem(ctx context.Context, itemPath string, content []byte) error
+	// driveID and itemID with content.
+	UpdateDriveItem(ctx context.Context, driveID, itemID string, content []byte) error
 }
 
-// Message is a minimal representation of a Microsoft Graph mail message.
+// Message is a simplified representation of a Microsoft Graph mail message
+// populated from the SDK's models.Messageable.
 type Message struct {
-	ID      string `json:"id"`
-	Subject string `json:"subject"`
-	From    struct {
-		EmailAddress struct {
-			Name    string `json:"name"`
-			Address string `json:"address"`
-		} `json:"emailAddress"`
-	} `json:"from"`
+	ID               string `json:"id"`
+	Subject          string `json:"subject"`
+	SenderName       string `json:"senderName"`
+	SenderAddress    string `json:"senderAddress"`
 	ReceivedDateTime string `json:"receivedDateTime"`
 	BodyPreview      string `json:"bodyPreview"`
 	IsRead           bool   `json:"isRead"`
 }
 
-// CalendarEvent is a minimal representation of a Microsoft Graph calendar event.
+// CalendarEvent is a simplified representation of a Microsoft Graph calendar
+// event populated from the SDK's models.Eventable.
 type CalendarEvent struct {
-	ID      string `json:"id"`
-	Subject string `json:"subject"`
-	Start   struct {
-		DateTime string `json:"dateTime"`
-		TimeZone string `json:"timeZone"`
-	} `json:"start"`
-	End struct {
-		DateTime string `json:"dateTime"`
-		TimeZone string `json:"timeZone"`
-	} `json:"end"`
-	Location struct {
-		DisplayName string `json:"displayName"`
-	} `json:"location"`
-	BodyPreview string `json:"bodyPreview"`
+	ID               string `json:"id"`
+	Subject          string `json:"subject"`
+	StartDateTime    string `json:"startDateTime"`
+	StartTimeZone    string `json:"startTimeZone"`
+	EndDateTime      string `json:"endDateTime"`
+	EndTimeZone      string `json:"endTimeZone"`
+	LocationName     string `json:"locationName"`
+	BodyPreview      string `json:"bodyPreview"`
 }
 
-// DriveItem holds the metadata and text content of a OneDrive file.
+// DriveItem holds simplified metadata and the text content of a OneDrive file,
+// populated from the SDK's models.DriveItemable.
 type DriveItem struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
@@ -75,118 +69,189 @@ type DriveItem struct {
 	Content []byte `json:"-"`
 }
 
-// httpGraphClient is the default GraphClient implementation. It talks to the
-// Microsoft Graph REST API using a Bearer access token.
-type httpGraphClient struct {
-	accessToken string
-	httpClient  *http.Client
+// staticTokenCredential implements azcore.TokenCredential using a static
+// access token string. This is suitable for short-lived OAuth 2.0 tokens
+// obtained outside the SDK (e.g. from a web server auth flow).
+type staticTokenCredential struct {
+	token string
 }
 
-// newHTTPGraphClient creates a GraphClient backed by a simple Bearer-token
-// HTTP client with a 30-second timeout.
-func newHTTPGraphClient(accessToken string) GraphClient {
-	return &httpGraphClient{
-		accessToken: accessToken,
-		httpClient:  &http.Client{Timeout: 30 * time.Second},
-	}
+func (s *staticTokenCredential) GetToken(_ context.Context, _ policy.TokenRequestOptions) (azcore.AccessToken, error) {
+	return azcore.AccessToken{
+		Token:     s.token,
+		ExpiresOn: time.Now().Add(time.Hour),
+	}, nil
 }
 
-// do executes an authenticated GET request against the Graph API and decodes
-// the JSON response body into dst.
-func (c *httpGraphClient) do(ctx context.Context, method, url string, body io.Reader, dst any) error {
-	req, err := http.NewRequestWithContext(ctx, method, url, body)
+// newSDKGraphClient creates a GraphClient backed by the official
+// microsoft/msgraph-sdk-go using the provided TokenCredential.
+func newSDKGraphClient(cred azcore.TokenCredential) (GraphClient, error) {
+	sdkClient, err := msgraphsdkgo.NewGraphServiceClientWithCredentials(cred, nil)
 	if err != nil {
-		return fmt.Errorf("msgraph: build request: %w", err)
+		return nil, fmt.Errorf("msgraph: create SDK client: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.accessToken)
-	req.Header.Set("Accept", "application/json")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/octet-stream")
-	}
+	return &sdkGraphClient{sdk: sdkClient}, nil
+}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("msgraph: request %s %s: %w", method, url, err)
-	}
-	defer resp.Body.Close()
+// sdkGraphClient is the default GraphClient implementation backed by the
+// official microsoft/msgraph-sdk-go SDK client.
+type sdkGraphClient struct {
+	sdk *msgraphsdkgo.GraphServiceClient
+}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("msgraph: %s %s returned %s: %s", method, url, resp.Status, strings.TrimSpace(string(raw)))
-	}
-
-	if dst != nil {
-		if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
-			return fmt.Errorf("msgraph: decode response: %w", err)
+func (c *sdkGraphClient) GetMessages(ctx context.Context, top int) ([]Message, error) {
+	var cfg *graphusers.ItemMessagesRequestBuilderGetRequestConfiguration
+	if top > 0 {
+		top32 := int32(top)
+		cfg = &graphusers.ItemMessagesRequestBuilderGetRequestConfiguration{
+			QueryParameters: &graphusers.ItemMessagesRequestBuilderGetQueryParameters{
+				Top: &top32,
+			},
 		}
 	}
-	return nil
+
+	resp, err := c.sdk.Me().Messages().Get(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("msgraph: get messages: %w", err)
+	}
+
+	items := resp.GetValue()
+	msgs := make([]Message, 0, len(items))
+	for _, m := range items {
+		msgs = append(msgs, messageFromSDK(m))
+	}
+	return msgs, nil
 }
 
-func (c *httpGraphClient) GetMessages(ctx context.Context, top int) ([]Message, error) {
-	url := graphBaseURL + "/me/messages"
+func (c *sdkGraphClient) GetCalendarEvents(ctx context.Context, top int) ([]CalendarEvent, error) {
+	var cfg *graphusers.ItemEventsRequestBuilderGetRequestConfiguration
 	if top > 0 {
-		url = fmt.Sprintf("%s?$top=%d", url, top)
+		top32 := int32(top)
+		cfg = &graphusers.ItemEventsRequestBuilderGetRequestConfiguration{
+			QueryParameters: &graphusers.ItemEventsRequestBuilderGetQueryParameters{
+				Top: &top32,
+			},
+		}
 	}
 
-	var result struct {
-		Value []Message `json:"value"`
+	resp, err := c.sdk.Me().Events().Get(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("msgraph: get events: %w", err)
 	}
-	if err := c.do(ctx, http.MethodGet, url, nil, &result); err != nil {
-		return nil, err
+
+	items := resp.GetValue()
+	events := make([]CalendarEvent, 0, len(items))
+	for _, e := range items {
+		events = append(events, calendarEventFromSDK(e))
 	}
-	return result.Value, nil
+	return events, nil
 }
 
-func (c *httpGraphClient) GetCalendarEvents(ctx context.Context, top int) ([]CalendarEvent, error) {
-	url := graphBaseURL + "/me/events"
-	if top > 0 {
-		url = fmt.Sprintf("%s?$top=%d", url, top)
-	}
-
-	var result struct {
-		Value []CalendarEvent `json:"value"`
-	}
-	if err := c.do(ctx, http.MethodGet, url, nil, &result); err != nil {
-		return nil, err
-	}
-	return result.Value, nil
-}
-
-func (c *httpGraphClient) GetDriveItem(ctx context.Context, itemPath string) (*DriveItem, error) {
-	metaURL := graphBaseURL + itemPath
-	var item DriveItem
-	if err := c.do(ctx, http.MethodGet, metaURL, nil, &item); err != nil {
-		return nil, err
-	}
-
-	contentURL := metaURL + "/content"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, contentURL, nil)
+func (c *sdkGraphClient) GetDriveItem(ctx context.Context, driveID, itemID string) (*DriveItem, error) {
+	meta, err := c.sdk.Drives().ByDriveId(driveID).Items().ByDriveItemId(itemID).Get(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("msgraph: build content request: %w", err)
+		return nil, fmt.Errorf("msgraph: get drive item %s/%s: %w", driveID, itemID, err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.accessToken)
 
-	resp, err := c.httpClient.Do(req)
+	content, err := c.sdk.Drives().ByDriveId(driveID).Items().ByDriveItemId(itemID).Content().Get(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("msgraph: fetch content: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("msgraph: fetch content returned %s: %s", resp.Status, strings.TrimSpace(string(raw)))
+		return nil, fmt.Errorf("msgraph: get drive item content %s/%s: %w", driveID, itemID, err)
 	}
 
-	content, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("msgraph: read content body: %w", err)
-	}
+	item := driveItemFromSDK(meta)
 	item.Content = content
 	return &item, nil
 }
 
-func (c *httpGraphClient) UpdateDriveItem(ctx context.Context, itemPath string, content []byte) error {
-	url := graphBaseURL + itemPath + "/content"
-	return c.do(ctx, http.MethodPut, url, strings.NewReader(string(content)), nil)
+func (c *sdkGraphClient) UpdateDriveItem(ctx context.Context, driveID, itemID string, content []byte) error {
+	_, err := c.sdk.Drives().ByDriveId(driveID).Items().ByDriveItemId(itemID).Content().Put(ctx, content, nil)
+	if err != nil {
+		return fmt.Errorf("msgraph: update drive item %s/%s: %w", driveID, itemID, err)
+	}
+	return nil
+}
+
+// messageFromSDK maps a SDK models.Messageable to a Message.
+func messageFromSDK(m graphmodels.Messageable) Message {
+	msg := Message{}
+	if v := m.GetId(); v != nil {
+		msg.ID = *v
+	}
+	if v := m.GetSubject(); v != nil {
+		msg.Subject = *v
+	}
+	if v := m.GetBodyPreview(); v != nil {
+		msg.BodyPreview = *v
+	}
+	if v := m.GetIsRead(); v != nil {
+		msg.IsRead = *v
+	}
+	if v := m.GetReceivedDateTime(); v != nil {
+		msg.ReceivedDateTime = v.Format(time.RFC3339)
+	}
+	if f := m.GetFrom(); f != nil {
+		if ea := f.GetEmailAddress(); ea != nil {
+			if v := ea.GetName(); v != nil {
+				msg.SenderName = *v
+			}
+			if v := ea.GetAddress(); v != nil {
+				msg.SenderAddress = *v
+			}
+		}
+	}
+	return msg
+}
+
+// calendarEventFromSDK maps a SDK models.Eventable to a CalendarEvent.
+func calendarEventFromSDK(e graphmodels.Eventable) CalendarEvent {
+	ev := CalendarEvent{}
+	if v := e.GetId(); v != nil {
+		ev.ID = *v
+	}
+	if v := e.GetSubject(); v != nil {
+		ev.Subject = *v
+	}
+	if v := e.GetBodyPreview(); v != nil {
+		ev.BodyPreview = *v
+	}
+	if s := e.GetStart(); s != nil {
+		if v := s.GetDateTime(); v != nil {
+			ev.StartDateTime = *v
+		}
+		if v := s.GetTimeZone(); v != nil {
+			ev.StartTimeZone = *v
+		}
+	}
+	if en := e.GetEnd(); en != nil {
+		if v := en.GetDateTime(); v != nil {
+			ev.EndDateTime = *v
+		}
+		if v := en.GetTimeZone(); v != nil {
+			ev.EndTimeZone = *v
+		}
+	}
+	if l := e.GetLocation(); l != nil {
+		if v := l.GetDisplayName(); v != nil {
+			ev.LocationName = *v
+		}
+	}
+	return ev
+}
+
+// driveItemFromSDK maps a SDK models.DriveItemable to a DriveItem.
+func driveItemFromSDK(d graphmodels.DriveItemable) DriveItem {
+	item := DriveItem{}
+	if v := d.GetId(); v != nil {
+		item.ID = *v
+	}
+	if v := d.GetName(); v != nil {
+		item.Name = *v
+	}
+	if v := d.GetSize(); v != nil {
+		item.Size = *v
+	}
+	if v := d.GetWebUrl(); v != nil {
+		item.WebURL = *v
+	}
+	return item
 }

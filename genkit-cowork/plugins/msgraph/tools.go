@@ -23,16 +23,21 @@ type listCalendarEventsInput struct {
 
 // readOneDriveFileInput is the input schema for the read-onedrive-file tool.
 type readOneDriveFileInput struct {
-	// ItemPath is the Graph API path to the file, e.g.
-	// "/me/drive/root:/Documents/report.txt:".
-	ItemPath string `json:"itemPath" jsonschema_description:"Graph API path to the OneDrive file, e.g. /me/drive/root:/Documents/report.txt:"`
+	// DriveID is the unique identifier of the OneDrive drive.
+	// Use the list-emails or calendar tools or call /me/drive to retrieve it.
+	DriveID string `json:"driveId" jsonschema_description:"Unique ID of the OneDrive drive (e.g. from /me/drive)."`
+
+	// ItemID is the unique identifier of the file within the drive.
+	ItemID string `json:"itemId" jsonschema_description:"Unique ID of the file within the drive."`
 }
 
 // editOneDriveFileInput is the input schema for the edit-onedrive-file tool.
 type editOneDriveFileInput struct {
-	// ItemPath is the Graph API path to the file, e.g.
-	// "/me/drive/root:/Documents/report.txt:".
-	ItemPath string `json:"itemPath" jsonschema_description:"Graph API path to the OneDrive file to overwrite."`
+	// DriveID is the unique identifier of the OneDrive drive.
+	DriveID string `json:"driveId" jsonschema_description:"Unique ID of the OneDrive drive."`
+
+	// ItemID is the unique identifier of the file within the drive.
+	ItemID string `json:"itemId" jsonschema_description:"Unique ID of the file within the drive."`
 
 	// Content is the new UTF-8 text content to write to the file.
 	Content string `json:"content" jsonschema_description:"New text content to write to the file."`
@@ -80,10 +85,13 @@ func ReadOneDriveFileTool(g *genkit.Genkit, client GraphClient) ai.Tool {
 		"read-onedrive-file",
 		"Read a file from OneDrive. Returns the file metadata (name, size, web URL) and its text content.",
 		func(ctx *ai.ToolContext, input readOneDriveFileInput) (*DriveItem, error) {
-			if input.ItemPath == "" {
-				return nil, fmt.Errorf("read-onedrive-file: itemPath is required")
+			if input.DriveID == "" {
+				return nil, fmt.Errorf("read-onedrive-file: driveId is required")
 			}
-			item, err := client.GetDriveItem(ctx, input.ItemPath)
+			if input.ItemID == "" {
+				return nil, fmt.Errorf("read-onedrive-file: itemId is required")
+			}
+			item, err := client.GetDriveItem(ctx, input.DriveID, input.ItemID)
 			if err != nil {
 				return nil, fmt.Errorf("read-onedrive-file: %w", err)
 			}
@@ -100,13 +108,16 @@ func EditOneDriveFileTool(g *genkit.Genkit, client GraphClient) ai.Tool {
 		"edit-onedrive-file",
 		"Overwrite a OneDrive file with new text content.",
 		func(ctx *ai.ToolContext, input editOneDriveFileInput) (string, error) {
-			if input.ItemPath == "" {
-				return "", fmt.Errorf("edit-onedrive-file: itemPath is required")
+			if input.DriveID == "" {
+				return "", fmt.Errorf("edit-onedrive-file: driveId is required")
 			}
-			if err := client.UpdateDriveItem(ctx, input.ItemPath, []byte(input.Content)); err != nil {
+			if input.ItemID == "" {
+				return "", fmt.Errorf("edit-onedrive-file: itemId is required")
+			}
+			if err := client.UpdateDriveItem(ctx, input.DriveID, input.ItemID, []byte(input.Content)); err != nil {
 				return "", fmt.Errorf("edit-onedrive-file: %w", err)
 			}
-			return fmt.Sprintf("successfully updated %s", input.ItemPath), nil
+			return fmt.Sprintf("successfully updated drive %s item %s", input.DriveID, input.ItemID), nil
 		},
 	)
 }
