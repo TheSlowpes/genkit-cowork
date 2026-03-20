@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	model     = "googleai/gemini-2.0-flash"
+	model     = "googleai/gemini-2.5-flash"
 	sessionID = "tui-chat"
 	tenantID  = "local"
 	maxTurns  = 20

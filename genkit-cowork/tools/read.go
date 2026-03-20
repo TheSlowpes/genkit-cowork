@@ -154,8 +154,8 @@ func handleImageRead(ctx context.Context, absolutePath, mimeType string, ops Rea
 
 		dataURI := "data:" + resized.MimeType + ";base64," + resized.Base64
 		return &ai.MultipartToolResponse{
+			Output: textNote,
 			Content: []*ai.Part{
-				ai.NewTextPart(textNote),
 				ai.NewMediaPart(resized.MimeType, dataURI),
 			},
 		}, nil
@@ -167,8 +167,8 @@ func handleImageRead(ctx context.Context, absolutePath, mimeType string, ops Rea
 	dataURI := "data:" + mimeType + ";base64," + encoded
 
 	return &ai.MultipartToolResponse{
+		Output: textNote,
 		Content: []*ai.Part{
-			ai.NewTextPart(textNote),
 			ai.NewMediaPart(mimeType, dataURI),
 		},
 	}, nil
@@ -264,9 +264,7 @@ func handleTextRead(ctx context.Context, absolutePath string, input ReadToolInpu
 	}
 
 	return &ai.MultipartToolResponse{
-		Content: []*ai.Part{
-			ai.NewTextPart(outputText),
-		},
+		Output: outputText,
 	}, nil
 }
 
