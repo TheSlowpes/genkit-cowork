@@ -50,6 +50,17 @@ type SkillDefinition struct {
 	dir string
 }
 
+// SkillToolOutput is the structured output returned by the resolve-skill tool.
+// It combines the skill metadata with the full Markdown body so that both are
+// available in the tool response Output field (avoiding PartText in Content,
+// which is not supported by all model plugins).
+type SkillToolOutput struct {
+	// Definition holds the parsed SKILL.md frontmatter metadata.
+	Definition *SkillDefinition `json:"definition"`
+	// Body is the full Markdown content of the SKILL.md file (after frontmatter).
+	Body string `json:"body"`
+}
+
 // Skills is the configuration for the plugin.
 // Pass it to genkit.WithPlugins() to register all skills from a directory.
 type Skills struct {
@@ -198,8 +209,10 @@ func (s *Skills) SkillTool(g *genkit.Genkit) ai.Tool {
 			}
 
 			return &ai.MultipartToolResponse{
-				Content: []*ai.Part{ai.NewTextPart(body)},
-				Output:  meta,
+				Output: &SkillToolOutput{
+					Definition: meta,
+					Body:       body,
+				},
 			}, nil
 		},
 	)
