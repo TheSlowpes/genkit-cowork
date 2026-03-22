@@ -705,7 +705,7 @@ func WithTokenEstimator(estimator TokenEstimator) SessionOption {
 }
 
 func (s *Session) normalizeMediaParts(ctx context.Context, sessionID string, msg *SessionMessage, state *SessionState) error {
-	for idx, part := range msg.Content.Content {
+	for _, part := range msg.Content.Content {
 		if part == nil || !part.IsMedia() {
 			continue
 		}
@@ -714,8 +714,8 @@ func (s *Session) normalizeMediaParts(ctx context.Context, sessionID string, msg
 			continue
 		}
 
-		mimeType, raw, ok := parseDataURI(part.Text)
 	}
+	return nil
 }
 
 func parseDataURI(uri string) (mimeType string, data []byte, ok bool) {
