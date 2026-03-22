@@ -366,7 +366,7 @@ genkit-cowork/
 │   ├── read.go               # File/image reading
 │   ├── edit.go               # Find-and-replace editing
 │   ├── write.go              # File creation with auto-mkdir
-│   ├── edit-diff.go          # Text normalization, fuzzy matching, diffs
+│   ├── edit_diff.go          # Text normalization, fuzzy matching, diffs
 │   ├── diff.go               # LCS-based line diff algorithm
 │   ├── truncate.go           # Output truncation utilities
 │   ├── path.go               # Path resolution utilities

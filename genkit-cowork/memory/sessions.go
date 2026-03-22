@@ -1,9 +1,24 @@
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package memory
 
 import (
 	"context"
 	"encoding/base64"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -14,14 +29,20 @@ import (
 	"github.com/google/uuid"
 )
 
+// SessionMessage is a stored conversation message with provenance metadata.
 type SessionMessage struct {
-	MessageID string        `json:"messageID"`
-	Origin    MessageOrigin `json:"origin"`
-	Kind      MessageKind   `json:"kind"`
-	Content   ai.Message    `json:"content"`
-	Timestamp time.Time     `json:"timestamp"`
+	// MessageID is the unique message identifier.
+	MessageID string `json:"messageID"`
+	// Origin identifies where the message came from.
+	Origin MessageOrigin `json:"origin"`
+	Kind   MessageKind   `json:"kind"`
+	// Content is the full Genkit message payload.
+	Content ai.Message `json:"content"`
+	// Timestamp is when the message was created.
+	Timestamp time.Time `json:"timestamp"`
 }
 
+// SessionState is the persisted state stored per session.
 type SessionState struct {
 	TenantID          string           `json:"tenantID"`
 	Messages          []SessionMessage `json:"messages"`
@@ -34,7 +55,7 @@ type SessionOperator interface {
 	// SaveState persists the full session state. Always called, regardless of mode.
 	SaveState(ctx context.Context, sessionID string, state SessionState) error
 
-	// LoadState retrieves full session state
+	// LoadState retrieves full session state.
 	// The mode and nMessages parameters control pruning at load time.
 	LoadState(ctx context.Context, sessionID string, mode PersistenceMode, nMessages int) (*SessionState, error)
 
@@ -130,15 +151,23 @@ func (o *defaultSessionOperator) DeleteSession(ctx context.Context, sessionID st
 	return nil
 }
 
+// MessageOrigin identifies the source channel for a message.
 type MessageOrigin string
 
 const (
-	ZoomMessage      MessageOrigin = "zoom"
-	UIMessage        MessageOrigin = "ui"
-	WhatsAppMessage  MessageOrigin = "whatsapp"
-	EmailMessage     MessageOrigin = "email"
-	ModelMessage     MessageOrigin = "model"
-	ToolMessage      MessageOrigin = "tool"
+	// ZoomMessage indicates a Zoom-originated user message.
+	ZoomMessage MessageOrigin = "zoom"
+	// UIMessage indicates an in-app UI-originated message.
+	UIMessage MessageOrigin = "ui"
+	// WhatsAppMessage indicates a WhatsApp-originated message.
+	WhatsAppMessage MessageOrigin = "whatsapp"
+	// EmailMessage indicates an email-originated message.
+	EmailMessage MessageOrigin = "email"
+	// ModelMessage indicates an assistant/model message.
+	ModelMessage MessageOrigin = "model"
+	// ToolMessage indicates a tool response message.
+	ToolMessage MessageOrigin = "tool"
+	// HeartbeatMessage indicates a heartbeat-originated message.
 	HeartbeatMessage MessageOrigin = "heartbeat"
 )
 
@@ -170,6 +199,7 @@ func KindForMessage(role ai.Role) MessageKind {
 	return KindEpisodic
 }
 
+// SessionOption configures session store behavior.
 type SessionOption func(*sessionOptions)
 
 type sessionOptions struct {
@@ -180,6 +210,8 @@ type sessionOptions struct {
 	assetStore MediaAssetStore
 }
 
+// WithPersistenceMode sets the filtering mode used when loading messages from
+// storage.
 func WithPersistenceMode(mode PersistenceMode, n int) SessionOption {
 	return func(opts *sessionOptions) {
 		opts.mode = mode
@@ -187,6 +219,7 @@ func WithPersistenceMode(mode PersistenceMode, n int) SessionOption {
 	}
 }
 
+// WithCustomSessionOperator injects a custom persistence backend.
 func WithCustomSessionOperator(operator SessionOperator) SessionOption {
 	return func(opts *sessionOptions) {
 		opts.operator = operator
@@ -199,18 +232,24 @@ func WithMediaAssetStore(store MediaAssetStore) SessionOption {
 	}
 }
 
+// PersistenceMode controls how many messages are returned on load.
 type PersistenceMode int
 
 const (
-	All             PersistenceMode = iota // Load every message
-	SlidingWindow                          // Load last N messages
-	TailEndsPruning                        // Load the first N and last N messages, prune the rest
+	// All loads every message in the session.
+	All PersistenceMode = iota
+	// SlidingWindow loads only the last N messages.
+	SlidingWindow
+	// TailEndsPruning loads the first N and last N messages.
+	TailEndsPruning
 )
 
+// Session is a Genkit session store implementation backed by SessionOperator.
 type Session struct {
 	opts sessionOptions
 }
 
+// NewSession creates a new session store.
 func NewSession(opts ...SessionOption) *Session {
 	options := sessionOptions{
 		mode:     All,
@@ -224,6 +263,7 @@ func NewSession(opts ...SessionOption) *Session {
 
 var _ session.Store[SessionState] = (*Session)(nil)
 
+// Get loads session state by ID.
 func (s *Session) Get(ctx context.Context, sessionID string) (*session.Data[SessionState], error) {
 	state, err := s.opts.operator.LoadState(ctx, sessionID, s.opts.mode, s.opts.nMessages)
 	if err != nil {
@@ -238,6 +278,8 @@ func (s *Session) Get(ctx context.Context, sessionID string) (*session.Data[Sess
 	}, nil
 }
 
+// Save persists the provided session state, assigning IDs and timestamps when
+// missing.
 func (s *Session) Save(ctx context.Context, sessionID string, data *session.Data[SessionState]) error {
 	for i := range data.State.Messages {
 		msg := &data.State.Messages[i]
@@ -260,7 +302,7 @@ func (s *Session) Save(ctx context.Context, sessionID string, data *session.Data
 }
 
 func (s *Session) normalizeMediaParts(ctx context.Context, sessionID string, msg *SessionMessage, state *SessionState) error {
-	for idx, part := range msg.Content.Content {
+	for _, part := range msg.Content.Content {
 		if part == nil || !part.IsMedia() {
 			continue
 		}
@@ -269,8 +311,8 @@ func (s *Session) normalizeMediaParts(ctx context.Context, sessionID string, msg
 			continue
 		}
 
-		mimeType, raw, ok := parseDataURI(part.Text)
 	}
+	return nil
 }
 
 func parseDataURI(uri string) (mimeType string, data []byte, ok bool) {

@@ -1,3 +1,19 @@
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package flows
 
 import (
@@ -6,6 +22,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 )
 
+// AgentContext carries agent-level lifecycle event data.
 type AgentContext struct {
 	SessionID string          `json:"sessionID"`
 	ModelName string          `json:"modelName"`
@@ -14,6 +31,7 @@ type AgentContext struct {
 	Error     error           `json:"error,omitempty"` // populated on agent-end if failed
 }
 
+// TurnContext carries turn-level event data.
 type TurnContext struct {
 	SessionID  string        `json:"sessionID"`
 	TurnNumber int           `json:"turnNumber"`
@@ -23,6 +41,7 @@ type TurnContext struct {
 	Error      error         `json:"error,omitempty"` // populated on turn-end if failed
 }
 
+// MessageContext carries message-level event data.
 type MessageContext struct {
 	SessionID string      `json:"sessionID"`
 	Role      ai.Role     `json:"role"`            // "user", "model", "tool"
@@ -31,6 +50,7 @@ type MessageContext struct {
 	Index     int         `json:"index"`           // chunk index for updates
 }
 
+// ToolExecutionContext carries tool execution event data.
 type ToolExecutionContext struct {
 	SessionID         string         `json:"sessionID"`
 	ToolName          string         `json:"toolName"`

@@ -1,3 +1,19 @@
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package flows
 
 import (
@@ -15,6 +31,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 )
 
+// Heartbeat schedules and executes periodic heartbeat checks over session state.
 type Heartbeat struct {
 	cfg      *HeartbeatConfig
 	flow     *core.Flow[*HeartbeatInput, *HeartbeatOutput, struct{}]
@@ -25,6 +42,7 @@ type Heartbeat struct {
 	once    sync.Once
 }
 
+// HeartbeatInput is the flow input for a single heartbeat execution.
 type HeartbeatInput struct {
 	SessionID   string           `json:"sessionID"`
 	AgentConfig *AgentLoopConfig `json:"agentConfig,omitempty"`
@@ -39,32 +57,39 @@ type heartbeatOptions struct {
 	operator      AgentLoopOperator
 }
 
+// HeartbeatOption configures NewHeartbeat behavior.
 type HeartbeatOption func(*heartbeatOptions)
 
+// WithHeartbeatEventBus enables lifecycle event emission for heartbeat runs.
 func WithHeartbeatEventBus(bus *EventBus) HeartbeatOption {
 	return func(opts *heartbeatOptions) {
 		opts.bus = bus
 	}
 }
 
+// WithHeartbeatOnResult registers a callback invoked after each heartbeat run.
 func WithHeartbeatOnResult(onResult func(*HeartbeatOutput)) HeartbeatOption {
 	return func(opts *heartbeatOptions) {
 		opts.onResult = onResult
 	}
 }
 
+// WithHeartbeatLoopOperator injects a custom agent loop operator.
 func WithHeartbeatLoopOperator(loopOperator AgentLoopOperator) HeartbeatOption {
 	return func(opts *heartbeatOptions) {
 		opts.operator = loopOperator
 	}
 }
 
+// WithCustomHeartbeatAgentConfig sets the default agent loop config for
+// heartbeat runs.
 func WithCustomHeartbeatAgentConfig(config AgentLoopConfig) HeartbeatOption {
 	return func(opts *heartbeatOptions) {
 		opts.defaultConfig = &config
 	}
 }
 
+// NewHeartbeat creates a heartbeat runner with an internally registered flow.
 func NewHeartbeat(
 	g *genkit.Genkit,
 	store *memory.Session,
@@ -161,6 +186,7 @@ func NewHeartbeat(
 	return h
 }
 
+// Start begins periodic heartbeat execution based on the configured interval.
 func (h *Heartbeat) Start(ctx context.Context) {
 	if h.cfg.Interval <= 0 {
 		return
@@ -183,10 +209,12 @@ func (h *Heartbeat) Start(ctx context.Context) {
 	}()
 }
 
+// Wake triggers an immediate heartbeat run asynchronously.
 func (h *Heartbeat) Wake(ctx context.Context) {
 	go h.Run(ctx, time.Now())
 }
 
+// Stop terminates periodic heartbeat scheduling.
 func (h *Heartbeat) Stop() {
 	h.once.Do(func() {
 		close(h.stopCh)
@@ -208,6 +236,8 @@ func (h *Heartbeat) tryRun(ctx context.Context, runAt time.Time) (*HeartbeatOutp
 	return h.flow.Run(ctx, input)
 }
 
+// Run executes a single heartbeat tick, enforcing active-hours and
+// single-flight semantics.
 func (h *Heartbeat) Run(ctx context.Context, tickTime time.Time) {
 	sessionID := h.sessionID()
 

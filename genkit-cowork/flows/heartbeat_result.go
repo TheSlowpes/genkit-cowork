@@ -1,3 +1,19 @@
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package flows
 
 import (
@@ -7,25 +23,35 @@ import (
 	"github.com/firebase/genkit/go/ai"
 )
 
+// HeartbeatResultKind classifies heartbeat execution outcomes.
 type HeartbeatResultKind string
 
 const (
-	HeartbeatAck     HeartbeatResultKind = "ack"
-	HeartbeatAlert   HeartbeatResultKind = "alert"
+	// HeartbeatAck indicates an "all clear" heartbeat result.
+	HeartbeatAck HeartbeatResultKind = "ack"
+	// HeartbeatAlert indicates actionable or anomalous heartbeat output.
+	HeartbeatAlert HeartbeatResultKind = "alert"
+	// HeartbeatSkipped indicates the heartbeat was intentionally not run.
 	HeartbeatSkipped HeartbeatResultKind = "skipped"
-	HeartbeatError   HeartbeatResultKind = "error"
+	// HeartbeatError indicates the heartbeat run failed.
+	HeartbeatError HeartbeatResultKind = "error"
 )
 
+// SkipReason explains why a heartbeat run was skipped.
 type SkipReason string
 
 const (
-	SkipReasonBusy         SkipReason = "busy"
+	// SkipReasonBusy indicates a previous heartbeat run is still in progress.
+	SkipReasonBusy SkipReason = "busy"
+	// SkipReasonOutsideHours indicates the current time is outside ActiveHours.
 	SkipReasonOutsideHours SkipReason = "outside_hours"
-	SkipReasonErrors       SkipReason = "errors"
+	// SkipReasonErrors indicates repeated or policy-based error backoff.
+	SkipReasonErrors SkipReason = "errors"
 )
 
 const heartbeatOKToken = "HEARTBEAT_OK"
 
+// HeartbeatOutput is the structured result returned by heartbeat flow runs.
 type HeartbeatOutput struct {
 	Kind      HeartbeatResultKind `json:"kind"`
 	SessionID string              `json:"sessionID,omitempty"`

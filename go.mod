@@ -11,11 +11,10 @@ require (
 )
 
 require (
+	cloud.google.com/go v0.120.0 // indirect
 	cloud.google.com/go/auth v0.16.2 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
 	cloud.google.com/go/cloudsqlconn v1.17.2 // indirect
-	cloud.google.com/go v0.120.0 // indirect
-	cloud.google.com/go/auth v0.16.2 // indirect
 	cloud.google.com/go/compute/metadata v0.7.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.1 // indirect
@@ -25,9 +24,6 @@ require (
 	github.com/goccy/go-yaml v1.17.1 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/google/dotprompt/go v0.0.0-20251014011017-8d056e027254 // indirect
-	github.com/google/s2a-go v0.1.9 // indirect
-	github.com/googleapis/enterprise-certificate-proxy v0.3.6 // indirect
-	github.com/googleapis/gax-go/v2 v2.14.2 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.6 // indirect
@@ -60,8 +56,6 @@ require (
 	golang.org/x/text v0.34.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
 	google.golang.org/api v0.236.0 // indirect
-	golang.org/x/sys v0.34.0 // indirect
-	golang.org/x/text v0.34.0 // indirect
 	google.golang.org/genai v1.41.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250603155806-513f23925822 // indirect
 	google.golang.org/grpc v1.73.0 // indirect
