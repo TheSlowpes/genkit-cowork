@@ -27,12 +27,5 @@
       "type": "refactor",
       "section": "Refactoring"
     }
-  ],
-  "extra-files": [
-    {
-      "type": "json",
-      "path": "release-please-config.json",
-      "jsonpath": "$.packages['.'].component"
-    }
   ]
 }
