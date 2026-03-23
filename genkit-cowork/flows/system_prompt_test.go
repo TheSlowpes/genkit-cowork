@@ -1,4 +1,4 @@
-// Copyright 2025 Kevin Lopes
+// Copyright 2026 Kevin Lopes
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,11 +24,6 @@ import (
 )
 
 // --- Helpers ---
-
-// promptFromOpts builds the prompt string directly (bypasses PromptFn wrapper).
-func promptFromOpts(opts SystemPromptOptions) string {
-	return buildPromptString(opts)
-}
 
 // invokePromptFn calls the PromptFn and returns the resulting string.
 func invokePromptFn(t *testing.T, opts SystemPromptOptions) string {
