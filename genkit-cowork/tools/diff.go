@@ -1,19 +1,44 @@
+// Copyright 2025 Kevin Lopes
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package tools
 
 import "strings"
 
+// ChangeType describes the kind of diff change.
 type ChangeType int
 
 const (
-	Equal  ChangeType = 0
+	// Equal indicates unchanged lines between old and new content.
+	Equal ChangeType = 0
+	// Insert indicates lines inserted in the new content.
 	Insert ChangeType = 1
+	// Delete indicates lines removed from the old content.
 	Delete ChangeType = -1
 )
 
+// Change represents a grouped diff segment.
 type Change struct {
-	Type  ChangeType
+	// Type is the diff operation for this change.
+	Type ChangeType
+	// Value is the raw concatenated text for this change.
 	Value string
+	// Lines contains line-split data for this change when populated.
 	Lines []string
+	// Count is the number of merged primitive changes.
 	Count int
 }
 

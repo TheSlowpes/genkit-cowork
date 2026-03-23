@@ -1,3 +1,19 @@
+// Copyright 2025 Kevin Lopes
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package tools
 
 import (
@@ -14,13 +30,18 @@ type writeToolOptions struct {
 	operator WriteOperator
 }
 
+// WriteToolOption configures Write tool behavior.
 type WriteToolOption func(*writeToolOptions)
 
+// WriteOperator abstracts file writing operations.
 type WriteOperator interface {
+	// WriteFile writes content to a target file path.
 	WriteFile(ctx context.Context, absolutePath, content string) error
+	// MkdirAll ensures the target directory exists.
 	MkdirAll(ctx context.Context, absolutePath string) error
 }
 
+// WithCustomWriteOperator injects a custom write operator.
 func WithCustomWriteOperator(operator WriteOperator) WriteToolOption {
 	return func(opts *writeToolOptions) {
 		opts.operator = operator
@@ -38,11 +59,13 @@ func (o *defaultWriteOperator) MkdirAll(ctx context.Context, absolutePath string
 	return os.MkdirAll(absolutePath, os.ModePerm)
 }
 
+// WriteToolInput is the input payload for write tool invocations.
 type WriteToolInput struct {
 	Path    string `json:"path" jsonschema_description:"Path to the file to write (relative or absolute)"`
 	Content string `json:"content" jsonschema_description:"Content to write to the file"`
 }
 
+// NewWriteTool creates a Genkit tool that writes or overwrites files.
 func NewWriteTool(g *genkit.Genkit, cwd string, opts ...WriteToolOption) ai.Tool {
 	options := writeToolOptions{
 		operator: &defaultWriteOperator{},

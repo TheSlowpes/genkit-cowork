@@ -1,3 +1,19 @@
+// Copyright 2025 Kevin Lopes
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package flows
 
 import (
@@ -11,6 +27,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 )
 
+// HandleMessageInput is the input for the handleMessage flow.
 type HandleMessageInput struct {
 	SessionID     string               `json:"sessionID"`
 	TenantID      string               `json:"tenantID"`
@@ -21,6 +38,7 @@ type HandleMessageInput struct {
 	ToolRestarts  []*ai.Part           `json:"toolRestarts,omitempty"`
 }
 
+// HandleMessageOutput is the result of running the handleMessage flow.
 type HandleMessageOutput struct {
 	SessionID    string          `json:"sessionID"`
 	Response     *ai.Message     `json:"response"`
@@ -37,32 +55,43 @@ type handleMessageOptions struct {
 	defaultConfig *AgentLoopConfig
 }
 
+// HandleMessageOption configures NewHandleMessageFlow.
 type HandleMessageOption func(*handleMessageOptions)
 
+// WithHandleMessageEventBus configures lifecycle event emission for the
+// underlying agent loop.
 func WithHandleMessageEventBus(bus *EventBus) HandleMessageOption {
 	return func(opts *handleMessageOptions) {
 		opts.bus = bus
 	}
 }
 
+// WithHandleMessageGenerateOptions sets base generate options for the
+// underlying agent loop.
 func WithHandleMessageGenerateOptions(genOpts ...ai.GenerateOption) HandleMessageOption {
 	return func(opts *handleMessageOptions) {
 		opts.baseOpts = genOpts
 	}
 }
 
+// WithHandleMessageLoopOperator injects a custom operator for model/tool
+// lookup and generation.
 func WithHandleMessageLoopOperator(loopOperator AgentLoopOperator) HandleMessageOption {
 	return func(opts *handleMessageOptions) {
 		opts.loopOperator = loopOperator
 	}
 }
 
+// WithCustomAgentConfig sets a default agent loop configuration used when a
+// per-request config override is not provided.
 func WithCustomAgentConfig(config AgentLoopConfig) HandleMessageOption {
 	return func(opts *handleMessageOptions) {
 		opts.defaultConfig = &config
 	}
 }
 
+// NewHandleMessageFlow creates a session-backed chat flow that appends the
+// incoming message, runs the agent loop, and persists new messages.
 func NewHandleMessageFlow(
 	g *genkit.Genkit,
 	store *memory.Session,

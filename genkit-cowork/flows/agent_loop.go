@@ -1,3 +1,19 @@
+// Copyright 2025 Kevin Lopes
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package flows
 
 import (
@@ -11,6 +27,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 )
 
+// AgentLoopConfig configures model/tool behavior for each loop run.
 type AgentLoopConfig struct {
 	Model        string      `json:"model,omitempty"`
 	Tools        []string    `json:"tools,omitempty"`
@@ -24,8 +41,11 @@ type agentLoopOptions struct {
 	operator AgentLoopOperator
 }
 
+// AgentLoopOption configures NewAgentLoop behavior.
 type AgentLoopOption func(*agentLoopOptions)
 
+// AgentLoopOperator abstracts model generation and registry lookups used by
+// the agent loop so callers can inject custom execution strategies.
 type AgentLoopOperator interface {
 	Generate(ctx context.Context, opts ...ai.GenerateOption) (*ai.ModelResponse, error)
 	LookupModel(name string) (ai.Model, bool)
@@ -58,24 +78,29 @@ func (o *defaultAgentLoopOperator) LookupTool(name string) (ai.Tool, bool) {
 	return tool, true
 }
 
+// WithEventBus attaches an event bus used to emit agent loop lifecycle events.
 func WithEventBus(bus *EventBus) AgentLoopOption {
 	return func(opts *agentLoopOptions) {
 		opts.bus = bus
 	}
 }
 
+// WithCustomGenerateOptions sets base generate options applied on every turn.
 func WithCustomGenerateOptions(opts ...ai.GenerateOption) AgentLoopOption {
 	return func(loopOpts *agentLoopOptions) {
 		loopOpts.baseOpts = opts
 	}
 }
 
+// WithCustomAgentLoopOperator sets a custom operator for generation and
+// model/tool lookups.
 func WithCustomAgentLoopOperator(operator AgentLoopOperator) AgentLoopOption {
 	return func(loopOpts *agentLoopOptions) {
 		loopOpts.operator = operator
 	}
 }
 
+// AgentLoopInput is the input payload for a single agent loop run.
 type AgentLoopInput struct {
 	SessionID     string          `json:"sessionID"`
 	Messages      []*ai.Message   `json:"messages"`
@@ -84,6 +109,7 @@ type AgentLoopInput struct {
 	ToolRestarts  []*ai.Part      `json:"toolRestarts,omitempty"`
 }
 
+// AgentLoopOutput is the final result of an agent loop run.
 type AgentLoopOutput struct {
 	SessionID    string          `json:"sessionID"`
 	Response     *ai.Message     `json:"response"`
@@ -93,6 +119,8 @@ type AgentLoopOutput struct {
 	Interrupts   []*ai.Part      `json:"interrupts,omitempty"`
 }
 
+// NewAgentLoop creates the core model/tool turn loop used by higher-level
+// flows like message handling and heartbeat.
 func NewAgentLoop(
 	g *genkit.Genkit,
 	opts ...AgentLoopOption,

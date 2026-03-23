@@ -1,3 +1,19 @@
+// Copyright 2025 Kevin Lopes
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package skills
 
 import (
@@ -5,6 +21,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
 // mkSkill creates a minimal SKILL.md in a temporary directory and returns the
@@ -66,6 +85,51 @@ func TestDiscoverSkills_SkipsInvalidSkill(t *testing.T) {
 	}
 	if skills[0].Name != "valid" {
 		t.Errorf("expected skill named 'valid', got %q", skills[0].Name)
+	}
+}
+
+// TestParseSkillMetadata_FullMetadata verifies that parseSkillMetadata correctly
+// parses a SKILL.md with all optional frontmatter fields (License, Metadata).
+// cmp.Diff is used for a clear diff on struct mismatch.
+func TestParseSkillMetadata_FullMetadata(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "full-meta-skill")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	content := "---\n" +
+		"name: full-meta-skill\n" +
+		"description: A comprehensive skill\n" +
+		"license: Apache-2.0\n" +
+		"metadata:\n" +
+		"  key1: value1\n" +
+		"  key2: value2\n" +
+		"---\n" +
+		"Skill body content.\n"
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	got, err := parseSkillMetadata(dir)
+	if err != nil {
+		t.Fatalf("parseSkillMetadata() error = %v", err)
+	}
+
+	want := &SkillDefinition{
+		Name:        "full-meta-skill",
+		Description: "A comprehensive skill",
+		License:     "Apache-2.0",
+		Metadata:    map[string]string{"key1": "value1", "key2": "value2"},
+	}
+
+	// Ignore the unexported dir field and the dynamically-built Files map,
+	// both of which contain filesystem paths that vary per test run.
+	opts := []cmp.Option{
+		cmpopts.IgnoreUnexported(SkillDefinition{}),
+		cmpopts.IgnoreFields(SkillDefinition{}, "Files"),
+	}
+	if diff := cmp.Diff(want, got, opts...); diff != "" {
+		t.Errorf("parseSkillMetadata() mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -240,4 +304,3 @@ func TestBuildSkillsDescription_RespectsAllowedSkills(t *testing.T) {
 		t.Errorf("expected 'beta' to be absent from description (not in AllowedSkills)")
 	}
 }
-

@@ -1,3 +1,19 @@
+// Copyright 2025 Kevin Lopes
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package tools
 
 import (
@@ -14,9 +30,10 @@ type editToolOptions struct {
 	operator EditOperator
 }
 
+// EditToolOption configures Edit tool behavior.
 type EditToolOption func(*editToolOptions)
 
-// EditOperator abstracs file editing operations so implementations can be
+// EditOperator abstracts file editing operations so implementations can be
 // swapped for testing, sandboxing, or remote execution (e.g., SSH).
 type EditOperator interface {
 	ReadFile(ctx context.Context, absolutePath string) ([]byte, error)
@@ -24,6 +41,7 @@ type EditOperator interface {
 	Access(ctx context.Context, absolutePath string) error
 }
 
+// WithCustomEditOperator injects a custom file editing operator.
 func WithCustomEditOperator(operator EditOperator) EditToolOption {
 	return func(opts *editToolOptions) {
 		opts.operator = operator
@@ -55,11 +73,15 @@ type EditToolInput struct {
 	NewText string `json:"new_text" jsonschema_description:"Text to replace the old text with"`
 }
 
+// EditToolDetails contains detailed diff metadata for an edit operation.
 type EditToolDetails struct {
-	Diff             string
+	// Diff is a unified-style diff for the applied edit.
+	Diff string
+	// FirstChangedLine is the first changed line number in the new content.
 	FirstChangedLine int
 }
 
+// EditToolOutput is the structured result returned by NewEditTool.
 type EditToolOutput struct {
 	Content string
 	Details EditToolDetails

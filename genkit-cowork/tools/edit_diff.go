@@ -1,3 +1,19 @@
+// Copyright 2025 Kevin Lopes
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package tools
 
 import (
@@ -7,17 +23,19 @@ import (
 	"unicode"
 )
 
+// FuzzyMatchResult describes the outcome of fuzzy text matching.
 type FuzzyMatchResult struct {
-	// Whether a match was found
+	// Found indicates whether a match was found.
 	Found bool
-	// The index where the match starts
+	// Index is the byte offset where the match starts.
 	Index int
-	// Length of the matched text
+	// MatchLength is the byte length of the matched text.
 	MatchLength int
-	// Whether the match was exact or fuzzy
+	// UsedFuzzyMatch indicates whether matching required fuzzy normalization.
 	UsedFuzzyMatch bool
-	// The content to use for replacement operations.
-	// When exact match: original content. When fuzzy match: normalized content.
+	// ContentForReplacement is the content used for replacement operations.
+	// For exact matches this is the original content; for fuzzy matches this is
+	// the normalized content.
 	ContentForReplacement string
 }
 
@@ -151,7 +169,8 @@ func generateDiffString(oldContent, newContent string, contextLines *int) (strin
 
 		if part.Type == Insert || part.Type == Delete {
 			if firstChangeLine == nil {
-				firstChangeLine = &newline
+				line := newline
+				firstChangeLine = &line
 			}
 
 			for _, line := range raw {

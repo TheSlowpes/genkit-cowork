@@ -14,15 +14,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package tools
+package utils
 
-// DEFAULT_MAX_LINES is the default maximum number of lines returned by tools
-// that truncate textual output.
-const (
-	// DEFAULT_MAX_LINES is the default line cap for tool output.
-	DEFAULT_MAX_LINES = 2000
-	// DEFAULT_MAX_BYTES is the default byte cap for tool output.
-	DEFAULT_MAX_BYTES = 50 * 1024
-	// CONTEXT_LINES is the number of surrounding lines included in edit diffs.
-	CONTEXT_LINES = 4
+import (
+	"strings"
+	"testing"
 )
+
+func TestSplitPathList(t *testing.T) {
+	got := splitPathList("a::b:", ":")
+	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("splitPathList() = %#v, want [\"a\",\"b\"]", got)
+	}
+}
+
+func TestMapToEnvSlice(t *testing.T) {
+	out := mapToEnvSlice(map[string]string{"A": "1"})
+	if len(out) != 1 || !strings.HasPrefix(out[0], "A=") {
+		t.Fatalf("mapToEnvSlice() = %#v, want one A= entry", out)
+	}
+}
+
+func TestGetShellEnv(t *testing.T) {
+	got := GetShellEnv()
+	if len(got) == 0 {
+		t.Fatal("GetShellEnv() returned empty env")
+	}
+}

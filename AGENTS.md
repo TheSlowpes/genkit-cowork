@@ -189,13 +189,14 @@ genkit-cowork/
 │   ├── event.go           # Event bus and typed lifecycle events
 │   ├── event_context.go   # Event payload/context types
 │   ├── heartbeat_config.go # Heartbeat scheduling/delivery config
-│   └── heartbeat_result.go # Heartbeat result parsing and classification
+│   ├── heartbeat_result.go # Heartbeat result parsing and classification
+│   └── system_prompt.go # System prompt builder for agent/tool guidance
 ├── tools/           # Tool definitions (bash, read, edit, write)
 │   ├── bash.go      # Bash command execution tool
 │   ├── read.go      # File/image reading tool
 │   ├── edit.go      # Find-and-replace editing tool
 │   ├── write.go     # File creation with auto-mkdir
-│   ├── edit-diff.go  # Text normalization, fuzzy matching, diff formatting
+│   ├── edit_diff.go  # Text normalization, fuzzy matching, diff formatting
 │   ├── diff.go       # LCS-based line diff algorithm
 │   ├── truncate.go  # Output truncation utilities
 │   ├── path.go      # Path resolution utilities
@@ -209,6 +210,13 @@ genkit-cowork/
 │   └── mime.go      # MIME type detection, image resizing
 ├── memory/          # Session persistence
 │   └── sessions.go  # Session store, message origins
+├── concepts/        # High-level architecture and design notes
+│   └── flows.md     # Flow concepts and behavior design
+├── docs/            # Roadmaps and implementation plans
+│   └── memory-implementation-plan.md # Retrieval/recall planning
+├── examples/
+│   └── tui-chat/
+│       └── main.go  # TUI example wiring flows, tools, memory, and skills
 └── utils/           # Shared utilities
     └── shell.go     # Shell environment management
 ```
@@ -331,7 +339,7 @@ genkit-cowork/
 Include the Apache 2.0 license header at the top of each file (update year as needed):
 
 ```go
-// Copyright [year] Google LLC
+// Copyright [year] Kevin Lopes
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -368,6 +376,7 @@ Include the Apache 2.0 license header at the top of each file (update year as ne
 | `flows/reply.go` — channel-routed reply delivery flow | Implemented |
 | `flows/event.go` + `flows/event_context.go` — typed flow lifecycle events | Implemented |
 | `flows/heartbeat_config.go` + `flows/heartbeat_result.go` — heartbeat config and result classification | Implemented |
+| `flows/system_prompt.go` — system prompt builder with tool guidelines, context files | Implemented |
 | `tools/bash.go` — command execution with spawn hooks | Implemented |
 | `tools/read.go` — text file reading with offset/limit, line-number prefixing, truncation | Implemented |
 | `tools/read.go` — image reading with auto-resize (JPEG, PNG, GIF, WebP) | Implemented |
@@ -375,7 +384,7 @@ Include the Apache 2.0 license header at the top of each file (update year as ne
 | `tools/truncate.go` — output truncation (line + byte limits) | Implemented |
 | `tools/path.go` — path resolution (cwd-relative, ~ expansion, OS-agnostic) | Implemented |
 | `tools/edit.go` — find-and-replace with fuzzy matching, BOM/line-ending preservation | Implemented |
-| `tools/edit-diff.go` — text normalization, fuzzy matching, unified diff generation | Implemented |
+| `tools/edit_diff.go` — text normalization, fuzzy matching, unified diff generation | Implemented |
 | `tools/diff.go` — LCS-based line diff algorithm | Implemented |
 | `media/mime.go` — MIME detection and image auto-resize (CatmullRom scaling) | Implemented |
 | `utils/shell.go` — shell environment | Implemented |

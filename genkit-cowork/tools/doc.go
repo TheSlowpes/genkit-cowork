@@ -14,15 +14,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Package tools provides pluggable Genkit tool implementations for agent
+// capabilities, including bash, read, edit, and write operations.
 package tools
-
-// DEFAULT_MAX_LINES is the default maximum number of lines returned by tools
-// that truncate textual output.
-const (
-	// DEFAULT_MAX_LINES is the default line cap for tool output.
-	DEFAULT_MAX_LINES = 2000
-	// DEFAULT_MAX_BYTES is the default byte cap for tool output.
-	DEFAULT_MAX_BYTES = 50 * 1024
-	// CONTEXT_LINES is the number of surrounding lines included in edit diffs.
-	CONTEXT_LINES = 4
-)
