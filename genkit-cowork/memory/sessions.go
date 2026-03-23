@@ -2,6 +2,10 @@ package memory
 
 import (
 	"context"
+	"encoding/base64"
+	"fmt"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +25,7 @@ type SessionMessage struct {
 type SessionState struct {
 	TenantID          string           `json:"tenantID"`
 	Messages          []SessionMessage `json:"messages"`
+	Assets            []SessionAsset   `json:"assets,omitempty"`
 	LastConsolidateAt time.Time        `json:"lastConsolidateAt"`
 }
 
@@ -171,7 +176,8 @@ type sessionOptions struct {
 	mode      PersistenceMode
 	nMessages int // used for SlidingWindow and TailEndsPruning modes
 
-	operator SessionOperator
+	operator   SessionOperator
+	assetStore MediaAssetStore
 }
 
 func WithPersistenceMode(mode PersistenceMode, n int) SessionOption {
@@ -184,6 +190,12 @@ func WithPersistenceMode(mode PersistenceMode, n int) SessionOption {
 func WithCustomSessionOperator(operator SessionOperator) SessionOption {
 	return func(opts *sessionOptions) {
 		opts.operator = operator
+	}
+}
+
+func WithMediaAssetStore(store MediaAssetStore) SessionOption {
+	return func(opts *sessionOptions) {
+		opts.assetStore = store
 	}
 }
 
@@ -239,7 +251,57 @@ func (s *Session) Save(ctx context.Context, sessionID string, data *session.Data
 		if msg.Kind == "" {
 			msg.Kind = KindForMessage(msg.Content.Role)
 		}
+
+		if s.opts.assetStore != nil {
+		}
 	}
 
 	return s.opts.operator.SaveState(ctx, sessionID, data.State)
+}
+
+func (s *Session) normalizeMediaParts(ctx context.Context, sessionID string, msg *SessionMessage, state *SessionState) error {
+	for idx, part := range msg.Content.Content {
+		if part == nil || !part.IsMedia() {
+			continue
+		}
+
+		if filepath.IsAbs(part.Text) {
+			continue
+		}
+
+		mimeType, raw, ok := parseDataURI(part.Text)
+	}
+}
+
+func parseDataURI(uri string) (mimeType string, data []byte, ok bool) {
+	if !strings.HasPrefix(uri, "data:") {
+		return "", nil, false
+	}
+
+	s := strings.TrimPrefix(uri, "data:")
+
+	parts := strings.SplitN(s, ",", 2)
+	if len(parts) != 2 {
+		return "", nil, false
+	}
+
+	meta := parts[0]
+	rawData := parts[1]
+
+	isBase64 := strings.HasSuffix(meta, ";base64")
+	if isBase64 {
+		mimeType = strings.TrimSuffix(meta, ";base64")
+		data, err := base64.StdEncoding.DecodeString(rawData)
+		if err != nil {
+			return "", nil, false
+		}
+	} else {
+		mimeType = meta
+		data = []byte(rawData)
+	}
+
+	if mimeType == "" {
+		mimeType = "text/plain"
+	}
+	return mimeType, data, true
 }
