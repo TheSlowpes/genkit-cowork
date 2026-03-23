@@ -1,4 +1,4 @@
-// Copyright 2025 Kevin Lopes
+// Copyright 2026 Kevin Lopes
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -192,7 +192,7 @@ func (s *Skills) buildSkillsDescription() string {
 		sb.WriteString("(none)\n")
 	} else {
 		for _, skill := range skills {
-			sb.WriteString(fmt.Sprintf("- %s: %s\n", skill.Name, skill.Description))
+			fmt.Fprintf(&sb, "- %s: %s\n", skill.Name, skill.Description)
 		}
 	}
 	return sb.String()

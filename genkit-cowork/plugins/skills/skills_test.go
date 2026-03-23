@@ -1,4 +1,4 @@
-// Copyright 2025 Kevin Lopes
+// Copyright 2026 Kevin Lopes
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 package skills
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,7 +46,7 @@ func mkSkill(t *testing.T, root, name, description, body string) string {
 func newInitedPlugin(t *testing.T, dir string, allowed []string) *Skills {
 	t.Helper()
 	s := &Skills{SkillsDir: dir, AllowedSkills: allowed}
-	s.Init(nil)
+	s.Init(context.Background())
 	return s
 }
 
@@ -142,7 +143,7 @@ func TestInit_ExplicitDir(t *testing.T) {
 	mkSkill(t, root, "my-skill", "Desc", "Body")
 
 	s := &Skills{SkillsDir: root}
-	s.Init(nil)
+	s.Init(context.Background())
 
 	if len(s.cache) != 1 {
 		t.Fatalf("expected 1 cached skill, got %d", len(s.cache))
@@ -158,7 +159,7 @@ func TestInit_NoDir_EmptyCache(t *testing.T) {
 	defaultSkillsDirs = []string{"/nonexistent/path/a", "/nonexistent/path/b"}
 	defer func() { defaultSkillsDirs = orig }()
 
-	s.Init(nil)
+	s.Init(context.Background())
 
 	if len(s.cache) != 0 {
 		t.Fatalf("expected empty cache, got %d skills", len(s.cache))
@@ -174,7 +175,7 @@ func TestInit_DefaultDirResolution(t *testing.T) {
 	defer func() { defaultSkillsDirs = orig }()
 
 	s := &Skills{}
-	s.Init(nil)
+	s.Init(context.Background())
 
 	if s.SkillsDir != root {
 		t.Errorf("expected SkillsDir=%q, got %q", root, s.SkillsDir)
@@ -187,14 +188,14 @@ func TestInit_DefaultDirResolution(t *testing.T) {
 func TestInit_PanicsOnSecondCall(t *testing.T) {
 	root := t.TempDir()
 	s := &Skills{SkillsDir: root}
-	s.Init(nil)
+	s.Init(context.Background())
 
 	defer func() {
 		if r := recover(); r == nil {
 			t.Error("expected panic on second Init call, got none")
 		}
 	}()
-	s.Init(nil)
+	s.Init(context.Background())
 }
 
 // ---------------------------------------------------------------------------
@@ -281,7 +282,7 @@ func TestBuildSkillsDescription_EmptySkills(t *testing.T) {
 	orig := defaultSkillsDirs
 	defaultSkillsDirs = []string{}
 	defer func() { defaultSkillsDirs = orig }()
-	s.Init(nil)
+	s.Init(context.Background())
 
 	desc := s.buildSkillsDescription()
 	if !strings.Contains(desc, "(none)") {
