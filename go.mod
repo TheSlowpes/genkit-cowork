@@ -4,6 +4,8 @@ go 1.25.2
 
 require (
 	github.com/firebase/genkit/go v1.5.0
+	github.com/google/go-cmp v0.7.0
+	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.8.0
 )
 
