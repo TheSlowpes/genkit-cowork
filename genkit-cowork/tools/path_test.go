@@ -56,8 +56,9 @@ func TestExpandPath(t *testing.T) {
 }
 
 func TestResolveToCwd(t *testing.T) {
-	cwd := "/tmp/work"
-	if got := resolveToCwd("file.txt", cwd); got != "/tmp/work/file.txt" {
-		t.Errorf("resolveToCwd() = %q, want %q", got, "/tmp/work/file.txt")
+	cwd := t.TempDir()
+	want := filepath.Join(cwd, "file.txt")
+	if got := resolveToCwd("file.txt", cwd); got != want {
+		t.Errorf("resolveToCwd() = %q, want %q", got, want)
 	}
 }
