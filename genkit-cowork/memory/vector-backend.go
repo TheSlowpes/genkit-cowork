@@ -1,3 +1,19 @@
+// Copyright 2026 Kevin Lopes
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package memory
 
 import (
@@ -11,12 +27,15 @@ import (
 	"github.com/firebase/genkit/go/plugins/localvec"
 )
 
+// VectorBackend defines indexing and retrieval operations used by
+// VectorOperator.
 type VectorBackend interface {
 	Index(ctx context.Context, sessionID string, docs []*ai.Document) error
 	Retrieve(ctx context.Context, sessionID, query string, topK int) ([]*ai.Document, error)
 	Delete(ctx context.Context, sessionID string) error
 }
 
+// LocalVecConfig configures the localvec-backed VectorBackend implementation.
 type LocalVecConfig struct {
 	Embedder        ai.Embedder
 	OverFetchFactor int
@@ -28,6 +47,8 @@ type localVecBackend struct {
 	overFetchFactor int
 }
 
+// NewLocalVecBackend creates a VectorBackend implemented with the localvec
+// plugin and retriever.
 func NewLocalVecBackend(g *genkit.Genkit, name string, cfg LocalVecConfig) (VectorBackend, error) {
 	if err := localvec.Init(); err != nil {
 		return nil, fmt.Errorf("localvec init: %w", err)
@@ -56,6 +77,10 @@ func NewLocalVecBackend(g *genkit.Genkit, name string, cfg LocalVecConfig) (Vect
 }
 
 func (b *localVecBackend) Index(ctx context.Context, sessionID string, docs []*ai.Document) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("localvec index: context cancelled: %w", err)
+	}
+
 	for _, doc := range docs {
 		if doc.Metadata == nil {
 			doc.Metadata = make(map[string]any)
@@ -71,6 +96,10 @@ func (b *localVecBackend) Index(ctx context.Context, sessionID string, docs []*a
 }
 
 func (b *localVecBackend) Delete(ctx context.Context, sessionID string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("localvec delete: context cancelled: %w", err)
+	}
+
 	var toDelete []string
 	for key, val := range b.docStore.Data {
 		sid, ok := val.Doc.Metadata["sessionID"].(string)
@@ -111,6 +140,10 @@ func (b *localVecBackend) persistDocStore() error {
 }
 
 func (b *localVecBackend) Retrieve(ctx context.Context, sessionID, query string, topK int) ([]*ai.Document, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("localvec retrieve: context cancelled: %w", err)
+	}
+
 	fetchK := topK * b.overFetchFactor
 
 	req := ai.RetrieverRequest{

@@ -1,3 +1,19 @@
+// Copyright 2026 Kevin Lopes
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package memory
 
 import (
@@ -45,6 +61,7 @@ func (f *fileSessionOperator) statePath(sessionID string) string {
 	return filepath.Join(f.rootDir, sessionID, "state.json")
 }
 
+// SaveState writes complete session state to disk for a session.
 func (f *fileSessionOperator) SaveState(ctx context.Context, sessionID string, state SessionState) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("file operator: context cancelled: %w", err)
@@ -93,6 +110,8 @@ func (f *fileSessionOperator) SaveState(ctx context.Context, sessionID string, s
 	return nil
 }
 
+// LoadState reads session state from disk and applies load-time message
+// filtering based on persistence mode.
 func (f *fileSessionOperator) LoadState(ctx context.Context, sessionID string, mode PersistenceMode, nMessages int) (*SessionState, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("file operator: context cancelled: %w", err)
@@ -114,10 +133,12 @@ func (f *fileSessionOperator) LoadState(ctx context.Context, sessionID string, m
 	return &SessionState{
 		TenantID:          state.TenantID,
 		Messages:          filtered,
+		Assets:            copySessionAssets(state.Assets),
 		LastConsolidateAt: state.LastConsolidateAt,
 	}, nil
 }
 
+// DeleteSession removes all persisted files for the session.
 func (f *fileSessionOperator) DeleteSession(ctx context.Context, sessionID string) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("file operator: context cancelled: %w", err)
