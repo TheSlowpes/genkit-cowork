@@ -236,6 +236,7 @@ Memory is implemented through a `Session` store plus pluggable `SessionOperator`
 |------|-------------------|-------------|
 | Session store | `NewSession(...opts)` | Implements `session.Store[SessionState]` for Genkit flows |
 | Persistence mode | `WithPersistenceMode(mode, n)` | Load behavior: `All`, `SlidingWindow`, `TailEndsPruning` |
+| Media asset store | `WithMediaAssetStore(store)` | Normalizes media data URI parts into persisted files and tracks `SessionAsset` metadata |
 | In-memory backend | default (`defaultSessionOperator`) | Process-local map-based state storage |
 | File backend | `NewFileSessionOperator(rootDir)` | Durable JSON state at `rootDir/{sessionID}/state.json` |
 | Vector wrapper | `NewVectorOperator(base, backend, rootDir)` | Wraps a base operator and indexes new messages for semantic retrieval |
@@ -380,6 +381,8 @@ genkit-cowork/
 │   └── mime.go               # MIME detection, image resizing
 ├── memory/             # Session persistence and retrieval
 │   ├── sessions.go           # Session store, message models, persistence modes
+│   ├── assets.go             # Session asset model and media asset store interface
+│   ├── file-assets.go        # Filesystem media asset store implementation
 │   ├── file-sessions.go      # File-backed SessionOperator (JSON + atomic write)
 │   ├── vector-sessions.go    # VectorOperator wrapper + semantic search
 │   └── vector-backend.go     # Vector backend interface + localvec backend

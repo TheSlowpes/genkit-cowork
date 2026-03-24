@@ -19,6 +19,8 @@ package memory
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -79,10 +81,13 @@ func (o *defaultSessionOperator) SaveState(ctx context.Context, sessionID string
 	// Deep copy the messages slice to avoid shared references with the caller.
 	msgs := make([]SessionMessage, len(state.Messages))
 	copy(msgs, state.Messages)
+	assets := make([]SessionAsset, len(state.Assets))
+	copy(assets, state.Assets)
 
 	o.store[sessionID] = SessionState{
 		TenantID:          state.TenantID,
 		Messages:          msgs,
+		Assets:            assets,
 		LastConsolidateAt: state.LastConsolidateAt,
 	}
 	return nil
@@ -102,6 +107,7 @@ func (o *defaultSessionOperator) LoadState(ctx context.Context, sessionID string
 	return &SessionState{
 		TenantID:          state.TenantID,
 		Messages:          filtered,
+		Assets:            copySessionAssets(state.Assets),
 		LastConsolidateAt: state.LastConsolidateAt,
 	}, nil
 }
@@ -143,6 +149,12 @@ func copyMessages(msgs []SessionMessage) []SessionMessage {
 	return out
 }
 
+func copySessionAssets(assets []SessionAsset) []SessionAsset {
+	out := make([]SessionAsset, len(assets))
+	copy(out, assets)
+	return out
+}
+
 func (o *defaultSessionOperator) DeleteSession(ctx context.Context, sessionID string) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -174,8 +186,8 @@ const (
 type MessageKind string
 
 const (
-	// KindEpisodic covers raw conversation rutns: user input, model replies,
-	// and hearbeat-initiated exchanges. These are the ground-truth record of
+	// KindEpisodic covers raw conversation turns: user input, model replies,
+	// and heartbeat-initiated exchanges. These are the ground-truth record of
 	// what was said and when.
 	KindEpisodic MessageKind = "episodic"
 
@@ -192,6 +204,7 @@ const (
 	KindInstrumental MessageKind = "instrumental"
 )
 
+// KindForMessage derives a default memory kind from message role.
 func KindForMessage(role ai.Role) MessageKind {
 	if role == ai.RoleTool {
 		return KindInstrumental
@@ -226,6 +239,8 @@ func WithCustomSessionOperator(operator SessionOperator) SessionOption {
 	}
 }
 
+// WithMediaAssetStore configures a media asset store used to persist data URI
+// media parts and replace them with absolute file paths.
 func WithMediaAssetStore(store MediaAssetStore) SessionOption {
 	return func(opts *sessionOptions) {
 		opts.assetStore = store
@@ -281,6 +296,10 @@ func (s *Session) Get(ctx context.Context, sessionID string) (*session.Data[Sess
 // Save persists the provided session state, assigning IDs and timestamps when
 // missing.
 func (s *Session) Save(ctx context.Context, sessionID string, data *session.Data[SessionState]) error {
+	if data == nil {
+		return fmt.Errorf("save session: nil session data")
+	}
+
 	for i := range data.State.Messages {
 		msg := &data.State.Messages[i]
 
@@ -295,6 +314,9 @@ func (s *Session) Save(ctx context.Context, sessionID string, data *session.Data
 		}
 
 		if s.opts.assetStore != nil {
+			if err := s.normalizeMediaParts(ctx, sessionID, msg, &data.State); err != nil {
+				return fmt.Errorf("normalize media parts for message %q: %w", msg.MessageID, err)
+			}
 		}
 	}
 
@@ -302,17 +324,57 @@ func (s *Session) Save(ctx context.Context, sessionID string, data *session.Data
 }
 
 func (s *Session) normalizeMediaParts(ctx context.Context, sessionID string, msg *SessionMessage, state *SessionState) error {
-	for _, part := range msg.Content.Content {
+	for i, part := range msg.Content.Content {
 		if part == nil || !part.IsMedia() {
 			continue
 		}
 
 		if filepath.IsAbs(part.Text) {
+			state.Assets = upsertSessionAsset(state.Assets, SessionAsset{
+				AssetID:   filepath.Base(part.Text),
+				MessageID: msg.MessageID,
+				PartIndex: i,
+				MimeType:  part.ContentType,
+				Path:      part.Text,
+			})
 			continue
 		}
 
+		mimeType, payload, ok := parseDataURI(part.Text)
+		if !ok {
+			continue
+		}
+
+		assetID := uuid.New().String()
+		absolutePath, err := s.opts.assetStore.Put(ctx, sessionID, assetID, mimeType, payload)
+		if err != nil {
+			return fmt.Errorf("store media asset: %w", err)
+		}
+
+		part.Text = absolutePath
+		part.ContentType = mimeType
+		state.Assets = upsertSessionAsset(state.Assets, SessionAsset{
+			AssetID:   assetID,
+			MessageID: msg.MessageID,
+			PartIndex: i,
+			MimeType:  mimeType,
+			SizeBytes: len(payload),
+			Path:      absolutePath,
+		})
+
 	}
 	return nil
+}
+
+func upsertSessionAsset(assets []SessionAsset, asset SessionAsset) []SessionAsset {
+	for i := range assets {
+		if assets[i].MessageID == asset.MessageID && assets[i].PartIndex == asset.PartIndex {
+			assets[i] = asset
+			return assets
+		}
+	}
+
+	return append(assets, asset)
 }
 
 func parseDataURI(uri string) (mimeType string, data []byte, ok bool) {
@@ -333,13 +395,18 @@ func parseDataURI(uri string) (mimeType string, data []byte, ok bool) {
 	isBase64 := strings.HasSuffix(meta, ";base64")
 	if isBase64 {
 		mimeType = strings.TrimSuffix(meta, ";base64")
-		data, err := base64.StdEncoding.DecodeString(rawData)
+		decoded, err := base64.StdEncoding.DecodeString(rawData)
 		if err != nil {
 			return "", nil, false
 		}
+		data = decoded
 	} else {
 		mimeType = meta
-		data = []byte(rawData)
+		decoded, err := url.PathUnescape(rawData)
+		if err != nil {
+			return "", nil, false
+		}
+		data = []byte(decoded)
 	}
 
 	if mimeType == "" {

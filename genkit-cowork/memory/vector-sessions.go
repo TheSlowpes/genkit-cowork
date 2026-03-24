@@ -1,3 +1,19 @@
+// Copyright 2026 Kevin Lopes
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package memory
 
 import (
@@ -14,6 +30,8 @@ import (
 	"github.com/firebase/genkit/go/ai"
 )
 
+// VectorOperator composes a base SessionOperator with vector indexing and
+// semantic retrieval capabilities.
 type VectorOperator struct {
 	base    SessionOperator
 	backend VectorBackend
@@ -21,6 +39,8 @@ type VectorOperator struct {
 	mu      sync.Mutex
 }
 
+// NewVectorOperator creates a SessionOperator that composes a base session
+// operator with a vector indexing backend.
 func NewVectorOperator(base SessionOperator, backend VectorBackend, rootDir string) *VectorOperator {
 	return &VectorOperator{
 		base:    base,
@@ -98,6 +118,7 @@ func (v *VectorOperator) SaveState(ctx context.Context, sessionID string, state 
 	return nil
 }
 
+// LoadState delegates session loading to the composed base operator.
 func (v *VectorOperator) LoadState(ctx context.Context, sessionID string, mode PersistenceMode, nMessages int) (*SessionState, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("vector operator: context cancelled: %w", err)
@@ -106,6 +127,8 @@ func (v *VectorOperator) LoadState(ctx context.Context, sessionID string, mode P
 	return v.base.LoadState(ctx, sessionID, mode, nMessages)
 }
 
+// DeleteSession removes canonical session state, vector entries, and local
+// indexing metadata for the session.
 func (v *VectorOperator) DeleteSession(ctx context.Context, sessionID string) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("vector operator: context cancelled: %w", err)
@@ -129,6 +152,7 @@ func (v *VectorOperator) DeleteSession(ctx context.Context, sessionID string) er
 	return nil
 }
 
+// Search retrieves semantically similar messages for a session.
 func (v *VectorOperator) Search(ctx context.Context, sessionID, query string, topK int) ([]SessionMessage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("vector operator: context cancelled: %w", err)

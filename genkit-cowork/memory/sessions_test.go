@@ -17,12 +17,29 @@ package memory
 
 import (
 	"context"
+	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/x/session"
 )
+
+type testAssetStore struct {
+	putFn func(ctx context.Context, sessionID, assetID, mimeType string, data []byte) (string, error)
+}
+
+func (s *testAssetStore) Put(ctx context.Context, sessionID, assetID, mimeType string, data []byte) (string, error) {
+	if s.putFn != nil {
+		return s.putFn(ctx, sessionID, assetID, mimeType, data)
+	}
+	return filepath.Join("/tmp", sessionID, "assets", assetID), nil
+}
+
+func (s *testAssetStore) DeleteSessionAssets(ctx context.Context, sessionID string) error {
+	return nil
+}
 
 // --- helpers ---
 
@@ -511,5 +528,95 @@ func TestSession_GetWithTailEndsPruning(t *testing.T) {
 	}
 	if data.State.Messages[3].MessageID != msgs[9].MessageID {
 		t.Errorf("tail[1]: expected %q, got %q", msgs[9].MessageID, data.State.Messages[3].MessageID)
+	}
+}
+
+func TestSession_SaveNilData(t *testing.T) {
+	ctx := context.Background()
+	s := NewSession()
+
+	err := s.Save(ctx, "sess-nil", nil)
+	if err == nil {
+		t.Fatal("expected error for nil session data")
+	}
+}
+
+func TestSession_SaveDataURIToAssetStore(t *testing.T) {
+	ctx := context.Background()
+	store := &testAssetStore{}
+	s := NewSession(WithMediaAssetStore(store))
+
+	msg := SessionMessage{
+		MessageID: "m1",
+		Origin:    UIMessage,
+		Content: ai.Message{
+			Role: ai.RoleUser,
+			Content: []*ai.Part{
+				ai.NewMediaPart("image/png", "data:image/png;base64,aGVsbG8="),
+			},
+		},
+	}
+
+	state := SessionState{TenantID: "t1", Messages: []SessionMessage{msg}}
+	err := s.Save(ctx, "sess-media", &session.Data[SessionState]{ID: "sess-media", State: state})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	data, err := s.Get(ctx, "sess-media")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if data == nil {
+		t.Fatal("expected data, got nil")
+	}
+	if len(data.State.Assets) != 1 {
+		t.Fatalf("expected 1 asset, got %d", len(data.State.Assets))
+	}
+	if data.State.Assets[0].MimeType != "image/png" {
+		t.Errorf("asset mime = %q, want image/png", data.State.Assets[0].MimeType)
+	}
+	if data.State.Messages[0].Content.Content[0].Text == "data:image/png;base64,aGVsbG8=" {
+		t.Fatal("expected media part to be normalized to an absolute path")
+	}
+}
+
+func TestSession_SaveAssetStoreError(t *testing.T) {
+	ctx := context.Background()
+	store := &testAssetStore{
+		putFn: func(ctx context.Context, sessionID, assetID, mimeType string, data []byte) (string, error) {
+			return "", errors.New("put failed")
+		},
+	}
+	s := NewSession(WithMediaAssetStore(store))
+
+	msg := SessionMessage{
+		MessageID: "m1",
+		Origin:    UIMessage,
+		Content: ai.Message{
+			Role: ai.RoleUser,
+			Content: []*ai.Part{
+				ai.NewMediaPart("image/png", "data:image/png;base64,aGVsbG8="),
+			},
+		},
+	}
+
+	state := SessionState{TenantID: "t1", Messages: []SessionMessage{msg}}
+	err := s.Save(ctx, "sess-media-err", &session.Data[SessionState]{ID: "sess-media-err", State: state})
+	if err == nil {
+		t.Fatal("expected error when media asset store put fails")
+	}
+}
+
+func TestParseDataURI_NonBase64Escaped(t *testing.T) {
+	mimeType, data, ok := parseDataURI("data:text/plain,hello%20world")
+	if !ok {
+		t.Fatal("parseDataURI returned not ok")
+	}
+	if mimeType != "text/plain" {
+		t.Errorf("mimeType = %q, want text/plain", mimeType)
+	}
+	if string(data) != "hello world" {
+		t.Errorf("data = %q, want %q", string(data), "hello world")
 	}
 }
