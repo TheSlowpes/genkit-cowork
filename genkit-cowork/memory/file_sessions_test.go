@@ -393,6 +393,41 @@ func TestFileSessionOperator_ListSessionsMissingTenant(t *testing.T) {
 	}
 }
 
+func TestFileSessionOperator_AppendOnlyDetectsPrefixMutation(t *testing.T) {
+	dir := t.TempDir()
+	tenantID := "tenant-1"
+	op := NewFileSessionOperator(dir, tenantID)
+	ctx := context.Background()
+
+	state := SessionState{
+		TenantID: tenantID,
+		Messages: []SessionMessage{{MessageID: "m1", Sequence: 1, Origin: UIMessage, Content: ai.Message{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("hello")}}}},
+		Turns: []TurnRecord{{
+			TurnID:               "t1",
+			Sequence:             1,
+			FirstMessageSequence: 1,
+			LastMessageSequence:  1,
+			MessageCount:         1,
+		}},
+		Snapshots: []StateSnapshot{{
+			SnapshotID: "s1",
+			Sequence:   1,
+		}},
+	}
+
+	if err := op.SaveState(ctx, tenantID, "sess-mut", state); err != nil {
+		t.Fatalf("SaveState initial: %v", err)
+	}
+
+	mutated := state
+	mutated.Messages[0].MessageID = "m-changed"
+
+	err := op.SaveState(ctx, tenantID, "sess-mut", mutated)
+	if err == nil {
+		t.Fatal("expected append-only mutation error, got nil")
+	}
+}
+
 func TestAtomicWriteFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.json")

@@ -686,3 +686,144 @@ func TestParseDataURI_NonBase64Escaped(t *testing.T) {
 		t.Errorf("data = %q, want %q", string(data), "hello world")
 	}
 }
+
+func TestSession_SaveAssignsMessageSequencesAndTurnSnapshot(t *testing.T) {
+	ctx := context.Background()
+	s := NewSession(WithTenantID("tenant-1"))
+
+	state := SessionState{
+		TenantID: "tenant-1",
+		Messages: []SessionMessage{
+			makeMessage("", UIMessage, ai.RoleUser, "hello"),
+			makeMessage("", ModelMessage, ai.RoleModel, "hi"),
+		},
+	}
+
+	if err := s.Save(ctx, "sess-seq", &session.Data[SessionState]{ID: "sess-seq", State: state}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	data, err := s.Get(ctx, "sess-seq")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if data == nil {
+		t.Fatal("expected data, got nil")
+	}
+	if got := len(data.State.Messages); got != 2 {
+		t.Fatalf("messages = %d, want 2", got)
+	}
+	if data.State.Messages[0].Sequence != 1 || data.State.Messages[1].Sequence != 2 {
+		t.Fatalf("unexpected message sequences: %d, %d", data.State.Messages[0].Sequence, data.State.Messages[1].Sequence)
+	}
+	if got := len(data.State.Turns); got != 1 {
+		t.Fatalf("turns = %d, want 1", got)
+	}
+	if data.State.Turns[0].MessageCount != 2 {
+		t.Fatalf("turn message count = %d, want 2", data.State.Turns[0].MessageCount)
+	}
+	if got := len(data.State.Snapshots); got != 1 {
+		t.Fatalf("snapshots = %d, want 1", got)
+	}
+	if data.State.Snapshots[0].StateChecksum == "" {
+		t.Fatal("expected non-empty snapshot checksum")
+	}
+}
+
+func TestSession_SaveAppendOnlyRejectsMessageTruncation(t *testing.T) {
+	ctx := context.Background()
+	s := NewSession(WithTenantID("tenant-1"))
+
+	state := SessionState{
+		TenantID: "tenant-1",
+		Messages: []SessionMessage{
+			makeMessage("m1", UIMessage, ai.RoleUser, "one"),
+			makeMessage("m2", ModelMessage, ai.RoleModel, "two"),
+		},
+	}
+	if err := s.Save(ctx, "sess-append", &session.Data[SessionState]{ID: "sess-append", State: state}); err != nil {
+		t.Fatalf("Save initial: %v", err)
+	}
+
+	truncated := SessionState{
+		TenantID: "tenant-1",
+		Messages: []SessionMessage{makeMessage("m1", UIMessage, ai.RoleUser, "one")},
+	}
+	err := s.Save(ctx, "sess-append", &session.Data[SessionState]{ID: "sess-append", State: truncated})
+	if err == nil {
+		t.Fatal("expected append-only truncation error, got nil")
+	}
+}
+
+func TestValidateAppendOnlyStateDetectsPrefixMutation(t *testing.T) {
+	existing := SessionState{
+		Messages: []SessionMessage{{MessageID: "m1", Sequence: 1}},
+		Turns:    []TurnRecord{{TurnID: "t1", Sequence: 1}},
+		Snapshots: []StateSnapshot{{
+			SnapshotID: "s1",
+			Sequence:   1,
+		}},
+	}
+	incoming := SessionState{
+		Messages: []SessionMessage{{MessageID: "m-changed", Sequence: 1}},
+		Turns:    []TurnRecord{{TurnID: "t1", Sequence: 1}},
+		Snapshots: []StateSnapshot{{
+			SnapshotID: "s1",
+			Sequence:   1,
+		}},
+	}
+
+	err := validateAppendOnlyState(existing, incoming)
+	if err == nil {
+		t.Fatal("expected append-only mutation error, got nil")
+	}
+}
+
+func TestMessagesForTurn_ReconstructsTurnWindows(t *testing.T) {
+	state := SessionState{
+		Messages: []SessionMessage{
+			{MessageID: "m1", Sequence: 1},
+			{MessageID: "m2", Sequence: 2},
+			{MessageID: "m3", Sequence: 3},
+			{MessageID: "m4", Sequence: 4},
+			{MessageID: "m5", Sequence: 5},
+		},
+		Turns: []TurnRecord{
+			{TurnID: "t1", FirstMessageSequence: 1, LastMessageSequence: 2, MessageCount: 2},
+			{TurnID: "t2", FirstMessageSequence: 3, LastMessageSequence: 5, MessageCount: 3},
+		},
+	}
+
+	win1, err := MessagesForTurn(state, state.Turns[0])
+	if err != nil {
+		t.Fatalf("MessagesForTurn(t1): %v", err)
+	}
+	if len(win1) != 2 {
+		t.Fatalf("t1 window len = %d, want 2", len(win1))
+	}
+	if win1[0].MessageID != "m1" || win1[1].MessageID != "m2" {
+		t.Fatalf("unexpected t1 window: %+v", win1)
+	}
+
+	win2, err := MessagesForTurn(state, state.Turns[1])
+	if err != nil {
+		t.Fatalf("MessagesForTurn(t2): %v", err)
+	}
+	if len(win2) != 3 {
+		t.Fatalf("t2 window len = %d, want 3", len(win2))
+	}
+	if win2[0].MessageID != "m3" || win2[2].MessageID != "m5" {
+		t.Fatalf("unexpected t2 window: %+v", win2)
+	}
+}
+
+func TestMessagesForTurn_ErrorsOnInvalidBounds(t *testing.T) {
+	state := SessionState{
+		Messages: []SessionMessage{{MessageID: "m1", Sequence: 1}},
+	}
+
+	_, err := MessagesForTurn(state, TurnRecord{TurnID: "bad", FirstMessageSequence: 0, LastMessageSequence: 1})
+	if err == nil {
+		t.Fatal("expected error for missing first sequence")
+	}
+}

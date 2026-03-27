@@ -29,6 +29,7 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/x/session"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/google/uuid"
 )
 
 // Heartbeat schedules and executes periodic heartbeat checks over session state.
@@ -163,14 +164,31 @@ func NewHeartbeat(
 
 			var sessionMessages []memory.SessionMessage
 			for _, msg := range newMessages {
+				now := time.Now()
 				sessionMessages = append(sessionMessages, memory.SessionMessage{
-					Origin:  originForRole(msg.Role, memory.HeartbeatMessage),
-					Content: *msg,
-					Kind:    memory.KindForMessage(msg.Role),
+					Origin:    originForRole(msg.Role, memory.HeartbeatMessage),
+					Content:   *msg,
+					Kind:      memory.KindForMessage(msg.Role),
+					Timestamp: now,
 				})
 			}
 
 			state := sess.State()
+			for _, turn := range loopOutput.TurnRecords {
+				state.Turns = append(state.Turns, memory.TurnRecord{
+					TurnID:       uuid.New().String(),
+					FlowName:     "heartbeat",
+					LoopTurns:    turn.TurnNumber,
+					FinishReason: turn.FinishReason,
+					StartedAt:    turn.StartedAt,
+					EndedAt:      turn.EndedAt,
+					MessageCount: turn.PersistedMessageCount,
+					Events: []memory.TurnEvent{
+						{Type: "flow.input", Timestamp: turn.StartedAt, Metadata: map[string]any{"sessionID": input.SessionID, "tenantID": input.TenantID, "loopTurn": turn.TurnNumber}},
+						{Type: "flow.output", Timestamp: turn.EndedAt, Metadata: map[string]any{"finishReason": turn.FinishReason, "toolRequests": turn.ToolRequestCount, "toolResponses": turn.ToolResponsePartCount}},
+					},
+				})
+			}
 			state.Messages = append(state.Messages, sessionMessages...)
 			if err := sess.UpdateState(ctx, state); err != nil {
 				return nil, fmt.Errorf("update session state: %w", err)

@@ -87,11 +87,8 @@ func (f *fileSessionOperator) SaveState(ctx context.Context, tenantID, sessionID
 		return fmt.Errorf("file operator: read existing state: %w", err)
 	}
 	if existing != nil {
-		if len(state.Messages) < len(existing.Messages) {
-			return fmt.Errorf(
-				"file operator: append-only violation: new state has %d messages, existing has %d",
-				len(state.Messages), len(existing.Messages),
-			)
+		if err := validateAppendOnlyState(*existing, state); err != nil {
+			return fmt.Errorf("file operator: %w", err)
 		}
 		// Tenant consistency: reject writes that would change the tenant owner.
 		if existing.TenantID != "" && state.TenantID != existing.TenantID {
@@ -137,6 +134,8 @@ func (f *fileSessionOperator) LoadState(ctx context.Context, tenantID, sessionID
 	return &SessionState{
 		TenantID:          state.TenantID,
 		Messages:          filtered,
+		Turns:             copyTurnRecords(state.Turns),
+		Snapshots:         copyStateSnapshots(state.Snapshots),
 		Assets:            copySessionAssets(state.Assets),
 		LastConsolidateAt: state.LastConsolidateAt,
 	}, nil

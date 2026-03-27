@@ -176,6 +176,15 @@ func TestHandleMessage_NewSessionCreatedOnFirstMessage(t *testing.T) {
 	if len(sessData.State.Messages) != 2 {
 		t.Errorf("expected 2 persisted messages, got %d", len(sessData.State.Messages))
 	}
+	if len(sessData.State.Turns) != 1 {
+		t.Errorf("expected 1 persisted turn, got %d", len(sessData.State.Turns))
+	}
+	if sessData.State.Turns[0].TurnID == "" {
+		t.Error("expected persisted turn to have TurnID")
+	}
+	if sessData.State.Turns[0].FlowName != "handleMessage" {
+		t.Errorf("expected turn flow handleMessage, got %q", sessData.State.Turns[0].FlowName)
+	}
 }
 
 // --- Phase 2: Multi-Turn Tool Execution Tests ---
@@ -559,6 +568,9 @@ func TestHandleMessage_InterruptAndResume(t *testing.T) {
 	if len(sessData.State.Messages) != 2 {
 		t.Fatalf("phase 1: expected 2 persisted messages, got %d", len(sessData.State.Messages))
 	}
+	if len(sessData.State.Turns) != 1 {
+		t.Fatalf("phase 1: expected 1 persisted turn, got %d", len(sessData.State.Turns))
+	}
 
 	// Phase 2: Resume with respond
 	g2 := newGenkitInstance(ctx)
@@ -780,6 +792,9 @@ func TestHandleMessage_MultipleMessagesAccumulateInSession(t *testing.T) {
 	// 3 rounds x 2 messages (user + model) = 6
 	if len(sessData.State.Messages) != 6 {
 		t.Fatalf("expected 6 persisted messages, got %d", len(sessData.State.Messages))
+	}
+	if len(sessData.State.Turns) != 3 {
+		t.Fatalf("expected 3 persisted turns, got %d", len(sessData.State.Turns))
 	}
 
 	// Verify alternating user/model

@@ -153,6 +153,15 @@ func TestAgentLoop_SingleTurnNoTools(t *testing.T) {
 	if len(output.History) != 2 {
 		t.Errorf("expected 2 messages in history, got %d", len(output.History))
 	}
+	if len(output.TurnRecords) != 1 {
+		t.Fatalf("expected 1 turn record, got %d", len(output.TurnRecords))
+	}
+	if output.TurnRecords[0].TurnNumber != 1 {
+		t.Errorf("expected turn record number 1, got %d", output.TurnRecords[0].TurnNumber)
+	}
+	if output.TurnRecords[0].PersistedMessageCount != 1 {
+		t.Errorf("expected persisted message count 1, got %d", output.TurnRecords[0].PersistedMessageCount)
+	}
 }
 
 func TestAgentLoop_MultiTurnToolExecution(t *testing.T) {
@@ -211,6 +220,18 @@ func TestAgentLoop_MultiTurnToolExecution(t *testing.T) {
 	}
 	if output.History[2].Role != ai.RoleTool {
 		t.Errorf("expected history[2] role 'tool', got %q", output.History[2].Role)
+	}
+	if len(output.TurnRecords) != 2 {
+		t.Fatalf("expected 2 turn records, got %d", len(output.TurnRecords))
+	}
+	if output.TurnRecords[0].ToolRequestCount != 1 {
+		t.Errorf("expected turn 1 tool request count 1, got %d", output.TurnRecords[0].ToolRequestCount)
+	}
+	if output.TurnRecords[0].ToolResponsePartCount != 1 {
+		t.Errorf("expected turn 1 tool response parts 1, got %d", output.TurnRecords[0].ToolResponsePartCount)
+	}
+	if output.TurnRecords[1].FinishReason != string(ai.FinishReasonStop) {
+		t.Errorf("expected turn 2 finish reason stop, got %q", output.TurnRecords[1].FinishReason)
 	}
 }
 

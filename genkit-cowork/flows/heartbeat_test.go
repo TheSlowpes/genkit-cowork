@@ -986,6 +986,12 @@ func TestHeartbeatRun_SessionPersistence(t *testing.T) {
 	if len(sessData.State.Messages) == 0 {
 		t.Error("expected session to have messages after heartbeat run")
 	}
+	if len(sessData.State.Turns) != 1 {
+		t.Errorf("expected 1 persisted turn after heartbeat run, got %d", len(sessData.State.Turns))
+	}
+	if len(sessData.State.Turns) > 0 && sessData.State.Turns[0].TurnID == "" {
+		t.Error("expected persisted heartbeat turn to have TurnID")
+	}
 }
 
 func TestHeartbeatRun_SessionPersistenceAcrossRuns(t *testing.T) {
@@ -1024,6 +1030,9 @@ func TestHeartbeatRun_SessionPersistenceAcrossRuns(t *testing.T) {
 	// Should have accumulated messages from both runs
 	if len(sessData.State.Messages) < 2 {
 		t.Errorf("expected at least 2 messages from 2 runs, got %d", len(sessData.State.Messages))
+	}
+	if len(sessData.State.Turns) < 2 {
+		t.Errorf("expected at least 2 turns from 2 runs, got %d", len(sessData.State.Turns))
 	}
 }
 

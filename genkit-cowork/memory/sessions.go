@@ -38,6 +38,8 @@ import (
 type SessionMessage struct {
 	// MessageID is the unique message identifier.
 	MessageID string `json:"messageID"`
+	// Sequence is the monotonic position of this message within the session.
+	Sequence int64 `json:"sequence,omitempty"`
 	// Origin identifies where the message came from.
 	Origin MessageOrigin `json:"origin"`
 	Kind   MessageKind   `json:"kind"`
@@ -51,6 +53,8 @@ type SessionMessage struct {
 type SessionState struct {
 	TenantID          string           `json:"tenantID"`
 	Messages          []SessionMessage `json:"messages"`
+	Turns             []TurnRecord     `json:"turns,omitempty"`
+	Snapshots         []StateSnapshot  `json:"snapshots,omitempty"`
 	Assets            []SessionAsset   `json:"assets,omitempty"`
 	LastConsolidateAt time.Time        `json:"lastConsolidateAt"`
 }
@@ -98,15 +102,27 @@ func (o *defaultSessionOperator) SaveState(ctx context.Context, tenantID, sessio
 	copy(msgs, state.Messages)
 	assets := make([]SessionAsset, len(state.Assets))
 	copy(assets, state.Assets)
+	turns := make([]TurnRecord, len(state.Turns))
+	copy(turns, state.Turns)
+	snapshots := make([]StateSnapshot, len(state.Snapshots))
+	copy(snapshots, state.Snapshots)
 
 	// Create tenant entry if it doesn't exist.
 	if _, ok := o.store[tenantID]; !ok {
 		o.store[tenantID] = make(map[string]SessionState)
 	}
 
+	if existing, ok := o.store[tenantID][sessionID]; ok {
+		if err := validateAppendOnlyState(existing, state); err != nil {
+			return fmt.Errorf("default session operator: %w", err)
+		}
+	}
+
 	o.store[tenantID][sessionID] = SessionState{
 		TenantID:          tenantID,
 		Messages:          msgs,
+		Turns:             turns,
+		Snapshots:         snapshots,
 		Assets:            assets,
 		LastConsolidateAt: state.LastConsolidateAt,
 	}
@@ -131,6 +147,8 @@ func (o *defaultSessionOperator) LoadState(ctx context.Context, tenantID, sessio
 	return &SessionState{
 		TenantID:          tenantID,
 		Messages:          filtered,
+		Turns:             copyTurnRecords(state.Turns),
+		Snapshots:         copyStateSnapshots(state.Snapshots),
 		Assets:            copySessionAssets(state.Assets),
 		LastConsolidateAt: state.LastConsolidateAt,
 	}, nil
@@ -176,6 +194,18 @@ func copyMessages(msgs []SessionMessage) []SessionMessage {
 func copySessionAssets(assets []SessionAsset) []SessionAsset {
 	out := make([]SessionAsset, len(assets))
 	copy(out, assets)
+	return out
+}
+
+func copyTurnRecords(turns []TurnRecord) []TurnRecord {
+	out := make([]TurnRecord, len(turns))
+	copy(out, turns)
+	return out
+}
+
+func copyStateSnapshots(snaps []StateSnapshot) []StateSnapshot {
+	out := make([]StateSnapshot, len(snaps))
+	copy(out, snaps)
 	return out
 }
 
@@ -368,23 +398,133 @@ func (s *Session) Save(ctx context.Context, sessionID string, data *session.Data
 		return fmt.Errorf("save session: nil session data")
 	}
 
+	existing, err := s.opts.operator.LoadState(ctx, s.opts.tenantID, sessionID, All, 0)
+	if err != nil {
+		return fmt.Errorf("load existing state: %w", err)
+	}
+
+	existingMessages := 0
+	existingTurns := 0
+	existingSnapshots := 0
+	lastMessageSequence := int64(0)
+	lastTurnSequence := int64(0)
+	lastSnapshotSequence := int64(0)
+	if existing != nil {
+		existingMessages = len(existing.Messages)
+		existingTurns = len(existing.Turns)
+		existingSnapshots = len(existing.Snapshots)
+		if len(existing.Messages) > 0 {
+			lastMessageSequence = existing.Messages[len(existing.Messages)-1].Sequence
+		}
+		if len(existing.Turns) > 0 {
+			lastTurnSequence = existing.Turns[len(existing.Turns)-1].Sequence
+		}
+		if len(existing.Snapshots) > 0 {
+			lastSnapshotSequence = existing.Snapshots[len(existing.Snapshots)-1].Sequence
+		}
+	}
+
+	if len(data.State.Messages) < existingMessages {
+		return fmt.Errorf("save session: append-only violation: new state has %d messages, existing has %d", len(data.State.Messages), existingMessages)
+	}
+	if len(data.State.Turns) < existingTurns {
+		return fmt.Errorf("save session: append-only violation: new state has %d turns, existing has %d", len(data.State.Turns), existingTurns)
+	}
+	if len(data.State.Snapshots) < existingSnapshots {
+		return fmt.Errorf("save session: append-only violation: new state has %d snapshots, existing has %d", len(data.State.Snapshots), existingSnapshots)
+	}
+
 	for i := range data.State.Messages {
 		msg := &data.State.Messages[i]
 
-		if msg.MessageID == "" {
+		isNew := i >= existingMessages
+
+		if isNew && msg.MessageID == "" {
 			msg.MessageID = uuid.New().String()
 		}
-		if msg.Timestamp.IsZero() {
+		if isNew && msg.Timestamp.IsZero() {
 			msg.Timestamp = time.Now()
 		}
-		if msg.Kind == "" {
+		if isNew && msg.Kind == "" {
 			msg.Kind = KindForMessage(msg.Content.Role)
+		}
+		if isNew && msg.Sequence == 0 {
+			lastMessageSequence++
+			msg.Sequence = lastMessageSequence
 		}
 
 		if s.opts.assetStore != nil {
 			if err := s.normalizeMediaParts(ctx, sessionID, msg, &data.State); err != nil {
 				return fmt.Errorf("normalize media parts for message %q: %w", msg.MessageID, err)
 			}
+		}
+	}
+
+	newMessagesCount := len(data.State.Messages) - existingMessages
+	newTurnsCount := len(data.State.Turns) - existingTurns
+	if newMessagesCount > 0 {
+		firstNew := data.State.Messages[existingMessages]
+		lastNew := data.State.Messages[len(data.State.Messages)-1]
+
+		if newTurnsCount == 0 {
+			lastTurnSequence++
+			data.State.Turns = append(data.State.Turns, TurnRecord{
+				TurnID:               uuid.New().String(),
+				Sequence:             lastTurnSequence,
+				StartedAt:            firstNew.Timestamp,
+				EndedAt:              lastNew.Timestamp,
+				FirstMessageSequence: firstNew.Sequence,
+				LastMessageSequence:  lastNew.Sequence,
+				MessageCount:         newMessagesCount,
+			})
+		} else {
+			newMessages := data.State.Messages[existingMessages:]
+			msgCursor := 0
+			for i := existingTurns; i < len(data.State.Turns); i++ {
+				turn := &data.State.Turns[i]
+				if turn.Sequence == 0 {
+					lastTurnSequence++
+					turn.Sequence = lastTurnSequence
+				}
+
+				if turn.MessageCount <= 0 {
+					continue
+				}
+
+				if msgCursor+turn.MessageCount > len(newMessages) {
+					return fmt.Errorf("save session: turn/message mismatch: turn %d claims %d messages, %d remaining", i-existingTurns+1, turn.MessageCount, len(newMessages)-msgCursor)
+				}
+
+				firstSeq := newMessages[msgCursor].Sequence
+				lastSeq := newMessages[msgCursor+turn.MessageCount-1].Sequence
+				if turn.FirstMessageSequence == 0 {
+					turn.FirstMessageSequence = firstSeq
+				}
+				if turn.LastMessageSequence == 0 {
+					turn.LastMessageSequence = lastSeq
+				}
+				msgCursor += turn.MessageCount
+			}
+
+			if msgCursor != len(newMessages) {
+				return fmt.Errorf("save session: turn/message mismatch: %d new messages not referenced by new turns", len(newMessages)-msgCursor)
+			}
+		}
+
+		if len(data.State.Snapshots) == existingSnapshots {
+			lastSnapshotSequence++
+			snapshot := StateSnapshot{
+				SnapshotID:    uuid.New().String(),
+				Sequence:      lastSnapshotSequence,
+				CapturedAt:    time.Now(),
+				TenantID:      s.opts.tenantID,
+				SessionID:     sessionID,
+				MessageCount:  len(data.State.Messages),
+				TurnSequence:  data.State.Turns[len(data.State.Turns)-1].Sequence,
+				StateVersion:  1,
+				StateChecksum: stateChecksum(data.State),
+			}
+			data.State.Snapshots = append(data.State.Snapshots, snapshot)
 		}
 	}
 
@@ -481,4 +621,37 @@ func parseDataURI(uri string) (mimeType string, data []byte, ok bool) {
 		mimeType = "text/plain"
 	}
 	return mimeType, data, true
+}
+
+// MessagesForTurn reconstructs the persisted message window represented by a
+// turn using sequence boundaries.
+func MessagesForTurn(state SessionState, turn TurnRecord) ([]SessionMessage, error) {
+	if turn.FirstMessageSequence == 0 || turn.LastMessageSequence == 0 {
+		return nil, fmt.Errorf("messages for turn: turn %q has missing sequence bounds", turn.TurnID)
+	}
+	if turn.LastMessageSequence < turn.FirstMessageSequence {
+		return nil, fmt.Errorf("messages for turn: invalid sequence bounds %d..%d", turn.FirstMessageSequence, turn.LastMessageSequence)
+	}
+
+	startIdx := -1
+	endIdx := -1
+	for i := range state.Messages {
+		seq := state.Messages[i].Sequence
+		if seq == turn.FirstMessageSequence {
+			startIdx = i
+		}
+		if seq == turn.LastMessageSequence {
+			endIdx = i
+		}
+	}
+	if startIdx == -1 || endIdx == -1 || endIdx < startIdx {
+		return nil, fmt.Errorf("messages for turn: sequences not found for turn %q", turn.TurnID)
+	}
+
+	window := copyMessages(state.Messages[startIdx : endIdx+1])
+	if turn.MessageCount > 0 && len(window) != turn.MessageCount {
+		return nil, fmt.Errorf("messages for turn: message count mismatch for turn %q: got %d, want %d", turn.TurnID, len(window), turn.MessageCount)
+	}
+
+	return window, nil
 }
