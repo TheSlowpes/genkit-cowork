@@ -41,7 +41,10 @@ type VectorOperator struct {
 
 // NewVectorOperator creates a SessionOperator that composes a base session
 // operator with a vector indexing backend.
-func NewVectorOperator(base SessionOperator, backend VectorBackend, rootDir string) *VectorOperator {
+//
+// The tenantID argument is retained for constructor parity but tenant scoping
+// is enforced by per-method tenantID parameters.
+func NewVectorOperator(base SessionOperator, backend VectorBackend, rootDir, tenantID string) *VectorOperator {
 	return &VectorOperator{
 		base:    base,
 		backend: backend,
@@ -51,19 +54,21 @@ func NewVectorOperator(base SessionOperator, backend VectorBackend, rootDir stri
 
 var _ SessionOperator = (*VectorOperator)(nil)
 
-func (v *VectorOperator) SaveState(ctx context.Context, sessionID string, state SessionState) error {
+// SaveState persists tenant session state via the base operator, then indexes
+// newly appended message text into the vector backend.
+func (v *VectorOperator) SaveState(ctx context.Context, tenantID, sessionID string, state SessionState) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("vector operator: context cancelled: %w", err)
 	}
 
-	if err := v.base.SaveState(ctx, sessionID, state); err != nil {
+	if err := v.base.SaveState(ctx, tenantID, sessionID, state); err != nil {
 		return err
 	}
 
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
-	indexed, err := v.loadIndexedIDs(sessionID)
+	indexed, err := v.loadIndexedIDs(tenantID, sessionID)
 	if err != nil {
 		return err
 	}
@@ -111,7 +116,7 @@ func (v *VectorOperator) SaveState(ctx context.Context, sessionID string, state 
 	for _, id := range newIDs {
 		indexed[id] = true
 	}
-	if err := v.saveIndexedIDs(sessionID, indexed); err != nil {
+	if err := v.saveIndexedIDs(tenantID, sessionID, indexed); err != nil {
 		return fmt.Errorf("save indexed IDs: %w", err)
 	}
 
@@ -119,22 +124,22 @@ func (v *VectorOperator) SaveState(ctx context.Context, sessionID string, state 
 }
 
 // LoadState delegates session loading to the composed base operator.
-func (v *VectorOperator) LoadState(ctx context.Context, sessionID string, mode PersistenceMode, nMessages int) (*SessionState, error) {
+func (v *VectorOperator) LoadState(ctx context.Context, tenantID, sessionID string, mode PersistenceMode, nMessages int) (*SessionState, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("vector operator: context cancelled: %w", err)
 	}
 
-	return v.base.LoadState(ctx, sessionID, mode, nMessages)
+	return v.base.LoadState(ctx, tenantID, sessionID, mode, nMessages)
 }
 
 // DeleteSession removes canonical session state, vector entries, and local
 // indexing metadata for the session.
-func (v *VectorOperator) DeleteSession(ctx context.Context, sessionID string) error {
+func (v *VectorOperator) DeleteSession(ctx context.Context, tenantID, sessionID string) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("vector operator: context cancelled: %w", err)
 	}
 
-	if err := v.base.DeleteSession(ctx, sessionID); err != nil {
+	if err := v.base.DeleteSession(ctx, tenantID, sessionID); err != nil {
 		return err
 	}
 
@@ -145,15 +150,15 @@ func (v *VectorOperator) DeleteSession(ctx context.Context, sessionID string) er
 		return fmt.Errorf("vector backend delete: %w", err)
 	}
 
-	path := v.indexedIDsPath(sessionID)
+	path := v.indexedIDsPath(tenantID, sessionID)
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove indexed IDs file: %w", err)
 	}
 	return nil
 }
 
-// Search retrieves semantically similar messages for a session.
-func (v *VectorOperator) Search(ctx context.Context, sessionID, query string, topK int) ([]SessionMessage, error) {
+// Search retrieves semantically similar messages for a tenant session.
+func (v *VectorOperator) Search(ctx context.Context, tenantID, sessionID, query string, topK int) ([]SessionMessage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("vector operator: context cancelled: %w", err)
 	}
@@ -170,7 +175,7 @@ func (v *VectorOperator) Search(ctx context.Context, sessionID, query string, to
 		return nil, nil
 	}
 
-	state, err := v.base.LoadState(ctx, sessionID, All, 0)
+	state, err := v.base.LoadState(ctx, tenantID, sessionID, All, 0)
 	if err != nil {
 		return nil, fmt.Errorf("load session state: %w", err)
 	}
@@ -195,12 +200,20 @@ func (v *VectorOperator) Search(ctx context.Context, sessionID, query string, to
 	return results, nil
 }
 
-func (v *VectorOperator) indexedIDsPath(sessionID string) string {
-	return filepath.Join(v.rootDir, sessionID, "indexed_ids.json")
+// ListSessions delegates tenant session listing to the composed base operator.
+func (v *VectorOperator) ListSessions(ctx context.Context, tenantID string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("vector operator: context cancelled: %w", err)
+	}
+	return v.base.ListSessions(ctx, tenantID)
 }
 
-func (v *VectorOperator) loadIndexedIDs(sessionID string) (map[string]bool, error) {
-	data, err := os.ReadFile(v.indexedIDsPath(sessionID))
+func (v *VectorOperator) indexedIDsPath(tenantID, sessionID string) string {
+	return filepath.Join(v.rootDir, tenantID, sessionID, "indexed_ids.json")
+}
+
+func (v *VectorOperator) loadIndexedIDs(tenantID, sessionID string) (map[string]bool, error) {
+	data, err := os.ReadFile(v.indexedIDsPath(tenantID, sessionID))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return make(map[string]bool), nil
@@ -220,7 +233,7 @@ func (v *VectorOperator) loadIndexedIDs(sessionID string) (map[string]bool, erro
 	return result, nil
 }
 
-func (v *VectorOperator) saveIndexedIDs(sessionID string, indexed map[string]bool) error {
+func (v *VectorOperator) saveIndexedIDs(tenantID, sessionID string, indexed map[string]bool) error {
 	ids := make([]string, 0, len(indexed))
 	for id := range indexed {
 		ids = append(ids, id)
@@ -231,12 +244,12 @@ func (v *VectorOperator) saveIndexedIDs(sessionID string, indexed map[string]boo
 		return fmt.Errorf("marshal indexed_ids.json: %w", err)
 	}
 
-	dir := filepath.Join(v.rootDir, sessionID)
+	dir := filepath.Join(v.rootDir, tenantID, sessionID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create session dir: %w", err)
 	}
 
-	if err := atomicWriteFile(v.indexedIDsPath(sessionID), data, 0644); err != nil {
+	if err := atomicWriteFile(v.indexedIDsPath(tenantID, sessionID), data, 0644); err != nil {
 		return fmt.Errorf("write indexed_ids.json: %w", err)
 	}
 	return nil

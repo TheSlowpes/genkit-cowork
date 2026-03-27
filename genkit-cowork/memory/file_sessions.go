@@ -23,24 +23,28 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 )
 
 type fileSessionOperator struct {
-	rootDir string
-	mu      sync.Mutex
-	locks   map[string]*sync.RWMutex
+	rootDir  string
+	tenantID string
+	mu       sync.Mutex
+	locks    map[string]*sync.RWMutex
 }
 
 // NewFileSessionOperator returns a SessionOperator that persists session state
-// as JSON files under rootDir/{sessionID}/state.json.
+// as JSON files under rootDir/{tenantID}/{sessionID}/state.json.
 //
-// The directory is created lazily on first write. rootDir should be
-// tenant-scoped by the caller if filesystem-level isolation is required.
-func NewFileSessionOperator(rootDir string) SessionOperator {
+// The directory is created lazily on first write. The tenantID argument is
+// retained for constructor parity but persistence methods are tenant-scoped by
+// their tenantID parameter.
+func NewFileSessionOperator(rootDir, tenantID string) SessionOperator {
 	return &fileSessionOperator{
-		rootDir: rootDir,
-		locks:   make(map[string]*sync.RWMutex),
+		rootDir:  rootDir,
+		tenantID: tenantID,
+		locks:    make(map[string]*sync.RWMutex),
 	}
 }
 
@@ -57,12 +61,12 @@ func (f *fileSessionOperator) sessionLock(sessionID string) *sync.RWMutex {
 	return lk
 }
 
-func (f *fileSessionOperator) statePath(sessionID string) string {
-	return filepath.Join(f.rootDir, sessionID, "state.json")
+func (f *fileSessionOperator) statePath(tenantID, sessionID string) string {
+	return filepath.Join(f.rootDir, tenantID, sessionID, "state.json")
 }
 
-// SaveState writes complete session state to disk for a session.
-func (f *fileSessionOperator) SaveState(ctx context.Context, sessionID string, state SessionState) error {
+// SaveState writes complete session state to disk for a tenant session.
+func (f *fileSessionOperator) SaveState(ctx context.Context, tenantID, sessionID string, state SessionState) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("file operator: context cancelled: %w", err)
 	}
@@ -71,14 +75,14 @@ func (f *fileSessionOperator) SaveState(ctx context.Context, sessionID string, s
 	lk.Lock()
 	defer lk.Unlock()
 
-	dir := filepath.Join(f.rootDir, sessionID)
+	dir := filepath.Join(f.rootDir, tenantID, sessionID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("file operator: create session dir: %w", err)
 	}
 
 	// Append-only validation: if a state file already exists, verify that
 	// the new state does not drop existing messages.
-	existing, err := f.readStateFile(sessionID)
+	existing, err := f.readStateFile(tenantID, sessionID)
 	if err != nil {
 		return fmt.Errorf("file operator: read existing state: %w", err)
 	}
@@ -103,16 +107,16 @@ func (f *fileSessionOperator) SaveState(ctx context.Context, sessionID string, s
 		return fmt.Errorf("file operator: marshal state: %w", err)
 	}
 
-	if err := atomicWriteFile(f.statePath(sessionID), data, 0644); err != nil {
+	if err := atomicWriteFile(f.statePath(tenantID, sessionID), data, 0644); err != nil {
 		return fmt.Errorf("file operator: write state file: %w", err)
 	}
 
 	return nil
 }
 
-// LoadState reads session state from disk and applies load-time message
+// LoadState reads tenant session state from disk and applies load-time message
 // filtering based on persistence mode.
-func (f *fileSessionOperator) LoadState(ctx context.Context, sessionID string, mode PersistenceMode, nMessages int) (*SessionState, error) {
+func (f *fileSessionOperator) LoadState(ctx context.Context, tenantID, sessionID string, mode PersistenceMode, nMessages int) (*SessionState, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("file operator: context cancelled: %w", err)
 	}
@@ -121,7 +125,7 @@ func (f *fileSessionOperator) LoadState(ctx context.Context, sessionID string, m
 	lk.RLock()
 	defer lk.RUnlock()
 
-	state, err := f.readStateFile(sessionID)
+	state, err := f.readStateFile(tenantID, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("file operator: read state file: %w", err)
 	}
@@ -138,8 +142,8 @@ func (f *fileSessionOperator) LoadState(ctx context.Context, sessionID string, m
 	}, nil
 }
 
-// DeleteSession removes all persisted files for the session.
-func (f *fileSessionOperator) DeleteSession(ctx context.Context, sessionID string) error {
+// DeleteSession removes all persisted files for a tenant session.
+func (f *fileSessionOperator) DeleteSession(ctx context.Context, tenantID, sessionID string) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("file operator: context cancelled: %w", err)
 	}
@@ -148,7 +152,7 @@ func (f *fileSessionOperator) DeleteSession(ctx context.Context, sessionID strin
 	lk.Lock()
 	defer lk.Unlock()
 
-	dir := filepath.Join(f.rootDir, sessionID)
+	dir := filepath.Join(f.rootDir, tenantID, sessionID)
 	if err := os.RemoveAll(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("file operator: delete session dir: %w", err)
 	}
@@ -161,10 +165,37 @@ func (f *fileSessionOperator) DeleteSession(ctx context.Context, sessionID strin
 	return nil
 }
 
+// ListSessions lists all session IDs for tenantID.
+//
+// If tenantID has no persisted sessions yet, ListSessions returns an empty
+// list and a nil error.
+func (f *fileSessionOperator) ListSessions(ctx context.Context, tenantID string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("file operator: context cancelled: %w", err)
+	}
+
+	dir := filepath.Join(f.rootDir, tenantID)
+	sessionDirs, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return []string{}, nil
+		}
+		return nil, fmt.Errorf("file operator: read tenant dir: %w", err)
+	}
+	sessionIDs := make([]string, 0, len(sessionDirs))
+	for _, entry := range sessionDirs {
+		if entry.IsDir() {
+			sessionIDs = append(sessionIDs, entry.Name())
+		}
+	}
+	sort.Strings(sessionIDs)
+	return sessionIDs, nil
+}
+
 // readStateFile reads and unmarshals the state file without locking.
 // Caller must hold the appropriate lock.
-func (f *fileSessionOperator) readStateFile(sessionID string) (*SessionState, error) {
-	data, err := os.ReadFile(f.statePath(sessionID))
+func (f *fileSessionOperator) readStateFile(tenantID, sessionID string) (*SessionState, error) {
+	data, err := os.ReadFile(f.statePath(tenantID, sessionID))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil

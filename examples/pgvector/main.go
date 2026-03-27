@@ -100,13 +100,17 @@ func main() {
 	}
 
 	vectorBackend := NewPGVectorBackend(pool, ds, retriever, schemaName, tableName)
-	fileBackend := memory.NewFileSessionOperator("./data/sessions")
-	vectorOperator := memory.NewVectorOperator(fileBackend, vectorBackend, "./data/sessions")
-	sessionStore := memory.NewSession(memory.WithCustomSessionOperator(vectorOperator))
+	tenantID := "tenant-1"
+	fileBackend := memory.NewFileSessionOperator("./data/sessions", tenantID)
+	vectorOperator := memory.NewVectorOperator(fileBackend, vectorBackend, "./data/sessions", tenantID)
+	sessionStore := memory.NewSession(
+		memory.WithCustomSessionOperator(vectorOperator),
+		memory.WithTenantID(tenantID),
+	)
 
 	sessionID := "session-1"
 	state := memory.SessionState{
-		TenantID: "tenant-1",
+		TenantID: tenantID,
 		Messages: []memory.SessionMessage{
 			{
 				Origin: memory.UIMessage,
@@ -133,7 +137,7 @@ func main() {
 		log.Fatalf("failed to save session: %v", err)
 	}
 
-	matches, err := vectorOperator.Search(ctx, sessionID, "invoice", 3)
+	matches, err := vectorOperator.Search(ctx, tenantID, sessionID, "invoice", 3)
 	if err != nil {
 		log.Fatalf("failed to search memory: %v", err)
 	}

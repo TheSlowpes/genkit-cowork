@@ -107,11 +107,12 @@ func NewHandleMessageFlow(
 		g,
 		"handleMessage",
 		func(ctx context.Context, input *HandleMessageInput) (*HandleMessageOutput, error) {
-			sess, err := session.Load(ctx, store, input.SessionID)
+			tenantStore := store.ForTenant(input.TenantID)
+			sess, err := session.Load(ctx, tenantStore, input.SessionID)
 			if err != nil {
 				sess, err = session.New(ctx,
 					session.WithID[memory.SessionState](input.SessionID),
-					session.WithStore(store),
+					session.WithStore(tenantStore),
 					session.WithInitialState(memory.SessionState{
 						TenantID: input.TenantID,
 					}),

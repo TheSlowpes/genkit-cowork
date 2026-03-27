@@ -162,7 +162,7 @@ func TestHandleMessage_NewSessionCreatedOnFirstMessage(t *testing.T) {
 	}
 
 	// Verify session was persisted by loading it
-	sessData, err := store.Get(ctx, "brand-new-session")
+	sessData, err := store.ForTenant("tenant-new").Get(ctx, "brand-new-session")
 	if err != nil {
 		t.Fatalf("failed to load session: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestHandleMessage_AllMessagesPersistedToSession(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	sessData, err := store.Get(ctx, "sess-all-msgs")
+	sessData, err := store.ForTenant("tenant-1").Get(ctx, "sess-all-msgs")
 	if err != nil {
 		t.Fatalf("failed to load session: %v", err)
 	}
@@ -548,7 +548,7 @@ func TestHandleMessage_InterruptAndResume(t *testing.T) {
 	}
 
 	// Verify session persisted the interrupted state
-	sessData, err := store.Get(ctx, "sess-msg-int")
+	sessData, err := store.ForTenant("tenant-1").Get(ctx, "sess-msg-int")
 	if err != nil {
 		t.Fatalf("phase 1: failed to load session: %v", err)
 	}
@@ -769,7 +769,7 @@ func TestHandleMessage_MultipleMessagesAccumulateInSession(t *testing.T) {
 		}
 	}
 
-	sessData, err := store.Get(ctx, "sess-accum")
+	sessData, err := store.ForTenant("tenant-1").Get(ctx, "sess-accum")
 	if err != nil {
 		t.Fatalf("failed to load session: %v", err)
 	}
@@ -835,7 +835,7 @@ func TestHandleMessage_DifferentOrigins(t *testing.T) {
 		}
 	}
 
-	sessData, err := store.Get(ctx, "sess-origins")
+	sessData, err := store.ForTenant("tenant-1").Get(ctx, "sess-origins")
 	if err != nil {
 		t.Fatalf("failed to load session: %v", err)
 	}

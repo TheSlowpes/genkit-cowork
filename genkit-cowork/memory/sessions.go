@@ -20,8 +20,11 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"maps"
 	"net/url"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -55,27 +58,39 @@ type SessionState struct {
 // SessionOperator abstracts the storage backend.
 type SessionOperator interface {
 	// SaveState persists the full session state. Always called, regardless of mode.
-	SaveState(ctx context.Context, sessionID string, state SessionState) error
+	SaveState(ctx context.Context, tenantID, sessionID string, state SessionState) error
 
 	// LoadState retrieves full session state.
 	// The mode and nMessages parameters control pruning at load time.
-	LoadState(ctx context.Context, sessionID string, mode PersistenceMode, nMessages int) (*SessionState, error)
+	LoadState(ctx context.Context, tenantID, sessionID string, mode PersistenceMode, nMessages int) (*SessionState, error)
 
 	// DeleteSession removes all messages for a session.
-	DeleteSession(ctx context.Context, sessionID string) error
+	DeleteSession(ctx context.Context, tenantID, sessionID string) error
+
+	// ListSessions lists all session IDs for tenantID.
+	//
+	// Implementations should return an empty list and a nil error when the
+	// tenant has no sessions yet.
+	ListSessions(ctx context.Context, tenantID string) ([]string, error)
 }
+
+var _ SessionOperator = (*defaultSessionOperator)(nil)
 
 type defaultSessionOperator struct {
 	mu    sync.Mutex
-	store map[string]SessionState
+	store map[string]map[string]SessionState
 }
 
-func (o *defaultSessionOperator) SaveState(ctx context.Context, sessionID string, state SessionState) error {
+func (o *defaultSessionOperator) SaveState(ctx context.Context, tenantID, sessionID string, state SessionState) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("default session operator: context cancelled: %w", err)
+	}
+
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
 	if o.store == nil {
-		o.store = make(map[string]SessionState)
+		o.store = make(map[string]map[string]SessionState)
 	}
 
 	// Deep copy the messages slice to avoid shared references with the caller.
@@ -84,8 +99,13 @@ func (o *defaultSessionOperator) SaveState(ctx context.Context, sessionID string
 	assets := make([]SessionAsset, len(state.Assets))
 	copy(assets, state.Assets)
 
-	o.store[sessionID] = SessionState{
-		TenantID:          state.TenantID,
+	// Create tenant entry if it doesn't exist.
+	if _, ok := o.store[tenantID]; !ok {
+		o.store[tenantID] = make(map[string]SessionState)
+	}
+
+	o.store[tenantID][sessionID] = SessionState{
+		TenantID:          tenantID,
 		Messages:          msgs,
 		Assets:            assets,
 		LastConsolidateAt: state.LastConsolidateAt,
@@ -93,11 +113,15 @@ func (o *defaultSessionOperator) SaveState(ctx context.Context, sessionID string
 	return nil
 }
 
-func (o *defaultSessionOperator) LoadState(ctx context.Context, sessionID string, mode PersistenceMode, nMessages int) (*SessionState, error) {
+func (o *defaultSessionOperator) LoadState(ctx context.Context, tenantID, sessionID string, mode PersistenceMode, nMessages int) (*SessionState, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("default session operator: context cancelled: %w", err)
+	}
+
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	state, ok := o.store[sessionID]
+	state, ok := o.store[tenantID][sessionID]
 	if !ok {
 		return nil, nil
 	}
@@ -105,7 +129,7 @@ func (o *defaultSessionOperator) LoadState(ctx context.Context, sessionID string
 	filtered := filterMessages(state.Messages, mode, nMessages)
 
 	return &SessionState{
-		TenantID:          state.TenantID,
+		TenantID:          tenantID,
 		Messages:          filtered,
 		Assets:            copySessionAssets(state.Assets),
 		LastConsolidateAt: state.LastConsolidateAt,
@@ -155,12 +179,34 @@ func copySessionAssets(assets []SessionAsset) []SessionAsset {
 	return out
 }
 
-func (o *defaultSessionOperator) DeleteSession(ctx context.Context, sessionID string) error {
+func (o *defaultSessionOperator) DeleteSession(ctx context.Context, tenantID, sessionID string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("default session operator: context cancelled: %w", err)
+	}
+
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	delete(o.store, sessionID)
+	delete(o.store[tenantID], sessionID)
 	return nil
+}
+
+func (o *defaultSessionOperator) ListSessions(ctx context.Context, tenantID string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("default session operator: context cancelled: %w", err)
+	}
+
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	sessions, ok := o.store[tenantID]
+	if !ok {
+		return []string{}, nil
+	}
+
+	sessionIDs := slices.Collect(maps.Keys(sessions))
+	sort.Strings(sessionIDs)
+	return sessionIDs, nil
 }
 
 // MessageOrigin identifies the source channel for a message.
@@ -221,6 +267,7 @@ type sessionOptions struct {
 
 	operator   SessionOperator
 	assetStore MediaAssetStore
+	tenantID   string
 }
 
 // WithPersistenceMode sets the filtering mode used when loading messages from
@@ -247,6 +294,16 @@ func WithMediaAssetStore(store MediaAssetStore) SessionOption {
 	}
 }
 
+// WithTenantID sets a fixed tenant ID for all session operations.
+//
+// Prefer ForTenant when tenant identity is request-scoped, and WithTenantID
+// when a store instance is intentionally single-tenant.
+func WithTenantID(tenantID string) SessionOption {
+	return func(opts *sessionOptions) {
+		opts.tenantID = tenantID
+	}
+}
+
 // PersistenceMode controls how many messages are returned on load.
 type PersistenceMode int
 
@@ -264,11 +321,22 @@ type Session struct {
 	opts sessionOptions
 }
 
+// ForTenant returns a shallow copy of Session bound to tenantID.
+//
+// The returned store shares the same operator and options, but all
+// Get/Save calls are scoped to the provided tenant.
+func (s *Session) ForTenant(tenantID string) *Session {
+	clone := *s
+	clone.opts.tenantID = tenantID
+	return &clone
+}
+
 // NewSession creates a new session store.
 func NewSession(opts ...SessionOption) *Session {
 	options := sessionOptions{
 		mode:     All,
 		operator: &defaultSessionOperator{},
+		tenantID: "default",
 	}
 	for _, opt := range opts {
 		opt(&options)
@@ -280,7 +348,7 @@ var _ session.Store[SessionState] = (*Session)(nil)
 
 // Get loads session state by ID.
 func (s *Session) Get(ctx context.Context, sessionID string) (*session.Data[SessionState], error) {
-	state, err := s.opts.operator.LoadState(ctx, sessionID, s.opts.mode, s.opts.nMessages)
+	state, err := s.opts.operator.LoadState(ctx, s.opts.tenantID, sessionID, s.opts.mode, s.opts.nMessages)
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +388,7 @@ func (s *Session) Save(ctx context.Context, sessionID string, data *session.Data
 		}
 	}
 
-	return s.opts.operator.SaveState(ctx, sessionID, data.State)
+	return s.opts.operator.SaveState(ctx, s.opts.tenantID, sessionID, data.State)
 }
 
 func (s *Session) normalizeMediaParts(ctx context.Context, sessionID string, msg *SessionMessage, state *SessionState) error {

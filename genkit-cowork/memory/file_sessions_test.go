@@ -28,7 +28,8 @@ import (
 
 func TestFileSessionOperator_SaveAndLoad(t *testing.T) {
 	dir := t.TempDir()
-	op := NewFileSessionOperator(dir)
+	tenantID := "tenant-1"
+	op := NewFileSessionOperator(dir, tenantID)
 	ctx := context.Background()
 
 	state := SessionState{
@@ -39,11 +40,11 @@ func TestFileSessionOperator_SaveAndLoad(t *testing.T) {
 		},
 	}
 
-	if err := op.SaveState(ctx, "sess-1", state); err != nil {
+	if err := op.SaveState(ctx, tenantID, "sess-1", state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
 
-	loaded, err := op.LoadState(ctx, "sess-1", All, 0)
+	loaded, err := op.LoadState(ctx, tenantID, "sess-1", All, 0)
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
@@ -60,10 +61,11 @@ func TestFileSessionOperator_SaveAndLoad(t *testing.T) {
 
 func TestFileSessionOperator_LoadNonexistent(t *testing.T) {
 	dir := t.TempDir()
-	op := NewFileSessionOperator(dir)
+	tenantID := "tenant-1"
+	op := NewFileSessionOperator(dir, tenantID)
 	ctx := context.Background()
 
-	state, err := op.LoadState(ctx, "does-not-exist", All, 0)
+	state, err := op.LoadState(ctx, tenantID, "does-not-exist", All, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -74,22 +76,23 @@ func TestFileSessionOperator_LoadNonexistent(t *testing.T) {
 
 func TestFileSessionOperator_Delete(t *testing.T) {
 	dir := t.TempDir()
-	op := NewFileSessionOperator(dir)
+	tenantID := "tenant-1"
+	op := NewFileSessionOperator(dir, tenantID)
 	ctx := context.Background()
 
 	state := SessionState{
 		TenantID: "tenant-1",
 		Messages: []SessionMessage{makeMessage("m1", UIMessage, ai.RoleUser, "hello")},
 	}
-	if err := op.SaveState(ctx, "sess-del", state); err != nil {
+	if err := op.SaveState(ctx, tenantID, "sess-del", state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
 
-	if err := op.DeleteSession(ctx, "sess-del"); err != nil {
+	if err := op.DeleteSession(ctx, tenantID, "sess-del"); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 
-	loaded, err := op.LoadState(ctx, "sess-del", All, 0)
+	loaded, err := op.LoadState(ctx, tenantID, "sess-del", All, 0)
 	if err != nil {
 		t.Fatalf("LoadState after delete: %v", err)
 	}
@@ -100,26 +103,28 @@ func TestFileSessionOperator_Delete(t *testing.T) {
 
 func TestFileSessionOperator_DeleteNonexistent(t *testing.T) {
 	dir := t.TempDir()
-	op := NewFileSessionOperator(dir)
+	tenantID := "tenant-1"
+	op := NewFileSessionOperator(dir, tenantID)
 	ctx := context.Background()
 
-	if err := op.DeleteSession(ctx, "never-existed"); err != nil {
+	if err := op.DeleteSession(ctx, tenantID, "never-existed"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestFileSessionOperator_SlidingWindow(t *testing.T) {
 	dir := t.TempDir()
-	op := NewFileSessionOperator(dir)
+	tenantID := "t1"
+	op := NewFileSessionOperator(dir, tenantID)
 	ctx := context.Background()
 
 	msgs := makeMessages(10)
 	state := SessionState{TenantID: "t1", Messages: msgs}
-	if err := op.SaveState(ctx, "sess-sw", state); err != nil {
+	if err := op.SaveState(ctx, tenantID, "sess-sw", state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
 
-	loaded, err := op.LoadState(ctx, "sess-sw", SlidingWindow, 3)
+	loaded, err := op.LoadState(ctx, tenantID, "sess-sw", SlidingWindow, 3)
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
@@ -133,16 +138,17 @@ func TestFileSessionOperator_SlidingWindow(t *testing.T) {
 
 func TestFileSessionOperator_TailEndsPruning(t *testing.T) {
 	dir := t.TempDir()
-	op := NewFileSessionOperator(dir)
+	tenantID := "t1"
+	op := NewFileSessionOperator(dir, tenantID)
 	ctx := context.Background()
 
 	msgs := makeMessages(10)
 	state := SessionState{TenantID: "t1", Messages: msgs}
-	if err := op.SaveState(ctx, "sess-te", state); err != nil {
+	if err := op.SaveState(ctx, tenantID, "sess-te", state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
 
-	loaded, err := op.LoadState(ctx, "sess-te", TailEndsPruning, 2)
+	loaded, err := op.LoadState(ctx, tenantID, "sess-te", TailEndsPruning, 2)
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
@@ -159,19 +165,20 @@ func TestFileSessionOperator_TailEndsPruning(t *testing.T) {
 
 func TestFileSessionOperator_AtomicWrite(t *testing.T) {
 	dir := t.TempDir()
-	op := NewFileSessionOperator(dir)
+	tenantID := "t1"
+	op := NewFileSessionOperator(dir, tenantID)
 	ctx := context.Background()
 
 	state := SessionState{
 		TenantID: "t1",
 		Messages: []SessionMessage{makeMessage("m1", UIMessage, ai.RoleUser, "hello")},
 	}
-	if err := op.SaveState(ctx, "sess-atomic", state); err != nil {
+	if err := op.SaveState(ctx, tenantID, "sess-atomic", state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
 
 	// Verify the state file exists and no temp files remain.
-	sessDir := filepath.Join(dir, "sess-atomic")
+	sessDir := filepath.Join(dir, tenantID, "sess-atomic")
 	entries, err := os.ReadDir(sessDir)
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
@@ -185,25 +192,26 @@ func TestFileSessionOperator_AtomicWrite(t *testing.T) {
 
 func TestFileSessionOperator_AppendOnlyValidation(t *testing.T) {
 	dir := t.TempDir()
-	op := NewFileSessionOperator(dir)
+	tenantID := "t1"
+	op := NewFileSessionOperator(dir, tenantID)
 	ctx := context.Background()
 
 	// Save with 3 messages.
 	msgs := makeMessages(3)
 	state := SessionState{TenantID: "t1", Messages: msgs}
-	if err := op.SaveState(ctx, "sess-ao", state); err != nil {
+	if err := op.SaveState(ctx, tenantID, "sess-ao", state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
 
 	// Try to save with fewer messages — should fail.
 	shorter := SessionState{TenantID: "t1", Messages: msgs[:1]}
-	err := op.SaveState(ctx, "sess-ao", shorter)
+	err := op.SaveState(ctx, tenantID, "sess-ao", shorter)
 	if err == nil {
 		t.Fatal("expected append-only violation error, got nil")
 	}
 
 	// Verify original state is preserved.
-	loaded, err := op.LoadState(ctx, "sess-ao", All, 0)
+	loaded, err := op.LoadState(ctx, tenantID, "sess-ao", All, 0)
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
@@ -214,23 +222,24 @@ func TestFileSessionOperator_AppendOnlyValidation(t *testing.T) {
 
 func TestFileSessionOperator_AppendOnlyAllowsGrowth(t *testing.T) {
 	dir := t.TempDir()
-	op := NewFileSessionOperator(dir)
+	tenantID := "t1"
+	op := NewFileSessionOperator(dir, tenantID)
 	ctx := context.Background()
 
 	msgs := makeMessages(3)
 	state := SessionState{TenantID: "t1", Messages: msgs}
-	if err := op.SaveState(ctx, "sess-grow", state); err != nil {
+	if err := op.SaveState(ctx, tenantID, "sess-grow", state); err != nil {
 		t.Fatalf("SaveState 1: %v", err)
 	}
 
 	// Append more messages — should succeed.
 	msgs = append(msgs, makeMessage("m-extra", UIMessage, ai.RoleUser, "extra"))
 	state2 := SessionState{TenantID: "t1", Messages: msgs}
-	if err := op.SaveState(ctx, "sess-grow", state2); err != nil {
+	if err := op.SaveState(ctx, tenantID, "sess-grow", state2); err != nil {
 		t.Fatalf("SaveState 2: %v", err)
 	}
 
-	loaded, err := op.LoadState(ctx, "sess-grow", All, 0)
+	loaded, err := op.LoadState(ctx, tenantID, "sess-grow", All, 0)
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
@@ -241,14 +250,15 @@ func TestFileSessionOperator_AppendOnlyAllowsGrowth(t *testing.T) {
 
 func TestFileSessionOperator_TenantMismatch(t *testing.T) {
 	dir := t.TempDir()
-	op := NewFileSessionOperator(dir)
+	tenantID := "tenant-A"
+	op := NewFileSessionOperator(dir, tenantID)
 	ctx := context.Background()
 
 	state := SessionState{
 		TenantID: "tenant-A",
 		Messages: []SessionMessage{makeMessage("m1", UIMessage, ai.RoleUser, "hello")},
 	}
-	if err := op.SaveState(ctx, "sess-tenant", state); err != nil {
+	if err := op.SaveState(ctx, tenantID, "sess-tenant", state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
 
@@ -260,7 +270,7 @@ func TestFileSessionOperator_TenantMismatch(t *testing.T) {
 			makeMessage("m2", UIMessage, ai.RoleUser, "intruder"),
 		},
 	}
-	err := op.SaveState(ctx, "sess-tenant", state2)
+	err := op.SaveState(ctx, tenantID, "sess-tenant", state2)
 	if err == nil {
 		t.Fatal("expected tenant mismatch error, got nil")
 	}
@@ -268,14 +278,15 @@ func TestFileSessionOperator_TenantMismatch(t *testing.T) {
 
 func TestFileSessionOperator_TenantConsistentSave(t *testing.T) {
 	dir := t.TempDir()
-	op := NewFileSessionOperator(dir)
+	tenantID := "tenant-A"
+	op := NewFileSessionOperator(dir, tenantID)
 	ctx := context.Background()
 
 	state := SessionState{
 		TenantID: "tenant-A",
 		Messages: []SessionMessage{makeMessage("m1", UIMessage, ai.RoleUser, "hello")},
 	}
-	if err := op.SaveState(ctx, "sess-same", state); err != nil {
+	if err := op.SaveState(ctx, tenantID, "sess-same", state); err != nil {
 		t.Fatalf("SaveState 1: %v", err)
 	}
 
@@ -287,14 +298,15 @@ func TestFileSessionOperator_TenantConsistentSave(t *testing.T) {
 			makeMessage("m2", UIMessage, ai.RoleUser, "follow-up"),
 		},
 	}
-	if err := op.SaveState(ctx, "sess-same", state2); err != nil {
+	if err := op.SaveState(ctx, tenantID, "sess-same", state2); err != nil {
 		t.Fatalf("SaveState 2: %v", err)
 	}
 }
 
 func TestFileSessionOperator_ContextCancelled(t *testing.T) {
 	dir := t.TempDir()
-	op := NewFileSessionOperator(dir)
+	tenantID := "t1"
+	op := NewFileSessionOperator(dir, tenantID)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
@@ -303,22 +315,23 @@ func TestFileSessionOperator_ContextCancelled(t *testing.T) {
 		Messages: []SessionMessage{makeMessage("m1", UIMessage, ai.RoleUser, "hello")},
 	}
 
-	if err := op.SaveState(ctx, "sess-ctx", state); err == nil {
+	if err := op.SaveState(ctx, tenantID, "sess-ctx", state); err == nil {
 		t.Fatal("expected error from cancelled context, got nil")
 	}
 
-	if _, err := op.LoadState(ctx, "sess-ctx", All, 0); err == nil {
+	if _, err := op.LoadState(ctx, tenantID, "sess-ctx", All, 0); err == nil {
 		t.Fatal("expected error from cancelled context, got nil")
 	}
 
-	if err := op.DeleteSession(ctx, "sess-ctx"); err == nil {
+	if err := op.DeleteSession(ctx, tenantID, "sess-ctx"); err == nil {
 		t.Fatal("expected error from cancelled context, got nil")
 	}
 }
 
 func TestFileSessionOperator_PreservesLastConsolidateAt(t *testing.T) {
 	dir := t.TempDir()
-	op := NewFileSessionOperator(dir)
+	tenantID := "t1"
+	op := NewFileSessionOperator(dir, tenantID)
 	ctx := context.Background()
 
 	ts := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
@@ -327,16 +340,56 @@ func TestFileSessionOperator_PreservesLastConsolidateAt(t *testing.T) {
 		Messages:          []SessionMessage{makeMessage("m1", UIMessage, ai.RoleUser, "hello")},
 		LastConsolidateAt: ts,
 	}
-	if err := op.SaveState(ctx, "sess-lc", state); err != nil {
+	if err := op.SaveState(ctx, tenantID, "sess-lc", state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
 
-	loaded, err := op.LoadState(ctx, "sess-lc", All, 0)
+	loaded, err := op.LoadState(ctx, tenantID, "sess-lc", All, 0)
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
 	if !loaded.LastConsolidateAt.Equal(ts) {
 		t.Errorf("expected LastConsolidateAt %v, got %v", ts, loaded.LastConsolidateAt)
+	}
+}
+
+func TestFileSessionOperator_ListSessions(t *testing.T) {
+	dir := t.TempDir()
+	tenantID := "tenant-1"
+	op := NewFileSessionOperator(dir, tenantID)
+	ctx := context.Background()
+
+	state := SessionState{TenantID: tenantID, Messages: []SessionMessage{makeMessage("m1", UIMessage, ai.RoleUser, "hello")}}
+	if err := op.SaveState(ctx, tenantID, "sess-b", state); err != nil {
+		t.Fatalf("SaveState sess-b: %v", err)
+	}
+	if err := op.SaveState(ctx, tenantID, "sess-a", state); err != nil {
+		t.Fatalf("SaveState sess-a: %v", err)
+	}
+
+	got, err := op.ListSessions(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 sessions, got %d", len(got))
+	}
+	if got[0] != "sess-a" || got[1] != "sess-b" {
+		t.Fatalf("expected sorted [sess-a sess-b], got %v", got)
+	}
+}
+
+func TestFileSessionOperator_ListSessionsMissingTenant(t *testing.T) {
+	dir := t.TempDir()
+	op := NewFileSessionOperator(dir, "tenant-1")
+	ctx := context.Background()
+
+	got, err := op.ListSessions(ctx, "missing")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty list for missing tenant, got %v", got)
 	}
 }
 

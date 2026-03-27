@@ -973,7 +973,7 @@ func TestHeartbeatRun_SessionPersistence(t *testing.T) {
 	h.Run(ctx, time.Now())
 
 	// Verify session was created and has messages
-	sessData, err := store.Get(ctx, "hb-persist")
+	sessData, err := store.ForTenant("tenant-test").Get(ctx, "hb-persist")
 	if err != nil {
 		t.Fatalf("failed to load session: %v", err)
 	}
@@ -1013,7 +1013,7 @@ func TestHeartbeatRun_SessionPersistenceAcrossRuns(t *testing.T) {
 	h.Run(ctx, time.Now())
 	h.Run(ctx, time.Now())
 
-	sessData, err := store.Get(ctx, "hb-multi-run")
+	sessData, err := store.ForTenant("tenant-1").Get(ctx, "hb-multi-run")
 	if err != nil {
 		t.Fatalf("failed to load session: %v", err)
 	}
@@ -1048,7 +1048,7 @@ func TestHeartbeatRun_HeartbeatOrigin(t *testing.T) {
 
 	h.Run(ctx, time.Now())
 
-	sessData, err := store.Get(ctx, "hb-origin")
+	sessData, err := store.ForTenant("tenant-1").Get(ctx, "hb-origin")
 	if err != nil {
 		t.Fatalf("failed to load session: %v", err)
 	}

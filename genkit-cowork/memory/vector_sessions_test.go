@@ -88,9 +88,10 @@ func (m *mockVectorBackend) indexedCount(sessionID string) int {
 
 func TestVectorOperator_SaveState_IndexesNewMessages(t *testing.T) {
 	dir := t.TempDir()
-	base := NewFileSessionOperator(dir)
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir)
+	vop := NewVectorOperator(base, backend, dir, tenantID)
 	ctx := context.Background()
 
 	state := SessionState{
@@ -101,7 +102,7 @@ func TestVectorOperator_SaveState_IndexesNewMessages(t *testing.T) {
 		},
 	}
 
-	if err := vop.SaveState(ctx, "sess-1", state); err != nil {
+	if err := vop.SaveState(ctx, tenantID, "sess-1", state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
 
@@ -112,9 +113,10 @@ func TestVectorOperator_SaveState_IndexesNewMessages(t *testing.T) {
 
 func TestVectorOperator_SaveState_SkipsAlreadyIndexed(t *testing.T) {
 	dir := t.TempDir()
-	base := NewFileSessionOperator(dir)
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir)
+	vop := NewVectorOperator(base, backend, dir, tenantID)
 	ctx := context.Background()
 
 	state := SessionState{
@@ -123,13 +125,13 @@ func TestVectorOperator_SaveState_SkipsAlreadyIndexed(t *testing.T) {
 			makeMessage("m1", UIMessage, ai.RoleUser, "hello world"),
 		},
 	}
-	if err := vop.SaveState(ctx, "sess-1", state); err != nil {
+	if err := vop.SaveState(ctx, tenantID, "sess-1", state); err != nil {
 		t.Fatalf("SaveState 1: %v", err)
 	}
 
 	// Save again with an additional message.
 	state.Messages = append(state.Messages, makeMessage("m2", ModelMessage, ai.RoleModel, "reply"))
-	if err := vop.SaveState(ctx, "sess-1", state); err != nil {
+	if err := vop.SaveState(ctx, tenantID, "sess-1", state); err != nil {
 		t.Fatalf("SaveState 2: %v", err)
 	}
 
@@ -141,9 +143,10 @@ func TestVectorOperator_SaveState_SkipsAlreadyIndexed(t *testing.T) {
 
 func TestVectorOperator_SaveState_SkipsEmptyMessages(t *testing.T) {
 	dir := t.TempDir()
-	base := NewFileSessionOperator(dir)
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir)
+	vop := NewVectorOperator(base, backend, dir, tenantID)
 	ctx := context.Background()
 
 	state := SessionState{
@@ -157,7 +160,7 @@ func TestVectorOperator_SaveState_SkipsEmptyMessages(t *testing.T) {
 			},
 		},
 	}
-	if err := vop.SaveState(ctx, "sess-empty", state); err != nil {
+	if err := vop.SaveState(ctx, tenantID, "sess-empty", state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
 
@@ -168,9 +171,10 @@ func TestVectorOperator_SaveState_SkipsEmptyMessages(t *testing.T) {
 
 func TestVectorOperator_SaveState_SkipsNoMessageID(t *testing.T) {
 	dir := t.TempDir()
-	base := NewFileSessionOperator(dir)
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir)
+	vop := NewVectorOperator(base, backend, dir, tenantID)
 	ctx := context.Background()
 
 	state := SessionState{
@@ -184,7 +188,7 @@ func TestVectorOperator_SaveState_SkipsNoMessageID(t *testing.T) {
 			},
 		},
 	}
-	if err := vop.SaveState(ctx, "sess-noid", state); err != nil {
+	if err := vop.SaveState(ctx, tenantID, "sess-noid", state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
 
@@ -195,10 +199,11 @@ func TestVectorOperator_SaveState_SkipsNoMessageID(t *testing.T) {
 
 func TestVectorOperator_SaveState_IndexFailureRetriesNextSave(t *testing.T) {
 	dir := t.TempDir()
-	base := NewFileSessionOperator(dir)
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
 	backend.indexErr = errors.New("simulated index failure")
-	vop := NewVectorOperator(base, backend, dir)
+	vop := NewVectorOperator(base, backend, dir, tenantID)
 	ctx := context.Background()
 
 	state := SessionState{
@@ -209,19 +214,19 @@ func TestVectorOperator_SaveState_IndexFailureRetriesNextSave(t *testing.T) {
 	}
 
 	// First save: indexing fails but SaveState returns nil.
-	if err := vop.SaveState(ctx, "sess-retry", state); err != nil {
+	if err := vop.SaveState(ctx, tenantID, "sess-retry", state); err != nil {
 		t.Fatalf("SaveState should not error on index failure: %v", err)
 	}
 
 	// Verify no indexed IDs file was created (so retry happens).
-	idsPath := filepath.Join(dir, "sess-retry", "indexed_ids.json")
+	idsPath := filepath.Join(dir, tenantID, "sess-retry", "indexed_ids.json")
 	if _, err := os.Stat(idsPath); !errors.Is(err, os.ErrNotExist) {
 		t.Error("expected indexed_ids.json to not exist after index failure")
 	}
 
 	// Fix the backend and save again.
 	backend.indexErr = nil
-	if err := vop.SaveState(ctx, "sess-retry", state); err != nil {
+	if err := vop.SaveState(ctx, tenantID, "sess-retry", state); err != nil {
 		t.Fatalf("SaveState retry: %v", err)
 	}
 
@@ -233,20 +238,21 @@ func TestVectorOperator_SaveState_IndexFailureRetriesNextSave(t *testing.T) {
 
 func TestVectorOperator_LoadState_DelegatesToBase(t *testing.T) {
 	dir := t.TempDir()
-	base := NewFileSessionOperator(dir)
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir)
+	vop := NewVectorOperator(base, backend, dir, tenantID)
 	ctx := context.Background()
 
 	state := SessionState{
 		TenantID: "t1",
 		Messages: makeMessages(5),
 	}
-	if err := vop.SaveState(ctx, "sess-ld", state); err != nil {
+	if err := vop.SaveState(ctx, tenantID, "sess-ld", state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
 
-	loaded, err := vop.LoadState(ctx, "sess-ld", SlidingWindow, 2)
+	loaded, err := vop.LoadState(ctx, tenantID, "sess-ld", SlidingWindow, 2)
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
@@ -257,9 +263,10 @@ func TestVectorOperator_LoadState_DelegatesToBase(t *testing.T) {
 
 func TestVectorOperator_DeleteSession_CleansUpBackend(t *testing.T) {
 	dir := t.TempDir()
-	base := NewFileSessionOperator(dir)
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir)
+	vop := NewVectorOperator(base, backend, dir, tenantID)
 	ctx := context.Background()
 
 	state := SessionState{
@@ -268,11 +275,11 @@ func TestVectorOperator_DeleteSession_CleansUpBackend(t *testing.T) {
 			makeMessage("m1", UIMessage, ai.RoleUser, "hello"),
 		},
 	}
-	if err := vop.SaveState(ctx, "sess-del", state); err != nil {
+	if err := vop.SaveState(ctx, tenantID, "sess-del", state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
 
-	if err := vop.DeleteSession(ctx, "sess-del"); err != nil {
+	if err := vop.DeleteSession(ctx, tenantID, "sess-del"); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 
@@ -287,7 +294,7 @@ func TestVectorOperator_DeleteSession_CleansUpBackend(t *testing.T) {
 	}
 
 	// Session should be gone from base.
-	loaded, err := vop.LoadState(ctx, "sess-del", All, 0)
+	loaded, err := vop.LoadState(ctx, tenantID, "sess-del", All, 0)
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
@@ -298,9 +305,10 @@ func TestVectorOperator_DeleteSession_CleansUpBackend(t *testing.T) {
 
 func TestVectorOperator_DeleteSession_BackendError(t *testing.T) {
 	dir := t.TempDir()
-	base := NewFileSessionOperator(dir)
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir)
+	vop := NewVectorOperator(base, backend, dir, tenantID)
 	ctx := context.Background()
 
 	state := SessionState{
@@ -309,12 +317,12 @@ func TestVectorOperator_DeleteSession_BackendError(t *testing.T) {
 			makeMessage("m1", UIMessage, ai.RoleUser, "hello"),
 		},
 	}
-	if err := vop.SaveState(ctx, "sess-delerr", state); err != nil {
+	if err := vop.SaveState(ctx, tenantID, "sess-delerr", state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
 
 	backend.delErr = errors.New("simulated delete failure")
-	err := vop.DeleteSession(ctx, "sess-delerr")
+	err := vop.DeleteSession(ctx, tenantID, "sess-delerr")
 	if err == nil {
 		t.Fatal("expected error from backend delete failure, got nil")
 	}
@@ -322,9 +330,10 @@ func TestVectorOperator_DeleteSession_BackendError(t *testing.T) {
 
 func TestVectorOperator_Search(t *testing.T) {
 	dir := t.TempDir()
-	base := NewFileSessionOperator(dir)
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir)
+	vop := NewVectorOperator(base, backend, dir, tenantID)
 	ctx := context.Background()
 
 	state := SessionState{
@@ -335,12 +344,12 @@ func TestVectorOperator_Search(t *testing.T) {
 			makeMessage("m3", UIMessage, ai.RoleUser, "something unrelated"),
 		},
 	}
-	if err := vop.SaveState(ctx, "sess-search", state); err != nil {
+	if err := vop.SaveState(ctx, tenantID, "sess-search", state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
 
 	// Mock backend returns all indexed docs (up to topK).
-	results, err := vop.Search(ctx, "sess-search", "fox", 2)
+	results, err := vop.Search(ctx, tenantID, "sess-search", "fox", 2)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -351,12 +360,13 @@ func TestVectorOperator_Search(t *testing.T) {
 
 func TestVectorOperator_SearchZeroTopK(t *testing.T) {
 	dir := t.TempDir()
-	base := NewFileSessionOperator(dir)
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir)
+	vop := NewVectorOperator(base, backend, dir, tenantID)
 	ctx := context.Background()
 
-	results, err := vop.Search(ctx, "sess-x", "query", 0)
+	results, err := vop.Search(ctx, tenantID, "sess-x", "query", 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -367,12 +377,13 @@ func TestVectorOperator_SearchZeroTopK(t *testing.T) {
 
 func TestVectorOperator_SearchNonexistentSession(t *testing.T) {
 	dir := t.TempDir()
-	base := NewFileSessionOperator(dir)
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir)
+	vop := NewVectorOperator(base, backend, dir, tenantID)
 	ctx := context.Background()
 
-	results, err := vop.Search(ctx, "nope", "query", 5)
+	results, err := vop.Search(ctx, tenantID, "nope", "query", 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -383,9 +394,10 @@ func TestVectorOperator_SearchNonexistentSession(t *testing.T) {
 
 func TestVectorOperator_ContextCancelled(t *testing.T) {
 	dir := t.TempDir()
-	base := NewFileSessionOperator(dir)
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir)
+	vop := NewVectorOperator(base, backend, dir, tenantID)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -394,19 +406,19 @@ func TestVectorOperator_ContextCancelled(t *testing.T) {
 		Messages: []SessionMessage{makeMessage("m1", UIMessage, ai.RoleUser, "hello")},
 	}
 
-	if err := vop.SaveState(ctx, "sess-ctx", state); err == nil {
+	if err := vop.SaveState(ctx, tenantID, "sess-ctx", state); err == nil {
 		t.Fatal("expected error from cancelled context on SaveState")
 	}
 
-	if _, err := vop.LoadState(ctx, "sess-ctx", All, 0); err == nil {
+	if _, err := vop.LoadState(ctx, tenantID, "sess-ctx", All, 0); err == nil {
 		t.Fatal("expected error from cancelled context on LoadState")
 	}
 
-	if err := vop.DeleteSession(ctx, "sess-ctx"); err == nil {
+	if err := vop.DeleteSession(ctx, tenantID, "sess-ctx"); err == nil {
 		t.Fatal("expected error from cancelled context on DeleteSession")
 	}
 
-	if _, err := vop.Search(ctx, "sess-ctx", "query", 5); err == nil {
+	if _, err := vop.Search(ctx, tenantID, "sess-ctx", "query", 5); err == nil {
 		t.Fatal("expected error from cancelled context on Search")
 	}
 }

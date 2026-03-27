@@ -38,6 +38,7 @@ type VectorBackend interface {
 // LocalVecConfig configures the localvec-backed VectorBackend implementation.
 type LocalVecConfig struct {
 	Embedder        ai.Embedder
+	TenantID        string
 	OverFetchFactor int
 }
 
@@ -57,7 +58,10 @@ func NewLocalVecBackend(g *genkit.Genkit, name string, cfg LocalVecConfig) (Vect
 	ds, retriever, err := localvec.DefineRetriever(
 		g,
 		name,
-		localvec.Config{Embedder: cfg.Embedder},
+		localvec.Config{
+			Dir:      cfg.TenantID,
+			Embedder: cfg.Embedder,
+		},
 		nil,
 	)
 	if err != nil {

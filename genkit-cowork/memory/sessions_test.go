@@ -73,6 +73,7 @@ func makeMessages(n int) []SessionMessage {
 func TestDefaultSessionOperator_SaveAndLoad(t *testing.T) {
 	ctx := context.Background()
 	op := &defaultSessionOperator{}
+	tenantID := "tenant-1"
 
 	state := SessionState{
 		TenantID: "tenant-1",
@@ -82,11 +83,11 @@ func TestDefaultSessionOperator_SaveAndLoad(t *testing.T) {
 		},
 	}
 
-	if err := op.SaveState(ctx, "sess-1", state); err != nil {
+	if err := op.SaveState(ctx, tenantID, "sess-1", state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
 
-	loaded, err := op.LoadState(ctx, "sess-1", All, 0)
+	loaded, err := op.LoadState(ctx, tenantID, "sess-1", All, 0)
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
@@ -104,8 +105,9 @@ func TestDefaultSessionOperator_SaveAndLoad(t *testing.T) {
 func TestDefaultSessionOperator_LoadNonexistent(t *testing.T) {
 	ctx := context.Background()
 	op := &defaultSessionOperator{}
+	tenantID := "tenant-1"
 
-	state, err := op.LoadState(ctx, "does-not-exist", All, 0)
+	state, err := op.LoadState(ctx, tenantID, "does-not-exist", All, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -117,20 +119,21 @@ func TestDefaultSessionOperator_LoadNonexistent(t *testing.T) {
 func TestDefaultSessionOperator_Delete(t *testing.T) {
 	ctx := context.Background()
 	op := &defaultSessionOperator{}
+	tenantID := "tenant-1"
 
 	state := SessionState{
 		TenantID: "tenant-1",
 		Messages: []SessionMessage{makeMessage("m1", UIMessage, ai.RoleUser, "hello")},
 	}
-	if err := op.SaveState(ctx, "sess-del", state); err != nil {
+	if err := op.SaveState(ctx, tenantID, "sess-del", state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
 
-	if err := op.DeleteSession(ctx, "sess-del"); err != nil {
+	if err := op.DeleteSession(ctx, tenantID, "sess-del"); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 
-	loaded, err := op.LoadState(ctx, "sess-del", All, 0)
+	loaded, err := op.LoadState(ctx, tenantID, "sess-del", All, 0)
 	if err != nil {
 		t.Fatalf("LoadState after delete: %v", err)
 	}
@@ -142,28 +145,90 @@ func TestDefaultSessionOperator_Delete(t *testing.T) {
 func TestDefaultSessionOperator_DeleteNonexistent(t *testing.T) {
 	ctx := context.Background()
 	op := &defaultSessionOperator{}
+	tenantID := "tenant-1"
 
 	// Should not error when deleting a session that doesn't exist.
-	if err := op.DeleteSession(ctx, "never-existed"); err != nil {
+	if err := op.DeleteSession(ctx, tenantID, "never-existed"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDefaultSessionOperator_ListSessions(t *testing.T) {
+	ctx := context.Background()
+	op := &defaultSessionOperator{}
+
+	if err := op.SaveState(ctx, "tenant-a", "sess-2", SessionState{TenantID: "tenant-a"}); err != nil {
+		t.Fatalf("SaveState tenant-a/sess-2: %v", err)
+	}
+	if err := op.SaveState(ctx, "tenant-a", "sess-1", SessionState{TenantID: "tenant-a"}); err != nil {
+		t.Fatalf("SaveState tenant-a/sess-1: %v", err)
+	}
+	if err := op.SaveState(ctx, "tenant-b", "sess-x", SessionState{TenantID: "tenant-b"}); err != nil {
+		t.Fatalf("SaveState tenant-b/sess-x: %v", err)
+	}
+
+	got, err := op.ListSessions(ctx, "tenant-a")
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 sessions, got %d", len(got))
+	}
+	if got[0] != "sess-1" || got[1] != "sess-2" {
+		t.Fatalf("expected sorted [sess-1 sess-2], got %v", got)
+	}
+}
+
+func TestDefaultSessionOperator_ListSessionsMissingTenant(t *testing.T) {
+	ctx := context.Background()
+	op := &defaultSessionOperator{}
+
+	got, err := op.ListSessions(ctx, "missing")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty list for missing tenant, got %v", got)
+	}
+}
+
+func TestDefaultSessionOperator_ContextCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	op := &defaultSessionOperator{}
+
+	state := SessionState{TenantID: "tenant-1"}
+
+	if err := op.SaveState(ctx, "tenant-1", "sess-1", state); err == nil {
+		t.Fatal("expected SaveState to fail with cancelled context")
+	}
+	if _, err := op.LoadState(ctx, "tenant-1", "sess-1", All, 0); err == nil {
+		t.Fatal("expected LoadState to fail with cancelled context")
+	}
+	if err := op.DeleteSession(ctx, "tenant-1", "sess-1"); err == nil {
+		t.Fatal("expected DeleteSession to fail with cancelled context")
+	}
+	if _, err := op.ListSessions(ctx, "tenant-1"); err == nil {
+		t.Fatal("expected ListSessions to fail with cancelled context")
 	}
 }
 
 func TestDefaultSessionOperator_DeepCopyOnSave(t *testing.T) {
 	ctx := context.Background()
 	op := &defaultSessionOperator{}
+	tenantID := "t1"
 
 	msgs := []SessionMessage{makeMessage("m1", UIMessage, ai.RoleUser, "original")}
 	state := SessionState{TenantID: "t1", Messages: msgs}
 
-	if err := op.SaveState(ctx, "sess-copy", state); err != nil {
+	if err := op.SaveState(ctx, tenantID, "sess-copy", state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
 
 	// Mutate the original slice after save.
 	msgs[0].Origin = EmailMessage
 
-	loaded, err := op.LoadState(ctx, "sess-copy", All, 0)
+	loaded, err := op.LoadState(ctx, tenantID, "sess-copy", All, 0)
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
@@ -175,12 +240,13 @@ func TestDefaultSessionOperator_DeepCopyOnSave(t *testing.T) {
 func TestDefaultSessionOperator_OverwriteOnSave(t *testing.T) {
 	ctx := context.Background()
 	op := &defaultSessionOperator{}
+	tenantID := "t1"
 
 	state1 := SessionState{
 		TenantID: "t1",
 		Messages: []SessionMessage{makeMessage("m1", UIMessage, ai.RoleUser, "first")},
 	}
-	if err := op.SaveState(ctx, "sess-ow", state1); err != nil {
+	if err := op.SaveState(ctx, tenantID, "sess-ow", state1); err != nil {
 		t.Fatalf("SaveState 1: %v", err)
 	}
 
@@ -191,16 +257,16 @@ func TestDefaultSessionOperator_OverwriteOnSave(t *testing.T) {
 			makeMessage("m2", ModelMessage, ai.RoleModel, "second"),
 		},
 	}
-	if err := op.SaveState(ctx, "sess-ow", state2); err != nil {
+	if err := op.SaveState(ctx, tenantID, "sess-ow", state2); err != nil {
 		t.Fatalf("SaveState 2: %v", err)
 	}
 
-	loaded, err := op.LoadState(ctx, "sess-ow", All, 0)
+	loaded, err := op.LoadState(ctx, tenantID, "sess-ow", All, 0)
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	if loaded.TenantID != "t1-updated" {
-		t.Errorf("expected tenant t1-updated, got %q", loaded.TenantID)
+	if loaded.TenantID != tenantID {
+		t.Errorf("expected tenant %q, got %q", tenantID, loaded.TenantID)
 	}
 	if len(loaded.Messages) != 2 {
 		t.Errorf("expected 2 messages, got %d", len(loaded.Messages))
@@ -317,7 +383,7 @@ func TestCopyMessages_Independence(t *testing.T) {
 // --- Session (public API) ---
 
 func TestNewSession_Defaults(t *testing.T) {
-	s := NewSession()
+	s := NewSession(WithTenantID("tenant-1"))
 	if s.opts.mode != All {
 		t.Errorf("expected default mode All, got %d", s.opts.mode)
 	}
@@ -361,7 +427,7 @@ func TestSession_GetNonexistentReturnsNil(t *testing.T) {
 
 func TestSession_SaveAndGet(t *testing.T) {
 	ctx := context.Background()
-	s := NewSession()
+	s := NewSession(WithTenantID("tenant-1"))
 
 	state := SessionState{
 		TenantID: "tenant-1",

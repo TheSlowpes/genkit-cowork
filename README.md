@@ -382,10 +382,10 @@ genkit-cowork/
 ├── memory/             # Session persistence and retrieval
 │   ├── sessions.go           # Session store, message models, persistence modes
 │   ├── assets.go             # Session asset model and media asset store interface
-│   ├── file-assets.go        # Filesystem media asset store implementation
-│   ├── file-sessions.go      # File-backed SessionOperator (JSON + atomic write)
-│   ├── vector-sessions.go    # VectorOperator wrapper + semantic search
-│   └── vector-backend.go     # Vector backend interface + localvec backend
+│   ├── file_assets.go        # Filesystem media asset store implementation
+│   ├── file_sessions.go      # File-backed SessionOperator (JSON + atomic write)
+│   ├── vector_sessions.go    # VectorOperator wrapper + semantic search
+│   └── vector_backend.go     # Vector backend interface + localvec backend
 └── utils/              # Shared utilities
     └── shell.go              # Shell environment management
 ```
