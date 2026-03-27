@@ -188,7 +188,7 @@ func NewHandleMessageFlow(
 					MessageCount: messageCount,
 					Events: []memory.TurnEvent{
 						{Type: "flow.input", Timestamp: turn.StartedAt, Metadata: map[string]any{"sessionID": input.SessionID, "loopTurn": turn.TurnNumber}},
-						{Type: "flow.output", Timestamp: turn.EndedAt, Metadata: map[string]any{"finishReason": turn.FinishReason, "toolRequests": turn.ToolRequestCount, "toolResponses": turn.ToolResponsePartCount}},
+						{Type: "flow.output", Timestamp: turn.EndedAt, Metadata: map[string]any{"finishReason": turn.FinishReason, "toolRequests": turn.ToolRequestCount, "toolResponses": turn.ToolResponsePartCount, "inputTokens": turn.InputTokens, "outputTokens": turn.OutputTokens, "totalTokens": turn.TotalTokens}},
 					},
 				})
 			}

@@ -43,6 +43,15 @@ type TurnRecord struct {
 	Events               []TurnEvent `json:"events,omitempty"`
 }
 
+// ValidateSessionLedger validates append-only and sequencing invariants for a
+// complete session ledger state.
+//
+// This validation is storage-agnostic and can be used by operators, tests,
+// migrations, or diagnostic tooling before persisting or after loading state.
+func ValidateSessionLedger(state SessionState) error {
+	return validateAppendOnlyState(SessionState{}, state)
+}
+
 func validateAppendOnlyState(existing, incoming SessionState) error {
 	if len(incoming.Messages) < len(existing.Messages) {
 		return fmt.Errorf("append-only violation: messages truncated from %d to %d", len(existing.Messages), len(incoming.Messages))

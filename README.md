@@ -235,8 +235,11 @@ Memory is implemented through a `Session` store plus pluggable `SessionOperator`
 | Type | Constructor / API | Description |
 |------|-------------------|-------------|
 | Session store | `NewSession(...opts)` | Implements `session.Store[SessionState]` for Genkit flows |
-| Persistence mode | `WithPersistenceMode(mode, n)` | Load behavior: `All`, `SlidingWindow`, `TailEndsPruning` |
+| Persistence mode | `WithPersistenceMode(mode, n)` | Load behavior: `All`, `SlidingWindow`, `TailEndsPruning`, `TokenBudget` |
 | Media asset store | `WithMediaAssetStore(store)` | Normalizes media data URI parts into persisted files and tracks `SessionAsset` metadata |
+| Tenant binding | `WithTenantID(id)` / `ForTenant(id)` | Scopes `Get`/`Save` operations to a tenant in a `session.Store`-compatible API |
+| Ledger validation | `ValidateSessionLedger(state)` | Validates append-only sequencing and immutable-prefix constraints for a session ledger |
+| Replay window | `MessagesForTurn(state, turn)` | Reconstructs the exact message slice represented by a persisted turn sequence range |
 | In-memory backend | default (`defaultSessionOperator`) | Process-local map-based state storage |
 | File backend | `NewFileSessionOperator(rootDir)` | Durable JSON state at `rootDir/{sessionID}/state.json` |
 | Vector wrapper | `NewVectorOperator(base, backend, rootDir)` | Wraps a base operator and indexes new messages for semantic retrieval |
@@ -381,6 +384,8 @@ genkit-cowork/
 │   └── mime.go               # MIME detection, image resizing
 ├── memory/             # Session persistence and retrieval
 │   ├── sessions.go           # Session store, message models, persistence modes
+│   ├── turns.go              # Turn ledger records and ledger validation
+│   ├── snapshots.go          # State snapshot records and checksum support
 │   ├── assets.go             # Session asset model and media asset store interface
 │   ├── file_assets.go        # Filesystem media asset store implementation
 │   ├── file_sessions.go      # File-backed SessionOperator (JSON + atomic write)

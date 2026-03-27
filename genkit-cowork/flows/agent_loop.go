@@ -138,6 +138,9 @@ type AgentLoopTurn struct {
 	EndedAt                time.Time             `json:"endedAt"`
 	ResponseRole           ai.Role               `json:"responseRole"`
 	FinishReason           string                `json:"finishReason"`
+	InputTokens            int                   `json:"inputTokens,omitempty"`
+	OutputTokens           int                   `json:"outputTokens,omitempty"`
+	TotalTokens            int                   `json:"totalTokens,omitempty"`
 	PersistedMessageCount  int                   `json:"persistedMessageCount"`
 	ToolRequestCount       int                   `json:"toolRequestCount,omitempty"`
 	ToolResponsePartCount  int                   `json:"toolResponsePartCount,omitempty"`
@@ -241,6 +244,20 @@ func agentLoopHandler(ctx context.Context, input *AgentLoopInput, options *agent
 				Error:     err,
 			})
 			return nil, fmt.Errorf("generate response: %w", err)
+		}
+
+		if response.Usage != nil {
+			turnRecord.InputTokens = response.Usage.InputTokens
+			turnRecord.OutputTokens = response.Usage.OutputTokens
+			turnRecord.TotalTokens = response.Usage.TotalTokens
+			if response.Message.Metadata == nil {
+				response.Message.Metadata = make(map[string]any)
+			}
+			response.Message.Metadata["generationUsage"] = map[string]any{
+				"inputTokens":  response.Usage.InputTokens,
+				"outputTokens": response.Usage.OutputTokens,
+				"totalTokens":  response.Usage.TotalTokens,
+			}
 		}
 
 		// After a resume turn, Genkit's handleResumeOption internally creates a

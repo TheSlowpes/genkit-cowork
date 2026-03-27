@@ -827,3 +827,39 @@ func TestMessagesForTurn_ErrorsOnInvalidBounds(t *testing.T) {
 		t.Fatal("expected error for missing first sequence")
 	}
 }
+
+func TestValidateSessionLedger_AcceptsValidState(t *testing.T) {
+	state := SessionState{
+		Messages: []SessionMessage{
+			{MessageID: "m1", Sequence: 1},
+			{MessageID: "m2", Sequence: 2},
+		},
+		Turns: []TurnRecord{
+			{
+				TurnID:               "t1",
+				Sequence:             1,
+				FirstMessageSequence: 1,
+				LastMessageSequence:  2,
+				MessageCount:         2,
+			},
+		},
+		Snapshots: []StateSnapshot{{SnapshotID: "s1", Sequence: 1}},
+	}
+
+	if err := ValidateSessionLedger(state); err != nil {
+		t.Fatalf("ValidateSessionLedger(valid): %v", err)
+	}
+}
+
+func TestValidateSessionLedger_RejectsNonMonotonicSequences(t *testing.T) {
+	state := SessionState{
+		Messages: []SessionMessage{
+			{MessageID: "m1", Sequence: 2},
+			{MessageID: "m2", Sequence: 1},
+		},
+	}
+
+	if err := ValidateSessionLedger(state); err == nil {
+		t.Fatal("expected ValidateSessionLedger to fail for non-monotonic sequences")
+	}
+}

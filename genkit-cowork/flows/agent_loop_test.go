@@ -126,7 +126,9 @@ func TestAgentLoop_SingleTurnNoTools(t *testing.T) {
 	ctx := context.Background()
 	g := newGenkitInstance(ctx)
 	mockDefineModel(g, "single-turn", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		return textResponse("Hello, world!"), nil
+		res := textResponse("Hello, world!")
+		res.Usage = &ai.GenerationUsage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15}
+		return res, nil
 	})
 
 	agentLoop := NewAgentLoop(g)
@@ -161,6 +163,9 @@ func TestAgentLoop_SingleTurnNoTools(t *testing.T) {
 	}
 	if output.TurnRecords[0].PersistedMessageCount != 1 {
 		t.Errorf("expected persisted message count 1, got %d", output.TurnRecords[0].PersistedMessageCount)
+	}
+	if output.TurnRecords[0].TotalTokens != 15 {
+		t.Errorf("expected total tokens 15, got %d", output.TurnRecords[0].TotalTokens)
 	}
 }
 

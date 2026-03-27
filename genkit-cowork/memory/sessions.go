@@ -292,12 +292,14 @@ func KindForMessage(role ai.Role) MessageKind {
 type SessionOption func(*sessionOptions)
 
 type sessionOptions struct {
-	mode      PersistenceMode
-	nMessages int // used for SlidingWindow and TailEndsPruning modes
+	mode        PersistenceMode
+	nMessages   int // used for SlidingWindow and TailEndsPruning modes
+	tokenBudget int
 
-	operator   SessionOperator
-	assetStore MediaAssetStore
-	tenantID   string
+	operator       SessionOperator
+	assetStore     MediaAssetStore
+	tenantID       string
+	tokenEstimator TokenEstimator
 }
 
 // WithPersistenceMode sets the filtering mode used when loading messages from
@@ -344,6 +346,8 @@ const (
 	SlidingWindow
 	// TailEndsPruning loads the first N and last N messages.
 	TailEndsPruning
+	// TokenBudget loads as much recent history as fits in a token budget.
+	TokenBudget
 )
 
 // Session is a Genkit session store implementation backed by SessionOperator.
@@ -364,9 +368,10 @@ func (s *Session) ForTenant(tenantID string) *Session {
 // NewSession creates a new session store.
 func NewSession(opts ...SessionOption) *Session {
 	options := sessionOptions{
-		mode:     All,
-		operator: &defaultSessionOperator{},
-		tenantID: "default",
+		mode:           All,
+		operator:       &defaultSessionOperator{},
+		tenantID:       "default",
+		tokenEstimator: generationUsageTokenEstimator{},
 	}
 	for _, opt := range opts {
 		opt(&options)
@@ -378,7 +383,14 @@ var _ session.Store[SessionState] = (*Session)(nil)
 
 // Get loads session state by ID.
 func (s *Session) Get(ctx context.Context, sessionID string) (*session.Data[SessionState], error) {
-	state, err := s.opts.operator.LoadState(ctx, s.opts.tenantID, sessionID, s.opts.mode, s.opts.nMessages)
+	loadMode := s.opts.mode
+	loadN := s.opts.nMessages
+	if s.opts.mode == TokenBudget {
+		loadMode = All
+		loadN = 0
+	}
+
+	state, err := s.opts.operator.LoadState(ctx, s.opts.tenantID, sessionID, loadMode, loadN)
 	if err != nil {
 		return nil, err
 	}
@@ -387,8 +399,22 @@ func (s *Session) Get(ctx context.Context, sessionID string) (*session.Data[Sess
 	}
 	return &session.Data[SessionState]{
 		ID:    sessionID,
-		State: *state,
+		State: s.applyLoadPruning(*state),
 	}, nil
+}
+
+func (s *Session) applyLoadPruning(state SessionState) SessionState {
+	if s.opts.mode != TokenBudget {
+		return state
+	}
+
+	pruned := state
+	trimmed, err := applyTokenBudget(state.Messages, s.opts.tokenBudget, s.opts.tokenEstimator)
+	if err != nil {
+		return state
+	}
+	pruned.Messages = trimmed
+	return pruned
 }
 
 // Save persists the provided session state, assigning IDs and timestamps when
@@ -654,4 +680,23 @@ func MessagesForTurn(state SessionState, turn TurnRecord) ([]SessionMessage, err
 	}
 
 	return window, nil
+}
+
+// WithTokenBudget configures load-time token-budget pruning.
+//
+// budget is interpreted by the configured TokenEstimator and only applies when
+// mode is TokenBudget.
+func WithTokenBudget(budget int) SessionOption {
+	return func(opts *sessionOptions) {
+		opts.mode = TokenBudget
+		opts.nMessages = budget
+		opts.tokenBudget = budget
+	}
+}
+
+// WithTokenEstimator sets the token estimator used by TokenBudget mode.
+func WithTokenEstimator(estimator TokenEstimator) SessionOption {
+	return func(opts *sessionOptions) {
+		opts.tokenEstimator = estimator
+	}
 }

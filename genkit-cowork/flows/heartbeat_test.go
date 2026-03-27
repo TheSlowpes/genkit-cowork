@@ -1034,6 +1034,19 @@ func TestHeartbeatRun_SessionPersistenceAcrossRuns(t *testing.T) {
 	if len(sessData.State.Turns) < 2 {
 		t.Errorf("expected at least 2 turns from 2 runs, got %d", len(sessData.State.Turns))
 	}
+	for i := range sessData.State.Turns {
+		turn := sessData.State.Turns[i]
+		window, err := memory.MessagesForTurn(sessData.State, turn)
+		if err != nil {
+			t.Fatalf("MessagesForTurn(turn=%d): %v", i, err)
+		}
+		if len(window) != turn.MessageCount {
+			t.Fatalf("turn %d window size = %d, want %d", i, len(window), turn.MessageCount)
+		}
+		if turn.FlowName != "heartbeat" {
+			t.Fatalf("turn %d flow = %q, want heartbeat", i, turn.FlowName)
+		}
+	}
 }
 
 func TestHeartbeatRun_HeartbeatOrigin(t *testing.T) {
