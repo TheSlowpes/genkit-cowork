@@ -31,7 +31,7 @@ import (
 
 type mockVectorBackend struct {
 	mu       sync.Mutex
-	indexed  map[string][]*ai.Document
+	indexed  map[string]map[string][]*ai.Document
 	indexErr error
 	deleted  []string
 	delErr   error
@@ -39,25 +39,30 @@ type mockVectorBackend struct {
 
 func newMockVectorBackend() *mockVectorBackend {
 	return &mockVectorBackend{
-		indexed: make(map[string][]*ai.Document),
+		indexed: make(map[string]map[string][]*ai.Document),
 	}
 }
 
-func (m *mockVectorBackend) Index(ctx context.Context, sessionID string, docs []*ai.Document) error {
+func (m *mockVectorBackend) Index(ctx context.Context, tenantID, sessionID string, docs []*ai.Document) error {
 	if m.indexErr != nil {
 		return m.indexErr
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.indexed[sessionID] = append(m.indexed[sessionID], docs...)
+	if _, ok := m.indexed[tenantID]; !ok {
+		m.indexed[tenantID] = make(map[string][]*ai.Document)
+	}
+	m.indexed[tenantID][sessionID] = append(m.indexed[tenantID][sessionID], docs...)
 	return nil
 }
 
-func (m *mockVectorBackend) Retrieve(ctx context.Context, sessionID, query string, topK int) ([]*ai.Document, error) {
+func (m *mockVectorBackend) RetrieveTenant(ctx context.Context, tenantID, query string, topK int) ([]*ai.Document, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	docs := m.indexed[sessionID]
+	var docs []*ai.Document
+	for _, sessDocs := range m.indexed[tenantID] {
+		docs = append(docs, sessDocs...)
+	}
 	if len(docs) == 0 {
 		return nil, nil
 	}
@@ -67,21 +72,37 @@ func (m *mockVectorBackend) Retrieve(ctx context.Context, sessionID, query strin
 	return docs[:topK], nil
 }
 
-func (m *mockVectorBackend) Delete(ctx context.Context, sessionID string) error {
+func (m *mockVectorBackend) RetrieveSession(ctx context.Context, tenantID, sessionID, query string, topK int) ([]*ai.Document, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	docs := m.indexed[tenantID][sessionID]
+	if len(docs) == 0 {
+		return nil, nil
+	}
+	if topK > len(docs) {
+		topK = len(docs)
+	}
+	return docs[:topK], nil
+}
+
+func (m *mockVectorBackend) Delete(ctx context.Context, tenantID, sessionID string) error {
 	if m.delErr != nil {
 		return m.delErr
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.deleted = append(m.deleted, sessionID)
-	delete(m.indexed, sessionID)
+	m.deleted = append(m.deleted, tenantID+"/"+sessionID)
+	if _, ok := m.indexed[tenantID]; ok {
+		delete(m.indexed[tenantID], sessionID)
+	}
 	return nil
 }
 
-func (m *mockVectorBackend) indexedCount(sessionID string) int {
+func (m *mockVectorBackend) indexedCount(tenantID, sessionID string) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return len(m.indexed[sessionID])
+	return len(m.indexed[tenantID][sessionID])
 }
 
 // --- VectorOperator tests ---
@@ -106,7 +127,7 @@ func TestVectorOperator_SaveState_IndexesNewMessages(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 
-	if c := backend.indexedCount("sess-1"); c != 2 {
+	if c := backend.indexedCount(tenantID, "sess-1"); c != 2 {
 		t.Errorf("expected 2 indexed docs, got %d", c)
 	}
 }
@@ -136,7 +157,7 @@ func TestVectorOperator_SaveState_SkipsAlreadyIndexed(t *testing.T) {
 	}
 
 	// Only m2 should have been newly indexed.
-	if c := backend.indexedCount("sess-1"); c != 2 {
+	if c := backend.indexedCount(tenantID, "sess-1"); c != 2 {
 		t.Errorf("expected 2 total indexed docs (1 + 1), got %d", c)
 	}
 }
@@ -164,7 +185,7 @@ func TestVectorOperator_SaveState_SkipsEmptyMessages(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 
-	if c := backend.indexedCount("sess-empty"); c != 0 {
+	if c := backend.indexedCount(tenantID, "sess-empty"); c != 0 {
 		t.Errorf("expected 0 indexed docs for empty content, got %d", c)
 	}
 }
@@ -192,7 +213,7 @@ func TestVectorOperator_SaveState_SkipsNoMessageID(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 
-	if c := backend.indexedCount("sess-noid"); c != 0 {
+	if c := backend.indexedCount(tenantID, "sess-noid"); c != 0 {
 		t.Errorf("expected 0 indexed docs for missing ID, got %d", c)
 	}
 }
@@ -231,7 +252,7 @@ func TestVectorOperator_SaveState_IndexFailureRetriesNextSave(t *testing.T) {
 	}
 
 	// Now it should be indexed.
-	if c := backend.indexedCount("sess-retry"); c != 1 {
+	if c := backend.indexedCount(tenantID, "sess-retry"); c != 1 {
 		t.Errorf("expected 1 indexed doc after retry, got %d", c)
 	}
 }
@@ -284,12 +305,12 @@ func TestVectorOperator_DeleteSession_CleansUpBackend(t *testing.T) {
 	}
 
 	// Backend should have received Delete call.
-	if len(backend.deleted) != 1 || backend.deleted[0] != "sess-del" {
+	if len(backend.deleted) != 1 || backend.deleted[0] != tenantID+"/sess-del" {
 		t.Errorf("expected backend.Delete called with sess-del, got %v", backend.deleted)
 	}
 
 	// Indexed docs should be gone.
-	if c := backend.indexedCount("sess-del"); c != 0 {
+	if c := backend.indexedCount(tenantID, "sess-del"); c != 0 {
 		t.Errorf("expected 0 indexed docs after delete, got %d", c)
 	}
 
@@ -355,6 +376,42 @@ func TestVectorOperator_Search(t *testing.T) {
 	}
 	if len(results) != 2 {
 		t.Errorf("expected 2 results, got %d", len(results))
+	}
+}
+
+func TestVectorOperator_SearchTenantAcrossSessions(t *testing.T) {
+	dir := t.TempDir()
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
+	backend := newMockVectorBackend()
+	vop := NewVectorOperator(base, backend, dir, tenantID)
+	ctx := context.Background()
+
+	stateA := SessionState{
+		TenantID: tenantID,
+		Messages: []SessionMessage{
+			makeMessage("a1", UIMessage, ai.RoleUser, "invoice for march"),
+		},
+	}
+	stateB := SessionState{
+		TenantID: tenantID,
+		Messages: []SessionMessage{
+			makeMessage("b1", UIMessage, ai.RoleUser, "invoice for april"),
+		},
+	}
+	if err := vop.SaveState(ctx, tenantID, "sess-a", stateA); err != nil {
+		t.Fatalf("SaveState sess-a: %v", err)
+	}
+	if err := vop.SaveState(ctx, tenantID, "sess-b", stateB); err != nil {
+		t.Fatalf("SaveState sess-b: %v", err)
+	}
+
+	results, err := vop.SearchTenant(ctx, tenantID, "invoice", 5)
+	if err != nil {
+		t.Fatalf("SearchTenant: %v", err)
+	}
+	if len(results) < 2 {
+		t.Fatalf("expected at least 2 tenant results, got %d", len(results))
 	}
 }
 

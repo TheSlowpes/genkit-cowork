@@ -104,7 +104,7 @@ func (v *VectorOperator) SaveState(ctx context.Context, tenantID, sessionID stri
 		return nil
 	}
 
-	if err := v.backend.Index(ctx, sessionID, newDocs); err != nil {
+	if err := v.backend.Index(ctx, tenantID, sessionID, newDocs); err != nil {
 		slog.WarnContext(ctx, "vector indexing failed, messages will be retried on next save",
 			"sessionID", sessionID,
 			"messageCount", len(newDocs),
@@ -146,7 +146,7 @@ func (v *VectorOperator) DeleteSession(ctx context.Context, tenantID, sessionID 
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
-	if err := v.backend.Delete(ctx, sessionID); err != nil {
+	if err := v.backend.Delete(ctx, tenantID, sessionID); err != nil {
 		return fmt.Errorf("vector backend delete: %w", err)
 	}
 
@@ -159,6 +159,12 @@ func (v *VectorOperator) DeleteSession(ctx context.Context, tenantID, sessionID 
 
 // Search retrieves semantically similar messages for a tenant session.
 func (v *VectorOperator) Search(ctx context.Context, tenantID, sessionID, query string, topK int) ([]SessionMessage, error) {
+	return v.SearchSession(ctx, tenantID, sessionID, query, topK)
+}
+
+// SearchSession retrieves semantically similar messages scoped to one tenant
+// session.
+func (v *VectorOperator) SearchSession(ctx context.Context, tenantID, sessionID, query string, topK int) ([]SessionMessage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("vector operator: context cancelled: %w", err)
 	}
@@ -167,7 +173,7 @@ func (v *VectorOperator) Search(ctx context.Context, tenantID, sessionID, query 
 		return nil, nil
 	}
 
-	docs, err := v.backend.Retrieve(ctx, sessionID, query, topK)
+	docs, err := v.backend.RetrieveSession(ctx, tenantID, sessionID, query, topK)
 	if err != nil {
 		return nil, fmt.Errorf("vector backend retrieve: %w", err)
 	}
@@ -197,6 +203,60 @@ func (v *VectorOperator) Search(ctx context.Context, tenantID, sessionID, query 
 		}
 		results = append(results, msg)
 	}
+	return results, nil
+}
+
+// SearchTenant retrieves semantically similar messages across all sessions in a
+// tenant.
+func (v *VectorOperator) SearchTenant(ctx context.Context, tenantID, query string, topK int) ([]SessionMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("vector operator: context cancelled: %w", err)
+	}
+
+	if topK <= 0 {
+		return nil, nil
+	}
+
+	docs, err := v.backend.RetrieveTenant(ctx, tenantID, query, topK)
+	if err != nil {
+		return nil, fmt.Errorf("vector backend retrieve tenant: %w", err)
+	}
+	if len(docs) == 0 {
+		return nil, nil
+	}
+
+	sessionIDs, err := v.base.ListSessions(ctx, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list tenant sessions: %w", err)
+	}
+
+	msgByID := make(map[string]SessionMessage)
+	for _, sid := range sessionIDs {
+		state, err := v.base.LoadState(ctx, tenantID, sid, All, 0)
+		if err != nil {
+			return nil, fmt.Errorf("load session state %q: %w", sid, err)
+		}
+		if state == nil {
+			continue
+		}
+		for _, msg := range state.Messages {
+			msgByID[msg.MessageID] = msg
+		}
+	}
+
+	var results []SessionMessage
+	for _, doc := range docs {
+		messageID, _ := doc.Metadata["messageID"].(string)
+		msg, ok := msgByID[messageID]
+		if !ok {
+			continue
+		}
+		results = append(results, msg)
+		if len(results) >= topK {
+			break
+		}
+	}
+
 	return results, nil
 }
 

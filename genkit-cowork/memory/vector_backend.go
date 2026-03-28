@@ -30,9 +30,10 @@ import (
 // VectorBackend defines indexing and retrieval operations used by
 // VectorOperator.
 type VectorBackend interface {
-	Index(ctx context.Context, sessionID string, docs []*ai.Document) error
-	Retrieve(ctx context.Context, sessionID, query string, topK int) ([]*ai.Document, error)
-	Delete(ctx context.Context, sessionID string) error
+	Index(ctx context.Context, tenantID, sessionID string, docs []*ai.Document) error
+	RetrieveTenant(ctx context.Context, tenantID, query string, topK int) ([]*ai.Document, error)
+	RetrieveSession(ctx context.Context, tenantID, sessionID, query string, topK int) ([]*ai.Document, error)
+	Delete(ctx context.Context, tenantID, sessionID string) error
 }
 
 // LocalVecConfig configures the localvec-backed VectorBackend implementation.
@@ -80,7 +81,7 @@ func NewLocalVecBackend(g *genkit.Genkit, name string, cfg LocalVecConfig) (Vect
 	}, nil
 }
 
-func (b *localVecBackend) Index(ctx context.Context, sessionID string, docs []*ai.Document) error {
+func (b *localVecBackend) Index(ctx context.Context, tenantID, sessionID string, docs []*ai.Document) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("localvec index: context cancelled: %w", err)
 	}
@@ -89,6 +90,7 @@ func (b *localVecBackend) Index(ctx context.Context, sessionID string, docs []*a
 		if doc.Metadata == nil {
 			doc.Metadata = make(map[string]any)
 		}
+		doc.Metadata["tenantID"] = tenantID
 		doc.Metadata["sessionID"] = sessionID
 	}
 
@@ -99,13 +101,17 @@ func (b *localVecBackend) Index(ctx context.Context, sessionID string, docs []*a
 	return nil
 }
 
-func (b *localVecBackend) Delete(ctx context.Context, sessionID string) error {
+func (b *localVecBackend) Delete(ctx context.Context, tenantID, sessionID string) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("localvec delete: context cancelled: %w", err)
 	}
 
 	var toDelete []string
 	for key, val := range b.docStore.Data {
+		tid, ok := val.Doc.Metadata["tenantID"].(string)
+		if !ok || tid != tenantID {
+			continue
+		}
 		sid, ok := val.Doc.Metadata["sessionID"].(string)
 		if ok && sid == sessionID {
 			toDelete = append(toDelete, key)
@@ -143,7 +149,7 @@ func (b *localVecBackend) persistDocStore() error {
 	return nil
 }
 
-func (b *localVecBackend) Retrieve(ctx context.Context, sessionID, query string, topK int) ([]*ai.Document, error) {
+func (b *localVecBackend) RetrieveTenant(ctx context.Context, tenantID, query string, topK int) ([]*ai.Document, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("localvec retrieve: context cancelled: %w", err)
 	}
@@ -162,6 +168,26 @@ func (b *localVecBackend) Retrieve(ctx context.Context, sessionID, query string,
 
 	var results []*ai.Document
 	for _, doc := range resp.Documents {
+		tid, ok := doc.Metadata["tenantID"].(string)
+		if !ok || tid != tenantID {
+			continue
+		}
+		results = append(results, doc)
+		if len(results) >= topK {
+			break
+		}
+	}
+	return results, nil
+}
+
+func (b *localVecBackend) RetrieveSession(ctx context.Context, tenantID, sessionID, query string, topK int) ([]*ai.Document, error) {
+	docs, err := b.RetrieveTenant(ctx, tenantID, query, topK*b.overFetchFactor)
+	if err != nil {
+		return nil, err
+	}
+
+	var results []*ai.Document
+	for _, doc := range docs {
 		sid, ok := doc.Metadata["sessionID"].(string)
 		if !ok || sid != sessionID {
 			continue
@@ -171,5 +197,6 @@ func (b *localVecBackend) Retrieve(ctx context.Context, sessionID, query string,
 			break
 		}
 	}
+
 	return results, nil
 }

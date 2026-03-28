@@ -76,6 +76,7 @@ func main() {
 		VectorSize:        embeddingDim,
 		OverwriteExisting: true,
 		MetadataColumns: []postgresql.Column{
+			{Name: "tenant_id", DataType: "TEXT", Nullable: false},
 			{Name: "session_id", DataType: "TEXT", Nullable: false},
 			{Name: "message_id", DataType: "TEXT", Nullable: false},
 			{Name: "kind", DataType: "TEXT", Nullable: true},
@@ -92,7 +93,7 @@ func main() {
 		ContentColumn:   "content",
 		EmbeddingColumn: "embedding",
 		IDColumn:        "id",
-		MetadataColumns: []string{"session_id", "message_id", "kind", "origin"},
+		MetadataColumns: []string{"tenant_id", "session_id", "message_id", "kind", "origin"},
 		Embedder:        embedder,
 	})
 	if err != nil {
@@ -165,25 +166,27 @@ func NewPGVectorBackend(pool *pgxpool.Pool, docStore *postgresql.DocStore, retri
 	}
 }
 
-func (b *PGVectorBackend) Index(ctx context.Context, _ string, docs []*ai.Document) error {
+func (b *PGVectorBackend) Index(ctx context.Context, tenantID, _ string, docs []*ai.Document) error {
 	for _, doc := range docs {
 		if doc.Metadata == nil {
 			doc.Metadata = make(map[string]any)
 		}
+		doc.Metadata["tenantID"] = tenantID
 
 		copyMetadata(doc.Metadata, "sessionID", "session_id")
+		copyMetadata(doc.Metadata, "tenantID", "tenant_id")
 		copyMetadata(doc.Metadata, "messageID", "message_id")
 	}
 
 	return b.docStore.Index(ctx, docs)
 }
 
-func (b *PGVectorBackend) Retrieve(ctx context.Context, sessionID, query string, topK int) ([]*ai.Document, error) {
+func (b *PGVectorBackend) RetrieveTenant(ctx context.Context, tenantID, query string, topK int) ([]*ai.Document, error) {
 	resp, err := b.retriever.Retrieve(ctx, &ai.RetrieverRequest{
 		Query: ai.DocumentFromText(query, nil),
 		Options: &postgresql.RetrieverOptions{
 			K:      topK,
-			Filter: fmt.Sprintf("session_id = '%s'", escapeLiteral(sessionID)),
+			Filter: fmt.Sprintf("tenant_id = '%s'", escapeLiteral(tenantID)),
 		},
 	})
 	if err != nil {
@@ -193,14 +196,36 @@ func (b *PGVectorBackend) Retrieve(ctx context.Context, sessionID, query string,
 	for _, doc := range resp.Documents {
 		copyMetadata(doc.Metadata, "message_id", "messageID")
 		copyMetadata(doc.Metadata, "session_id", "sessionID")
+		copyMetadata(doc.Metadata, "tenant_id", "tenantID")
 	}
 
 	return resp.Documents, nil
 }
 
-func (b *PGVectorBackend) Delete(ctx context.Context, sessionID string) error {
-	query := fmt.Sprintf(`DELETE FROM "%s"."%s" WHERE session_id = $1`, b.schema, b.table)
-	_, err := b.pool.Exec(ctx, query, sessionID)
+func (b *PGVectorBackend) RetrieveSession(ctx context.Context, tenantID, sessionID, query string, topK int) ([]*ai.Document, error) {
+	resp, err := b.retriever.Retrieve(ctx, &ai.RetrieverRequest{
+		Query: ai.DocumentFromText(query, nil),
+		Options: &postgresql.RetrieverOptions{
+			K:      topK,
+			Filter: fmt.Sprintf("tenant_id = '%s' AND session_id = '%s'", escapeLiteral(tenantID), escapeLiteral(sessionID)),
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	for _, doc := range resp.Documents {
+		copyMetadata(doc.Metadata, "message_id", "messageID")
+		copyMetadata(doc.Metadata, "session_id", "sessionID")
+		copyMetadata(doc.Metadata, "tenant_id", "tenantID")
+	}
+
+	return resp.Documents, nil
+}
+
+func (b *PGVectorBackend) Delete(ctx context.Context, tenantID, sessionID string) error {
+	query := fmt.Sprintf(`DELETE FROM "%s"."%s" WHERE tenant_id = $1 AND session_id = $2`, b.schema, b.table)
+	_, err := b.pool.Exec(ctx, query, tenantID, sessionID)
 	return err
 }
 
