@@ -14,6 +14,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package media provides image MIME detection and resizing helpers used by
-// file-reading tools.
+// Package media provides MIME-aware helpers used by file-reading and memory
+// ingestion pipelines.
+//
+// Current capabilities include:
+//   - image MIME detection and resize helpers
+//   - text/structured extraction for txt, markdown, json, csv, and html
 package media

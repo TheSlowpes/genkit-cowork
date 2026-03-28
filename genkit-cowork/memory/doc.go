@@ -28,6 +28,11 @@
 // VectorOperator to index textual message content for semantic recall while
 // keeping the canonical session state in the primary operator.
 //
+// Tenant-global file memory is also supported through FileIngestService.
+// File ingestion stores immutable tenant file records and chunk records,
+// extracts canonical text from supported MIME types (txt, markdown, json,
+// csv, html), and indexes chunks for cross-session recall.
+//
 // # Examples
 //
 // Create a default in-memory store:

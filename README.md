@@ -244,6 +244,9 @@ Memory is implemented through a `Session` store plus pluggable `SessionOperator`
 | File backend | `NewFileSessionOperator(rootDir)` | Durable JSON state at `rootDir/{sessionID}/state.json` |
 | Vector wrapper | `NewVectorOperator(base, backend, rootDir)` | Wraps a base operator and indexes new messages for semantic retrieval |
 | Local vector backend | `NewLocalVecBackend(g, name, cfg)` | `localvec`-based implementation of `VectorBackend` |
+| File records backend | `NewFileRecordOperator(rootDir)` | Durable tenant-global file and chunk records under `rootDir/{tenantID}/files` |
+| File ingest service | `NewFileIngestService(files, blobs, extractor, indexer)` | Stores tenant files, extracts text from supported MIME types, chunks, and indexes for recall |
+| File blob store | `NewFileBlobDiskStore(rootDir)` | Stores raw tenant file bytes under `rootDir/{tenantID}/files/raw` |
 
 ### File-backed sessions
 
@@ -268,12 +271,44 @@ vecBackend, _ := memory.NewLocalVecBackend(g, "session-memory", memory.LocalVecC
     Embedder: embedder, // any ai.Embedder
 })
 
-vecOp := memory.NewVectorOperator(fileOp, vecBackend, "./data/sessions")
+vecOp := memory.NewVectorOperator(fileOp, vecBackend, "./data/sessions", "tenant-1")
 
-store := memory.NewSession(memory.WithCustomSessionOperator(vecOp))
+store := memory.NewSession(
+    memory.WithCustomSessionOperator(vecOp),
+    memory.WithTenantID("tenant-1"),
+)
 
-results, err := vecOp.Search(ctx, "session-1", "customer asked about invoice", 5)
+results, err := vecOp.Search(ctx, "tenant-1", "session-1", "customer asked about invoice", 5)
 _ = results
+_ = err
+```
+
+### Tenant-global file memory (text + structured)
+
+`FileIngestService` adds cross-session tenant recall for uploaded files. It currently supports text and structured formats: `text/plain`, `text/markdown`, `application/json`, `text/csv`, and `text/html`.
+
+```go
+fileRecords := memory.NewFileRecordOperator("./data/memory")
+blobStore := memory.NewFileBlobDiskStore("./data/memory")
+indexer := memory.NewVectorFileIndexer(vecBackend)
+
+ingest := memory.NewFileIngestService(fileRecords, blobStore, nil, indexer)
+
+ingested, err := ingest.Ingest(ctx, memory.FileIngestInput{
+    TenantID:  "tenant-1",
+    SessionID: "session-a",
+    FileName:  "./docs/policy.md",
+    Data:      []byte("# Policy\nInvoices close monthly."),
+})
+_ = ingested
+_ = err
+
+chunks, err := ingest.SearchTenantFiles(ctx, memory.FileChunkSearchInput{
+    TenantID: "tenant-1",
+    Query:    "invoice policy",
+    TopK:     5,
+})
+_ = chunks
 _ = err
 ```
 
@@ -374,14 +409,17 @@ genkit-cowork/
 │   ├── diff.go               # LCS-based line diff algorithm
 │   ├── truncate.go           # Output truncation utilities
 │   ├── path.go               # Path resolution utilities
-│   └── constants.go          # Output limits
+│   ├── constants.go          # Output limits
+│   ├── memory_retrieval.go   # Tenant/session memory retrieval tools
+│   └── file_memory.go        # Tenant-global file memory tools
 ├── plugins/            # Genkit plugins
 │   └── skills/               # Skill discovery and serving
 │       ├── skills.go          # Plugin struct, Init, tool registration
 │       ├── skill_parser.go    # SKILL.md frontmatter parsing
 │       └── skill_scanner.go   # Directory scanning, skill discovery
-├── media/              # Image detection and processing
-│   └── mime.go               # MIME detection, image resizing
+├── media/              # MIME detection and processing
+│   ├── mime.go               # Image MIME detection, image resizing
+│   └── text_extract.go       # Text/structured MIME extraction (txt/md/json/csv/html)
 ├── memory/             # Session persistence and retrieval
 │   ├── sessions.go           # Session store, message models, persistence modes
 │   ├── turns.go              # Turn ledger records and ledger validation
@@ -389,6 +427,11 @@ genkit-cowork/
 │   ├── assets.go             # Session asset model and media asset store interface
 │   ├── file_assets.go        # Filesystem media asset store implementation
 │   ├── file_sessions.go      # File-backed SessionOperator (JSON + atomic write)
+│   ├── files.go              # Tenant-global file + chunk records and interfaces
+│   ├── file_files.go         # File-backed FileOperator for file/chunk metadata
+│   ├── file_blob_store.go    # Raw tenant file blob store
+│   ├── file_ingest.go        # MIME-aware file ingest, chunking, indexing, recall service
+│   ├── file_recall.go        # Tenant file recall helper API
 │   ├── vector_sessions.go    # VectorOperator wrapper + semantic search
 │   └── vector_backend.go     # Vector backend interface + localvec backend
 └── utils/              # Shared utilities
