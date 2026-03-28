@@ -426,6 +426,7 @@ genkit-cowork/
 │   ├── heartbeat.go          # Scheduled heartbeat runner
 │   ├── heartbeat_config.go   # Heartbeat configuration types
 │   ├── heartbeat_result.go   # Result parsing and classification
+│   ├── consolidation.go      # Optional consolidation flow wrapper
 │   ├── reply.go              # Channel-routed reply delivery
 │   ├── event.go              # EventBus and typed lifecycle events
 │   └── event_context.go      # Event payload types
@@ -440,7 +441,8 @@ genkit-cowork/
 │   ├── path.go               # Path resolution utilities
 │   ├── constants.go          # Output limits
 │   ├── memory_retrieval.go   # Tenant/session memory retrieval tools
-│   └── file_memory.go        # Tenant-global file memory tools
+│   ├── file_memory.go        # Tenant-global file memory tools
+│   └── insight_retrieval.go  # Tenant insight retrieval tool
 ├── plugins/            # Genkit plugins
 │   └── skills/               # Skill discovery and serving
 │       ├── skills.go          # Plugin struct, Init, tool registration
