@@ -33,6 +33,11 @@
 // extracts canonical text from supported MIME types (txt, markdown, json,
 // csv, html), and indexes chunks for cross-session recall.
 //
+// ConsolidationService provides tenant-scoped enrichment over sessions and
+// files. It supports LLM-based insight derivation, immutable InsightRecord
+// persistence, consolidation run idempotency, and optional vector indexing for
+// insight recall.
+//
 // # Examples
 //
 // Create a default in-memory store:

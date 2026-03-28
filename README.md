@@ -247,6 +247,8 @@ Memory is implemented through a `Session` store plus pluggable `SessionOperator`
 | File records backend | `NewFileRecordOperator(rootDir)` | Durable tenant-global file and chunk records under `rootDir/{tenantID}/files` |
 | File ingest service | `NewFileIngestService(files, blobs, extractor, indexer)` | Stores tenant files, extracts text from supported MIME types, chunks, and indexes for recall |
 | File blob store | `NewFileBlobDiskStore(rootDir)` | Stores raw tenant file bytes under `rootDir/{tenantID}/files/raw` |
+| Insight backend | `NewFileInsightOperator(rootDir)` | Durable tenant-scoped consolidation run ledger and immutable insight records |
+| Consolidation service | `NewConsolidationService(...)` | Runs tenant consolidation, derives insights (LLM deriver), persists run/insights, and optionally indexes insights |
 
 ### File-backed sessions
 
@@ -309,6 +311,33 @@ chunks, err := ingest.SearchTenantFiles(ctx, memory.FileChunkSearchInput{
     TopK:     5,
 })
 _ = chunks
+_ = err
+```
+
+### Consolidation (nightly enrichment)
+
+`ConsolidationService` derives immutable tenant insights from sessions and tenant-global files. The default LLM deriver expects a model already registered in the same Genkit instance.
+
+```go
+insightStore := memory.NewFileInsightOperator("./data/memory")
+deriver := memory.NewLLMInsightDeriver(g, "googleai/gemini-2.0-flash")
+insightIndexer := memory.NewVectorInsightIndexer(vecBackend)
+
+consolidation := memory.NewConsolidationService(
+    sessionOp,
+    fileRecords,
+    insightStore,
+    deriver,
+    insightIndexer,
+    memory.ConsolidationConfig{Model: "googleai/gemini-2.0-flash", PromptVersion: "v1"},
+)
+
+run, err := consolidation.RunTenant(ctx, "tenant-1")
+_ = run
+_ = err
+
+results, err := consolidation.SearchTenantInsights(ctx, "tenant-1", "invoice policy", 5)
+_ = results
 _ = err
 ```
 
@@ -432,6 +461,8 @@ genkit-cowork/
 │   ├── file_blob_store.go    # Raw tenant file blob store
 │   ├── file_ingest.go        # MIME-aware file ingest, chunking, indexing, recall service
 │   ├── file_recall.go        # Tenant file recall helper API
+│   ├── insights.go           # Insight records + consolidation run ledger operators
+│   ├── consolidation.go      # Tenant consolidation service and LLM deriver
 │   ├── vector_sessions.go    # VectorOperator wrapper + semantic search
 │   └── vector_backend.go     # Vector backend interface + localvec backend
 └── utils/              # Shared utilities
