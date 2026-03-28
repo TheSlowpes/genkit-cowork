@@ -48,7 +48,7 @@ The project currently implements four concrete flow layers:
 
 ## 3. Agent Loop Contract
 
-At the core of every Flow is an agent loop. This is the cycle the model moves through as it reasons, call tools, receives results, and
+At the core of every Flow is an agent loop. This is the cycle the model moves through as it reasons, calls tools, receives results, and
 decides whether to continue or stop.
 
 agentLoop stages, in order:
