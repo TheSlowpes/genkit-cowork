@@ -248,6 +248,7 @@ Memory is implemented through a `Session` store plus pluggable `SessionOperator`
 | File ingest service | `NewFileIngestService(files, blobs, extractor, indexer)` | Stores tenant files, extracts text from supported MIME types, chunks, and indexes for recall |
 | File blob store | `NewFileBlobDiskStore(rootDir)` | Stores raw tenant file bytes under `rootDir/{tenantID}/files/raw` |
 | Insight backend | `NewFileInsightOperator(rootDir)` | Durable tenant-scoped consolidation run ledger and immutable insight records |
+| Preference backend | `NewFilePreferenceOperator(rootDir)` | Durable tenant-scoped explicit and implicit preference records |
 | Consolidation service | `NewConsolidationService(...)` | Runs tenant consolidation, derives insights (LLM deriver), persists run/insights, and optionally indexes insights |
 
 ### File-backed sessions
@@ -327,9 +328,14 @@ consolidation := memory.NewConsolidationService(
     sessionOp,
     fileRecords,
     insightStore,
+    memory.NewFilePreferenceOperator("./data/memory"),
     deriver,
     insightIndexer,
-    memory.ConsolidationConfig{Model: "googleai/gemini-2.0-flash", PromptVersion: "v1"},
+    memory.ConsolidationConfig{
+        Model:                         "googleai/gemini-2.0-flash",
+        PromptVersion:                 "v1",
+        PreferencePromotionConfidence: 0.8,
+    },
 )
 
 run, err := consolidation.RunTenant(ctx, "tenant-1")
@@ -338,6 +344,27 @@ _ = err
 
 results, err := consolidation.SearchTenantInsights(ctx, "tenant-1", "invoice policy", 5)
 _ = results
+_ = err
+```
+
+### Tenant preferences
+
+Preferences are first-class tenant records and can be explicit (user provided) or implicit (promoted from consolidation preference candidates with confidence/provenance).
+
+```go
+prefs := memory.NewFilePreferenceOperator("./data/memory")
+
+saved, err := prefs.SavePreference(ctx, "tenant-1", memory.PreferenceRecord{
+    Key:        "response_style",
+    Value:      "concise",
+    Source:     memory.PreferenceSourceExplicit,
+    Confidence: 1,
+})
+_ = saved
+_ = err
+
+all, err := prefs.ListPreferences(ctx, "tenant-1", memory.PreferenceFilter{Status: memory.PreferenceStatusActive})
+_ = all
 _ = err
 ```
 
@@ -465,6 +492,7 @@ genkit-cowork/
 │   ├── file_recall.go        # Tenant file recall helper API
 │   ├── insights.go           # Insight records + consolidation run ledger operators
 │   ├── consolidation.go      # Tenant consolidation service and LLM deriver
+│   ├── preferences.go        # Tenant preference records and preference operators
 │   ├── vector_sessions.go    # VectorOperator wrapper + semantic search
 │   └── vector_backend.go     # Vector backend interface + localvec backend
 └── utils/              # Shared utilities

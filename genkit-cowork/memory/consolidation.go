@@ -37,13 +37,14 @@ const (
 
 // ConsolidationConfig controls tenant consolidation behavior.
 type ConsolidationConfig struct {
-	Model              string
-	PromptVersion      string
-	MaxSessionMessages int
-	MaxFileChunks      int
-	MinConfidence      float64
-	Cadence            time.Duration
-	Window             time.Duration
+	Model                         string
+	PromptVersion                 string
+	MaxSessionMessages            int
+	MaxFileChunks                 int
+	MinConfidence                 float64
+	PreferencePromotionConfidence float64
+	Cadence                       time.Duration
+	Window                        time.Duration
 }
 
 // ConsolidationInput is the source payload passed to an InsightDeriver.
@@ -248,6 +249,7 @@ type ConsolidationService struct {
 	sessions SessionOperator
 	files    FileOperator
 	insights InsightOperator
+	prefs    PreferenceOperator
 	deriver  InsightDeriver
 	indexer  InsightIndexer
 	cfg      ConsolidationConfig
@@ -259,6 +261,7 @@ func NewConsolidationService(
 	sessions SessionOperator,
 	files FileOperator,
 	insights InsightOperator,
+	prefs PreferenceOperator,
 	deriver InsightDeriver,
 	indexer InsightIndexer,
 	cfg ConsolidationConfig,
@@ -266,11 +269,17 @@ func NewConsolidationService(
 	if insights == nil {
 		insights = NewDefaultInsightOperator()
 	}
+	if prefs == nil {
+		prefs = NewDefaultPreferenceOperator()
+	}
 	if cfg.PromptVersion == "" {
 		cfg.PromptVersion = "v1"
 	}
 	if cfg.MinConfidence <= 0 {
 		cfg.MinConfidence = 0.5
+	}
+	if cfg.PreferencePromotionConfidence <= 0 {
+		cfg.PreferencePromotionConfidence = 0.8
 	}
 	if cfg.MaxSessionMessages <= 0 {
 		cfg.MaxSessionMessages = 200
@@ -286,6 +295,7 @@ func NewConsolidationService(
 		sessions: sessions,
 		files:    files,
 		insights: insights,
+		prefs:    prefs,
 		deriver:  deriver,
 		indexer:  indexer,
 		cfg:      cfg,
@@ -367,6 +377,13 @@ func (s *ConsolidationService) RunTenant(ctx context.Context, tenantID string) (
 		}
 	}
 
+	if err := s.promotePreferences(ctx, tenantID, insightRecords); err != nil {
+		run.Status = ConsolidationRunFailed
+		run.Error = err.Error()
+		_ = s.insights.SaveRun(ctx, tenantID, run)
+		return nil, fmt.Errorf("consolidation: promote preferences: %w", err)
+	}
+
 	if err := s.updateSessionConsolidationTime(ctx, tenantID, sessionIDs, now); err != nil {
 		run.Status = ConsolidationRunFailed
 		run.Error = err.Error()
@@ -380,6 +397,79 @@ func (s *ConsolidationService) RunTenant(ctx context.Context, tenantID string) (
 	}
 
 	return &run, nil
+}
+
+func (s *ConsolidationService) promotePreferences(ctx context.Context, tenantID string, insights []InsightRecord) error {
+	if s.prefs == nil || len(insights) == 0 {
+		return nil
+	}
+
+	existing, err := s.prefs.ListPreferences(ctx, tenantID, PreferenceFilter{Source: PreferenceSourceImplicit, Status: PreferenceStatusActive})
+	if err != nil {
+		return fmt.Errorf("list implicit preferences: %w", err)
+	}
+	existingByInsight := make(map[string]PreferenceRecord, len(existing))
+	for _, pref := range existing {
+		if pref.SourceInsightID != "" {
+			existingByInsight[pref.SourceInsightID] = pref
+		}
+	}
+
+	for _, insight := range insights {
+		if insight.Kind != InsightKindPreferenceCandidate {
+			continue
+		}
+		if insight.Confidence < s.cfg.PreferencePromotionConfidence {
+			continue
+		}
+
+		key, value := inferPreferenceKeyValue(insight)
+		if key == "" || value == "" {
+			continue
+		}
+
+		record := PreferenceRecord{
+			PreferenceID:     uuid.New().String(),
+			TenantID:         tenantID,
+			Key:              key,
+			Value:            value,
+			Source:           PreferenceSourceImplicit,
+			Confidence:       insight.Confidence,
+			Evidence:         append([]string(nil), insight.Evidence...),
+			SessionIDs:       append([]string(nil), insight.SessionIDs...),
+			TurnIDs:          append([]string(nil), insight.TurnIDs...),
+			FileIDs:          append([]string(nil), insight.FileIDs...),
+			ChunkIDs:         append([]string(nil), insight.ChunkIDs...),
+			SourceInsightID:  insight.InsightID,
+			SourceInsightKey: insight.IdempotencyKey,
+			Status:           PreferenceStatusActive,
+			CreatedAt:        s.now(),
+			UpdatedAt:        s.now(),
+		}
+		if existingPref, ok := existingByInsight[insight.InsightID]; ok {
+			record.PreferenceID = existingPref.PreferenceID
+			record.CreatedAt = existingPref.CreatedAt
+		}
+
+		if _, err := s.prefs.SavePreference(ctx, tenantID, record); err != nil {
+			return fmt.Errorf("save promoted preference for insight %q: %w", insight.InsightID, err)
+		}
+	}
+
+	return nil
+}
+
+func inferPreferenceKeyValue(insight InsightRecord) (key, value string) {
+	title := strings.TrimSpace(insight.Title)
+	summary := strings.TrimSpace(insight.Summary)
+	if title == "" || summary == "" {
+		return "", ""
+	}
+
+	if idx := strings.Index(title, ":"); idx > 0 {
+		return strings.TrimSpace(strings.ToLower(title[:idx])), strings.TrimSpace(title[idx+1:])
+	}
+	return strings.TrimSpace(strings.ToLower(title)), summary
 }
 
 // SearchTenantInsights retrieves semantically similar insight records.

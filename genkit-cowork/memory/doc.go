@@ -38,6 +38,10 @@
 // persistence, consolidation run idempotency, and optional vector indexing for
 // insight recall.
 //
+// PreferenceOperator provides tenant-scoped explicit and implicit preference
+// records. Consolidation can promote high-confidence preference-candidate
+// insights into implicit PreferenceRecords with provenance evidence.
+//
 // # Examples
 //
 // Create a default in-memory store:

@@ -90,6 +90,7 @@ func TestConsolidationService_RunTenant_SavesInsightsAndRun(t *testing.T) {
 		sessionOp,
 		files,
 		insights,
+		NewDefaultPreferenceOperator(),
 		stubDeriver{drafts: []InsightDraft{{
 			Kind:       InsightKindFact,
 			Title:      "Invoice cadence",
@@ -153,6 +154,7 @@ func TestConsolidationService_RunTenant_Idempotent(t *testing.T) {
 		sessionOp,
 		files,
 		insights,
+		NewDefaultPreferenceOperator(),
 		stubDeriver{drafts: []InsightDraft{{
 			Kind:       InsightKindFact,
 			Title:      "Greeting",
@@ -177,6 +179,74 @@ func TestConsolidationService_RunTenant_Idempotent(t *testing.T) {
 	}
 	if run1.RunID != run2.RunID {
 		t.Fatalf("expected idempotent run reuse, run1=%q run2=%q", run1.RunID, run2.RunID)
+	}
+}
+
+func TestConsolidationService_RunTenant_PromotesPreferenceCandidates(t *testing.T) {
+	ctx := context.Background()
+	sessionOp := &defaultSessionOperator{}
+	sessions := NewSession(WithCustomSessionOperator(sessionOp), WithTenantID("tenant-1"))
+	files := NewDefaultFileOperator()
+	insights := NewDefaultInsightOperator()
+	prefs := NewDefaultPreferenceOperator()
+
+	if err := sessions.ForTenant("tenant-1").Save(ctx, "session-1", &session.Data[SessionState]{
+		ID: "session-1",
+		State: SessionState{
+			TenantID: "tenant-1",
+			Messages: []SessionMessage{{
+				MessageID: "m1",
+				Origin:    UIMessage,
+				Kind:      KindEpisodic,
+				Content:   *ai.NewUserTextMessage("Keep responses concise"),
+				Timestamp: time.Now().UTC(),
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("session save error = %v", err)
+	}
+
+	service := NewConsolidationService(
+		sessionOp,
+		files,
+		insights,
+		prefs,
+		stubDeriver{drafts: []InsightDraft{
+			{
+				Kind:       InsightKindPreferenceCandidate,
+				Title:      "response_style: concise",
+				Summary:    "User prefers concise responses",
+				SessionIDs: []string{"session-1"},
+				Confidence: 0.92,
+			},
+			{
+				Kind:       InsightKindPreferenceCandidate,
+				Title:      "verbosity",
+				Summary:    "User likes detailed explanations",
+				SessionIDs: []string{"session-1"},
+				Confidence: 0.55,
+			},
+		}},
+		nil,
+		ConsolidationConfig{Model: "test/unused", PromptVersion: "v1", PreferencePromotionConfidence: 0.8},
+	)
+
+	if _, err := service.RunTenant(ctx, "tenant-1"); err != nil {
+		t.Fatalf("RunTenant() error = %v", err)
+	}
+
+	implicit, err := prefs.ListPreferences(ctx, "tenant-1", PreferenceFilter{Source: PreferenceSourceImplicit})
+	if err != nil {
+		t.Fatalf("ListPreferences(implicit) error = %v", err)
+	}
+	if len(implicit) != 1 {
+		t.Fatalf("len(implicit) = %d, want 1", len(implicit))
+	}
+	if implicit[0].Key != "response_style" || implicit[0].Value != "concise" {
+		t.Fatalf("promoted preference = %+v, want key=response_style value=concise", implicit[0])
+	}
+	if implicit[0].Confidence < 0.8 {
+		t.Fatalf("promoted preference confidence = %v, want >=0.8", implicit[0].Confidence)
 	}
 }
 
@@ -273,7 +343,7 @@ func TestComputeConsolidationIdempotencyKeyStable(t *testing.T) {
 }
 
 func TestConsolidationService_SearchTenantInsightsRequiresIndexer(t *testing.T) {
-	service := NewConsolidationService(&defaultSessionOperator{}, NewDefaultFileOperator(), NewDefaultInsightOperator(), stubDeriver{}, nil, ConsolidationConfig{})
+	service := NewConsolidationService(&defaultSessionOperator{}, NewDefaultFileOperator(), NewDefaultInsightOperator(), NewDefaultPreferenceOperator(), stubDeriver{}, nil, ConsolidationConfig{})
 	_, err := service.SearchTenantInsights(context.Background(), "tenant-1", "query", 3)
 	if err == nil {
 		t.Fatal("expected missing indexer error")
