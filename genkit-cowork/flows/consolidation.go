@@ -19,7 +19,6 @@ package flows
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/TheSlowpes/genkit-cowork/genkit-cowork/memory"
 	"github.com/firebase/genkit/go/core"
@@ -28,8 +27,7 @@ import (
 
 // ConsolidationInput is the input for one consolidation flow run.
 type ConsolidationInput struct {
-	TenantID string    `json:"tenantID"`
-	RunAt    time.Time `json:"runAt"`
+	TenantID string `json:"tenantID"`
 }
 
 // ConsolidationOutput is the output for one consolidation flow run.

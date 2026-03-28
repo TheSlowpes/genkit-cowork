@@ -52,7 +52,7 @@ func TestConsolidationFlow_RunSuccess(t *testing.T) {
 	}}
 
 	flow := NewConsolidationFlow(g, runner)
-	out, err := flow.Run(ctx, &ConsolidationInput{TenantID: "tenant-1", RunAt: time.Now().UTC()})
+	out, err := flow.Run(ctx, &ConsolidationInput{TenantID: "tenant-1"})
 	if err != nil {
 		t.Fatalf("flow.Run() error = %v", err)
 	}
