@@ -35,6 +35,9 @@ const (
 	embeddingDim = 8
 	schemaName   = "public"
 	tableName    = "session_memory"
+
+	recordTypeSessionMessage = "session_message"
+	recordTypeFileChunk      = "file_chunk"
 )
 
 func main() {
@@ -77,10 +80,17 @@ func main() {
 		OverwriteExisting: true,
 		MetadataColumns: []postgresql.Column{
 			{Name: "tenant_id", DataType: "TEXT", Nullable: false},
-			{Name: "session_id", DataType: "TEXT", Nullable: false},
-			{Name: "message_id", DataType: "TEXT", Nullable: false},
+			{Name: "record_type", DataType: "TEXT", Nullable: false},
+			{Name: "session_id", DataType: "TEXT", Nullable: true},
+			{Name: "message_id", DataType: "TEXT", Nullable: true},
 			{Name: "kind", DataType: "TEXT", Nullable: true},
 			{Name: "origin", DataType: "TEXT", Nullable: true},
+			{Name: "file_id", DataType: "TEXT", Nullable: true},
+			{Name: "chunk_id", DataType: "TEXT", Nullable: true},
+			{Name: "mime_type", DataType: "TEXT", Nullable: true},
+			{Name: "file_name", DataType: "TEXT", Nullable: true},
+			{Name: "uploaded_at", DataType: "TEXT", Nullable: true},
+			{Name: "extraction_mode", DataType: "TEXT", Nullable: true},
 		},
 	})
 	if err != nil {
@@ -93,8 +103,21 @@ func main() {
 		ContentColumn:   "content",
 		EmbeddingColumn: "embedding",
 		IDColumn:        "id",
-		MetadataColumns: []string{"tenant_id", "session_id", "message_id", "kind", "origin"},
-		Embedder:        embedder,
+		MetadataColumns: []string{
+			"tenant_id",
+			"record_type",
+			"session_id",
+			"message_id",
+			"kind",
+			"origin",
+			"file_id",
+			"chunk_id",
+			"mime_type",
+			"file_name",
+			"uploaded_at",
+			"extraction_mode",
+		},
+		Embedder: embedder,
 	})
 	if err != nil {
 		log.Fatalf("failed to define postgres retriever: %v", err)
@@ -146,6 +169,43 @@ func main() {
 	for i, msg := range matches {
 		log.Printf("match %d id=%s kind=%s text=%q", i+1, msg.MessageID, msg.Kind, messageText(msg.Content))
 	}
+
+	fileOperator := memory.NewFileRecordOperator("./data/files")
+	blobStore := memory.NewFileBlobDiskStore("./data/files")
+	fileIndexer := memory.NewVectorFileIndexer(vectorBackend)
+	fileIngest := memory.NewFileIngestService(fileOperator, blobStore, nil, fileIndexer)
+
+	fileIngested, err := fileIngest.Ingest(ctx, memory.FileIngestInput{
+		TenantID:      tenantID,
+		SessionID:     "session-2",
+		SourceChannel: memory.UIMessage,
+		FileName:      "billing-policy.md",
+		Data: []byte("# Billing Policy\n" +
+			"Invoices are generated monthly.\n" +
+			"Disputes must be opened within 15 days."),
+	})
+	if err != nil {
+		log.Fatalf("failed to ingest tenant file memory: %v", err)
+	}
+	log.Printf("file ingested id=%s chunks=%d", fileIngested.File.FileID, len(fileIngested.Chunks))
+
+	fileChunkDocs, err := vectorBackend.RetrieveTenantByRecordType(
+		ctx,
+		tenantID,
+		"invoice dispute policy",
+		recordTypeFileChunk,
+		5,
+	)
+	if err != nil {
+		log.Fatalf("failed to retrieve file chunks with record_type filter: %v", err)
+	}
+
+	for i, doc := range fileChunkDocs {
+		fileID, _ := doc.Metadata["fileID"].(string)
+		chunkID, _ := doc.Metadata["chunkID"].(string)
+		fileName, _ := doc.Metadata["fileName"].(string)
+		log.Printf("file chunk match %d fileID=%s chunkID=%s fileName=%s text=%q", i+1, fileID, chunkID, fileName, messageText(ai.Message{Content: doc.Content}))
+	}
 }
 
 type PGVectorBackend struct {
@@ -172,10 +232,20 @@ func (b *PGVectorBackend) Index(ctx context.Context, tenantID, _ string, docs []
 			doc.Metadata = make(map[string]any)
 		}
 		doc.Metadata["tenantID"] = tenantID
+		if _, ok := doc.Metadata["recordType"]; !ok {
+			doc.Metadata["recordType"] = recordTypeSessionMessage
+		}
 
 		copyMetadata(doc.Metadata, "sessionID", "session_id")
 		copyMetadata(doc.Metadata, "tenantID", "tenant_id")
 		copyMetadata(doc.Metadata, "messageID", "message_id")
+		copyMetadata(doc.Metadata, "recordType", "record_type")
+		copyMetadata(doc.Metadata, "fileID", "file_id")
+		copyMetadata(doc.Metadata, "chunkID", "chunk_id")
+		copyMetadata(doc.Metadata, "mimeType", "mime_type")
+		copyMetadata(doc.Metadata, "fileName", "file_name")
+		copyMetadata(doc.Metadata, "uploadedAt", "uploaded_at")
+		copyMetadata(doc.Metadata, "extractionMode", "extraction_mode")
 	}
 
 	return b.docStore.Index(ctx, docs)
@@ -194,9 +264,16 @@ func (b *PGVectorBackend) RetrieveTenant(ctx context.Context, tenantID, query st
 	}
 
 	for _, doc := range resp.Documents {
+		copyMetadata(doc.Metadata, "record_type", "recordType")
 		copyMetadata(doc.Metadata, "message_id", "messageID")
 		copyMetadata(doc.Metadata, "session_id", "sessionID")
 		copyMetadata(doc.Metadata, "tenant_id", "tenantID")
+		copyMetadata(doc.Metadata, "file_id", "fileID")
+		copyMetadata(doc.Metadata, "chunk_id", "chunkID")
+		copyMetadata(doc.Metadata, "mime_type", "mimeType")
+		copyMetadata(doc.Metadata, "file_name", "fileName")
+		copyMetadata(doc.Metadata, "uploaded_at", "uploadedAt")
+		copyMetadata(doc.Metadata, "extraction_mode", "extractionMode")
 	}
 
 	return resp.Documents, nil
@@ -215,9 +292,16 @@ func (b *PGVectorBackend) RetrieveSession(ctx context.Context, tenantID, session
 	}
 
 	for _, doc := range resp.Documents {
+		copyMetadata(doc.Metadata, "record_type", "recordType")
 		copyMetadata(doc.Metadata, "message_id", "messageID")
 		copyMetadata(doc.Metadata, "session_id", "sessionID")
 		copyMetadata(doc.Metadata, "tenant_id", "tenantID")
+		copyMetadata(doc.Metadata, "file_id", "fileID")
+		copyMetadata(doc.Metadata, "chunk_id", "chunkID")
+		copyMetadata(doc.Metadata, "mime_type", "mimeType")
+		copyMetadata(doc.Metadata, "file_name", "fileName")
+		copyMetadata(doc.Metadata, "uploaded_at", "uploadedAt")
+		copyMetadata(doc.Metadata, "extraction_mode", "extractionMode")
 	}
 
 	return resp.Documents, nil
@@ -227,6 +311,38 @@ func (b *PGVectorBackend) Delete(ctx context.Context, tenantID, sessionID string
 	query := fmt.Sprintf(`DELETE FROM "%s"."%s" WHERE tenant_id = $1 AND session_id = $2`, b.schema, b.table)
 	_, err := b.pool.Exec(ctx, query, tenantID, sessionID)
 	return err
+}
+
+func (b *PGVectorBackend) RetrieveTenantByRecordType(ctx context.Context, tenantID, query, recordType string, topK int) ([]*ai.Document, error) {
+	resp, err := b.retriever.Retrieve(ctx, &ai.RetrieverRequest{
+		Query: ai.DocumentFromText(query, nil),
+		Options: &postgresql.RetrieverOptions{
+			K: topK,
+			Filter: fmt.Sprintf(
+				"tenant_id = '%s' AND record_type = '%s'",
+				escapeLiteral(tenantID),
+				escapeLiteral(recordType),
+			),
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	for _, doc := range resp.Documents {
+		copyMetadata(doc.Metadata, "record_type", "recordType")
+		copyMetadata(doc.Metadata, "message_id", "messageID")
+		copyMetadata(doc.Metadata, "session_id", "sessionID")
+		copyMetadata(doc.Metadata, "tenant_id", "tenantID")
+		copyMetadata(doc.Metadata, "file_id", "fileID")
+		copyMetadata(doc.Metadata, "chunk_id", "chunkID")
+		copyMetadata(doc.Metadata, "mime_type", "mimeType")
+		copyMetadata(doc.Metadata, "file_name", "fileName")
+		copyMetadata(doc.Metadata, "uploaded_at", "uploadedAt")
+		copyMetadata(doc.Metadata, "extraction_mode", "extractionMode")
+	}
+
+	return resp.Documents, nil
 }
 
 func simpleEmbed(dim int) ai.EmbedderFunc {
