@@ -49,6 +49,8 @@ const (
 	tenantID  = "local"
 	maxTurns  = 20
 	workDir   = "."
+	indexDir  = "./.genkit-memory/index"
+	stateDir  = "./.genkit-memory/sessions"
 )
 
 // tuiChannelHandler implements flows.ChannelHandler for the terminal UI.
@@ -87,8 +89,22 @@ func main() {
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 	)
 
-	// 2. Create the in-memory session store.
-	store := memory.NewSession()
+	// 2. Create a tenant-scoped session store with vector indexing.
+	embedder := genkit.DefineEmbedder(g, "demo/tui-embedder", nil, simpleEmbed(256))
+	vecBackend, err := memory.NewLocalVecBackend(g, "tui-memory", memory.LocalVecConfig{
+		Embedder: embedder,
+		TenantID: indexDir,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "init vector backend: %v\n", err)
+		os.Exit(1)
+	}
+	fileBackend := memory.NewFileSessionOperator(stateDir, tenantID)
+	vectorOperator := memory.NewVectorOperator(fileBackend, vecBackend, stateDir, tenantID)
+	store := memory.NewSession(
+		memory.WithCustomSessionOperator(vectorOperator),
+		memory.WithTenantID(tenantID),
+	)
 
 	// 3. Register the core tools.
 	cwd, err := os.Getwd()
@@ -99,15 +115,17 @@ func main() {
 	tools.NewReadTool(g, cwd)
 	tools.NewEditTool(g, cwd)
 	tools.NewWriteTool(g, cwd)
+	tools.NewSearchSessionMemoryTool(g, vectorOperator)
+	tools.NewSearchTenantMemoryTool(g, vectorOperator)
 
 	// 4. Build the agent config shared between the message and heartbeat flows.
 	agentCfg := flows.AgentLoopConfig{
 		Model:    model,
-		Tools:    []string{"bash", "read", "edit", "write"},
+		Tools:    []string{"bash", "read", "edit", "write", "search-session-memory", "search-tenant-memory"},
 		MaxTurns: maxTurns,
 		SystemPrompt: flows.BuildSystemPrompt(flows.SystemPromptOptions{
 			CustomPrompt: "You are a helpful assistant running in a terminal. " +
-				"You have access to bash, read, edit, and write tools. " +
+				"You have access to bash, read, edit, write, and memory search tools. " +
 				"Be concise.",
 		}),
 	}
@@ -201,4 +219,33 @@ func main() {
 			},
 		})
 	}
+}
+
+func simpleEmbed(dim int) ai.EmbedderFunc {
+	return func(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("embed request cancelled: %w", err)
+		}
+
+		res := &ai.EmbedResponse{Embeddings: make([]*ai.Embedding, 0, len(req.Input))}
+		for _, doc := range req.Input {
+			vec := make([]float32, dim)
+			text := messageText(ai.Message{Content: doc.Content})
+			for i, r := range text {
+				vec[i%dim] += float32(r%97) / 100
+			}
+			res.Embeddings = append(res.Embeddings, &ai.Embedding{Embedding: vec})
+		}
+		return res, nil
+	}
+}
+
+func messageText(msg ai.Message) string {
+	parts := make([]string, 0, len(msg.Content))
+	for _, part := range msg.Content {
+		if part.IsText() {
+			parts = append(parts, part.Text)
+		}
+	}
+	return strings.Join(parts, " ")
 }
