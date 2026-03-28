@@ -14,8 +14,8 @@ initiates an interaction, through every model call and tool execution, to the po
 - exposes interception points for operators,
 - and makes autonomous work inspectable and controllable.
 
->**Design intent** If somethis is happening that a developer, operator, or observer should be able to see, influence, or react to; it happens
-> inside a flow
+>**Design intent:** If something is happening that a developer, operator, or observer should be able to see, influence, or react to, it happens
+> inside a flow.
 
 In practical terms, Flows provide:
 
