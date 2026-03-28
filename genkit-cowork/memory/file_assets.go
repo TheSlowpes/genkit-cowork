@@ -19,6 +19,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"mime"
 	"os"
 	"path/filepath"
 )
@@ -34,17 +35,18 @@ func NewFileMediaAssetStore(rootDir string) *FileMediaAssetStore {
 
 // Put stores raw media bytes under the session assets directory and returns the
 // absolute file path.
-func (s *FileMediaAssetStore) Put(ctx context.Context, sessionID, assetID, mimeType string, data []byte) (string, error) {
+func (s *FileMediaAssetStore) Put(ctx context.Context, tenantID, sessionID, assetID, mimeType string, data []byte) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 
-	dir := filepath.Join(s.RootDir, sessionID, "assets")
+	dir := filepath.Join(s.RootDir, tenantID, sessionID, "assets")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", fmt.Errorf("mkdir assets dir: %w", err)
 	}
 
-	path := filepath.Join(dir, assetID+filepath.Ext(mimeType))
+	assetExt := extensionForMimeType(mimeType)
+	path := filepath.Join(dir, assetID+assetExt)
 	if err := atomicWriteFile(path, data, 0644); err != nil {
 		return "", fmt.Errorf("write media asset: %w", err)
 	}
@@ -57,9 +59,17 @@ func (s *FileMediaAssetStore) Put(ctx context.Context, sessionID, assetID, mimeT
 }
 
 // DeleteSessionAssets removes all persisted assets for the provided session.
-func (s *FileMediaAssetStore) DeleteSessionAssets(ctx context.Context, sessionID string) error {
+func (s *FileMediaAssetStore) DeleteSessionAssets(ctx context.Context, tenantID, sessionID string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return os.RemoveAll(filepath.Join(s.RootDir, sessionID, "assets"))
+	return os.RemoveAll(filepath.Join(s.RootDir, tenantID, sessionID, "assets"))
+}
+
+func extensionForMimeType(mimeType string) string {
+	exts, err := mime.ExtensionsByType(mimeType)
+	if err != nil || len(exts) == 0 {
+		return ""
+	}
+	return exts[0]
 }

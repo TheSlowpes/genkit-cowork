@@ -34,9 +34,11 @@ A session accumulates the full, unabridged history of everything that occurred w
 - The lifecycle metadata for each turn: timestamps, step counts, flow identifiers.
 - The complete agent-scope state snapshot at the end of each iteration.
 
-### Whole-state snapshots at every iteration
+### Whole-state checkpoints at every iteration
 
 At the conclusion of each Flow iteration, the entire agent-scope state is written to the session record — not a diff, not a summary, the whole state. This is intentional. It means that any point in the session's history can be reloaded exactly as it was, enabling retries, replays, and debugging without reconstruction or inference.
+
+Snapshot records are metadata checkpoints over that canonical state, including sequence metadata and integrity checksums. They are not standalone embedded copies of session state; replay state is sourced from the append-only session record.
 
 > **Immutability guarantee:** Session history is append-only. Once a turn is written, it is never modified or deleted. The record of what happened is permanent. This is not a technical limitation — it is a design commitment. The past is not editable.
 
@@ -44,7 +46,7 @@ At the conclusion of each Flow iteration, the entire agent-scope state is writte
 
 ## 4. Pruning — Loading a Manageable Window
 
-Storing the whole history at every iteration does not mean the whole history is loaded into the agent's working context every time. On session load, the history can be  pruned to a window appropriate for the current Flow run. Two strategies are supported:
+Storing the whole history at every iteration does not mean the whole history is loaded into the agent's working context every time. On session load, the history can be pruned to a window appropriate for the current Flow run. Three strategies are supported:
 
 ### Sliding window
 
@@ -53,6 +55,10 @@ Load only the last N turns from the session. This is the simplest strategy and w
 ### Tail ends — first N and last N turns
 
 Load the first N turns of the session and the last N turns, skipping the middle. This is the strategy for long-lived sessions where both the origin of the relationship and the most recent activity are important, but the bulk of intermediate history can be omitted from the immediate context. The omitted middle is not lost — it remains in the session record and in the vector store, available for recall.
+
+### Token budget
+
+Load as much recent history as fits within a configured token budget. This strategy preserves recency while adapting to variable message sizes, and is useful when strict model context limits matter more than a fixed message count.
 
 > **Pruning does not delete.** Every strategy is a read-time windowing decision. The full session history in the store is never altered by pruning.
 

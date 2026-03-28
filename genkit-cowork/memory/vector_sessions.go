@@ -37,25 +37,38 @@ type VectorOperator struct {
 	backend VectorBackend
 	rootDir string
 	mu      sync.Mutex
+	jobs    chan vectorIndexJob
+	pending map[string]map[string]bool
 }
+
+type vectorIndexJob struct {
+	ctx       context.Context
+	tenantID  string
+	sessionID string
+	docs      []*ai.Document
+	messageID []string
+}
+
+const defaultVectorIndexQueueSize = 64
 
 // NewVectorOperator creates a SessionOperator that composes a base session
 // operator with a vector indexing backend.
-//
-// The tenantID argument is retained for constructor parity but tenant scoping
-// is enforced by per-method tenantID parameters.
-func NewVectorOperator(base SessionOperator, backend VectorBackend, rootDir, tenantID string) *VectorOperator {
-	return &VectorOperator{
+func NewVectorOperator(base SessionOperator, backend VectorBackend, rootDir string) *VectorOperator {
+	v := &VectorOperator{
 		base:    base,
 		backend: backend,
 		rootDir: rootDir,
+		jobs:    make(chan vectorIndexJob, defaultVectorIndexQueueSize),
+		pending: make(map[string]map[string]bool),
 	}
+	go v.processVectorIndexJobs()
+	return v
 }
 
 var _ SessionOperator = (*VectorOperator)(nil)
 
 // SaveState persists tenant session state via the base operator, then indexes
-// newly appended message text into the vector backend.
+// newly appended message text into the vector backend via a background queue.
 func (v *VectorOperator) SaveState(ctx context.Context, tenantID, sessionID string, state SessionState) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("vector operator: context cancelled: %w", err)
@@ -66,12 +79,13 @@ func (v *VectorOperator) SaveState(ctx context.Context, tenantID, sessionID stri
 	}
 
 	v.mu.Lock()
-	defer v.mu.Unlock()
 
 	indexed, err := v.loadIndexedIDs(tenantID, sessionID)
 	if err != nil {
+		v.mu.Unlock()
 		return err
 	}
+	pending := v.pendingMessageIDs(tenantID, sessionID)
 
 	var newDocs []*ai.Document
 	var newIDs []string
@@ -81,7 +95,7 @@ func (v *VectorOperator) SaveState(ctx context.Context, tenantID, sessionID stri
 		if msg.MessageID == "" {
 			continue
 		}
-		if indexed[msg.MessageID] {
+		if indexed[msg.MessageID] || pending[msg.MessageID] {
 			continue
 		}
 
@@ -101,26 +115,108 @@ func (v *VectorOperator) SaveState(ctx context.Context, tenantID, sessionID stri
 	}
 
 	if len(newDocs) == 0 {
-		return nil
-	}
-
-	if err := v.backend.Index(ctx, tenantID, sessionID, newDocs); err != nil {
-		slog.WarnContext(ctx, "vector indexing failed, messages will be retried on next save",
-			"sessionID", sessionID,
-			"messageCount", len(newDocs),
-			"error", err,
-		)
+		v.mu.Unlock()
 		return nil
 	}
 
 	for _, id := range newIDs {
-		indexed[id] = true
+		pending[id] = true
 	}
-	if err := v.saveIndexedIDs(tenantID, sessionID, indexed); err != nil {
-		return fmt.Errorf("save indexed IDs: %w", err)
+	v.mu.Unlock()
+
+	job := vectorIndexJob{
+		ctx:       context.WithoutCancel(ctx),
+		tenantID:  tenantID,
+		sessionID: sessionID,
+		docs:      newDocs,
+		messageID: newIDs,
 	}
 
-	return nil
+	select {
+	case v.jobs <- job:
+		return nil
+	default:
+		v.clearPending(job.tenantID, job.sessionID, job.messageID)
+		slog.WarnContext(ctx, "vector indexing queue is full, messages will be retried on next save",
+			"sessionID", sessionID,
+			"messageCount", len(newDocs),
+		)
+		return nil
+	}
+
+}
+
+func (v *VectorOperator) processVectorIndexJobs() {
+	for job := range v.jobs {
+		if err := v.backend.Index(job.ctx, job.tenantID, job.sessionID, job.docs); err != nil {
+			slog.WarnContext(job.ctx, "vector indexing failed, messages will be retried on next save",
+				"sessionID", job.sessionID,
+				"messageCount", len(job.docs),
+				"error", err,
+			)
+			v.clearPending(job.tenantID, job.sessionID, job.messageID)
+			continue
+		}
+
+		v.mu.Lock()
+		indexed, err := v.loadIndexedIDs(job.tenantID, job.sessionID)
+		if err != nil {
+			v.mu.Unlock()
+			slog.WarnContext(job.ctx, "load indexed IDs after vector indexing failed",
+				"sessionID", job.sessionID,
+				"error", err,
+			)
+			v.clearPending(job.tenantID, job.sessionID, job.messageID)
+			continue
+		}
+
+		for _, id := range job.messageID {
+			indexed[id] = true
+		}
+		err = v.saveIndexedIDs(job.tenantID, job.sessionID, indexed)
+		v.mu.Unlock()
+		if err != nil {
+			slog.WarnContext(job.ctx, "save indexed IDs after vector indexing failed",
+				"sessionID", job.sessionID,
+				"error", err,
+			)
+			v.clearPending(job.tenantID, job.sessionID, job.messageID)
+			continue
+		}
+
+		v.clearPending(job.tenantID, job.sessionID, job.messageID)
+	}
+}
+
+func (v *VectorOperator) pendingMessageIDs(tenantID, sessionID string) map[string]bool {
+	key := v.pendingSessionKey(tenantID, sessionID)
+	ids, ok := v.pending[key]
+	if !ok {
+		ids = make(map[string]bool)
+		v.pending[key] = ids
+	}
+	return ids
+}
+
+func (v *VectorOperator) clearPending(tenantID, sessionID string, messageIDs []string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	key := v.pendingSessionKey(tenantID, sessionID)
+	ids, ok := v.pending[key]
+	if !ok {
+		return
+	}
+	for _, id := range messageIDs {
+		delete(ids, id)
+	}
+	if len(ids) == 0 {
+		delete(v.pending, key)
+	}
+}
+
+func (v *VectorOperator) pendingSessionKey(tenantID, sessionID string) string {
+	return tenantID + "/" + sessionID
 }
 
 // LoadState delegates session loading to the composed base operator.

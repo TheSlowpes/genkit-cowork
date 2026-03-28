@@ -31,6 +31,6 @@ type SessionAsset struct {
 // MediaAssetStore persists and deletes media assets referenced by session
 // messages.
 type MediaAssetStore interface {
-	Put(ctx context.Context, sessionID, assetID, mimeType string, data []byte) (absolutePath string, err error)
-	DeleteSessionAssets(ctx context.Context, sessionID string) error
+	Put(ctx context.Context, tenantID, sessionID, assetID, mimeType string, data []byte) (absolutePath string, err error)
+	DeleteSessionAssets(ctx context.Context, tenantID, sessionID string) error
 }

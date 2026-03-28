@@ -126,7 +126,7 @@ func main() {
 	vectorBackend := NewPGVectorBackend(pool, ds, retriever, schemaName, tableName)
 	tenantID := "tenant-1"
 	fileBackend := memory.NewFileSessionOperator("./data/sessions", tenantID)
-	vectorOperator := memory.NewVectorOperator(fileBackend, vectorBackend, "./data/sessions", tenantID)
+	vectorOperator := memory.NewVectorOperator(fileBackend, vectorBackend, "./data/sessions")
 	sessionStore := memory.NewSession(
 		memory.WithCustomSessionOperator(vectorOperator),
 		memory.WithTenantID(tenantID),

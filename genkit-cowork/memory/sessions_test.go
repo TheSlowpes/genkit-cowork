@@ -27,17 +27,19 @@ import (
 )
 
 type testAssetStore struct {
-	putFn func(ctx context.Context, sessionID, assetID, mimeType string, data []byte) (string, error)
+	putFn func(ctx context.Context, tenantID, sessionID, assetID, mimeType string, data []byte) (string, error)
 }
 
-func (s *testAssetStore) Put(ctx context.Context, sessionID, assetID, mimeType string, data []byte) (string, error) {
+func (s *testAssetStore) Put(ctx context.Context, tenantID, sessionID, assetID, mimeType string, data []byte) (string, error) {
 	if s.putFn != nil {
-		return s.putFn(ctx, sessionID, assetID, mimeType, data)
+		return s.putFn(ctx, tenantID, sessionID, assetID, mimeType, data)
 	}
-	return filepath.Join("/tmp", sessionID, "assets", assetID), nil
+	return filepath.Join("/tmp", tenantID, sessionID, "assets", assetID), nil
 }
 
-func (s *testAssetStore) DeleteSessionAssets(ctx context.Context, sessionID string) error {
+func (s *testAssetStore) DeleteSessionAssets(ctx context.Context, tenantID, sessionID string) error {
+	_ = tenantID
+	_ = sessionID
 	return nil
 }
 
@@ -650,7 +652,8 @@ func TestSession_SaveDataURIToAssetStore(t *testing.T) {
 func TestSession_SaveAssetStoreError(t *testing.T) {
 	ctx := context.Background()
 	store := &testAssetStore{
-		putFn: func(ctx context.Context, sessionID, assetID, mimeType string, data []byte) (string, error) {
+		putFn: func(ctx context.Context, tenantID, sessionID, assetID, mimeType string, data []byte) (string, error) {
+			_ = tenantID
 			return "", errors.New("put failed")
 		},
 	}

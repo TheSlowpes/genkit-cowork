@@ -71,10 +71,33 @@ func (s *FileBlobDiskStore) ReadFile(ctx context.Context, tenantID, fileID, path
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	_ = tenantID
-	_ = fileID
+	if strings.TrimSpace(tenantID) == "" {
+		return nil, fmt.Errorf("read tenant file blob: tenantID is required")
+	}
+	if strings.TrimSpace(fileID) == "" {
+		return nil, fmt.Errorf("read tenant file blob: fileID is required")
+	}
 
-	b, err := os.ReadFile(path)
+	rootAbs, err := filepath.Abs(s.RootDir)
+	if err != nil {
+		return nil, fmt.Errorf("read tenant file blob: resolve root path: %w", err)
+	}
+
+	tenantRoot := filepath.Join(rootAbs, tenantID)
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("read tenant file blob: resolve file path: %w", err)
+	}
+
+	rel, err := filepath.Rel(tenantRoot, pathAbs)
+	if err != nil {
+		return nil, fmt.Errorf("read tenant file blob: validate file path: %w", err)
+	}
+	if rel == "." || rel == "" || strings.HasPrefix(rel, "..") {
+		return nil, fmt.Errorf("read tenant file blob: path %q is outside tenant scope", path)
+	}
+
+	b, err := os.ReadFile(pathAbs)
 	if err != nil {
 		return nil, fmt.Errorf("read tenant file blob: %w", err)
 	}

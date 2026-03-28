@@ -100,7 +100,7 @@ func main() {
 		os.Exit(1)
 	}
 	fileBackend := memory.NewFileSessionOperator(stateDir, tenantID)
-	vectorOperator := memory.NewVectorOperator(fileBackend, vecBackend, stateDir, tenantID)
+	vectorOperator := memory.NewVectorOperator(fileBackend, vecBackend, stateDir)
 	store := memory.NewSession(
 		memory.WithCustomSessionOperator(vectorOperator),
 		memory.WithTenantID(tenantID),

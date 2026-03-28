@@ -23,7 +23,11 @@ import (
 	"time"
 )
 
-// StateSnapshot captures an immutable whole-state checkpoint for replay.
+// StateSnapshot captures immutable checkpoint metadata for one whole-state write.
+//
+// Canonical replay state lives in SessionState persisted by SessionOperator.
+// Snapshots provide ordered checkpoint metadata and an integrity checksum over
+// the canonical state.
 type StateSnapshot struct {
 	SnapshotID    string    `json:"snapshotID"`
 	Sequence      int64     `json:"sequence"`

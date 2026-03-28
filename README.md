@@ -274,7 +274,7 @@ vecBackend, _ := memory.NewLocalVecBackend(g, "session-memory", memory.LocalVecC
     Embedder: embedder, // any ai.Embedder
 })
 
-vecOp := memory.NewVectorOperator(fileOp, vecBackend, "./data/sessions", "tenant-1")
+vecOp := memory.NewVectorOperator(fileOp, vecBackend, "./data/sessions")
 
 store := memory.NewSession(
     memory.WithCustomSessionOperator(vecOp),

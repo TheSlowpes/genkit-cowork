@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 )
@@ -105,6 +106,22 @@ func (m *mockVectorBackend) indexedCount(tenantID, sessionID string) int {
 	return len(m.indexed[tenantID][sessionID])
 }
 
+func waitForIndexedCount(t *testing.T, backend *mockVectorBackend, tenantID, sessionID string, want int) {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := backend.indexedCount(tenantID, sessionID); got == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if got := backend.indexedCount(tenantID, sessionID); got != want {
+		t.Fatalf("indexedCount(%q, %q) = %d, want %d", tenantID, sessionID, got, want)
+	}
+}
+
 // --- VectorOperator tests ---
 
 func TestVectorOperator_SaveState_IndexesNewMessages(t *testing.T) {
@@ -112,7 +129,7 @@ func TestVectorOperator_SaveState_IndexesNewMessages(t *testing.T) {
 	tenantID := "t1"
 	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir, tenantID)
+	vop := NewVectorOperator(base, backend, dir)
 	ctx := context.Background()
 
 	state := SessionState{
@@ -127,9 +144,7 @@ func TestVectorOperator_SaveState_IndexesNewMessages(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 
-	if c := backend.indexedCount(tenantID, "sess-1"); c != 2 {
-		t.Errorf("expected 2 indexed docs, got %d", c)
-	}
+	waitForIndexedCount(t, backend, tenantID, "sess-1", 2)
 }
 
 func TestVectorOperator_SaveState_SkipsAlreadyIndexed(t *testing.T) {
@@ -137,7 +152,7 @@ func TestVectorOperator_SaveState_SkipsAlreadyIndexed(t *testing.T) {
 	tenantID := "t1"
 	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir, tenantID)
+	vop := NewVectorOperator(base, backend, dir)
 	ctx := context.Background()
 
 	state := SessionState{
@@ -157,9 +172,7 @@ func TestVectorOperator_SaveState_SkipsAlreadyIndexed(t *testing.T) {
 	}
 
 	// Only m2 should have been newly indexed.
-	if c := backend.indexedCount(tenantID, "sess-1"); c != 2 {
-		t.Errorf("expected 2 total indexed docs (1 + 1), got %d", c)
-	}
+	waitForIndexedCount(t, backend, tenantID, "sess-1", 2)
 }
 
 func TestVectorOperator_SaveState_SkipsEmptyMessages(t *testing.T) {
@@ -167,7 +180,7 @@ func TestVectorOperator_SaveState_SkipsEmptyMessages(t *testing.T) {
 	tenantID := "t1"
 	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir, tenantID)
+	vop := NewVectorOperator(base, backend, dir)
 	ctx := context.Background()
 
 	state := SessionState{
@@ -185,9 +198,7 @@ func TestVectorOperator_SaveState_SkipsEmptyMessages(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 
-	if c := backend.indexedCount(tenantID, "sess-empty"); c != 0 {
-		t.Errorf("expected 0 indexed docs for empty content, got %d", c)
-	}
+	waitForIndexedCount(t, backend, tenantID, "sess-empty", 0)
 }
 
 func TestVectorOperator_SaveState_SkipsNoMessageID(t *testing.T) {
@@ -195,7 +206,7 @@ func TestVectorOperator_SaveState_SkipsNoMessageID(t *testing.T) {
 	tenantID := "t1"
 	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir, tenantID)
+	vop := NewVectorOperator(base, backend, dir)
 	ctx := context.Background()
 
 	state := SessionState{
@@ -213,9 +224,7 @@ func TestVectorOperator_SaveState_SkipsNoMessageID(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 
-	if c := backend.indexedCount(tenantID, "sess-noid"); c != 0 {
-		t.Errorf("expected 0 indexed docs for missing ID, got %d", c)
-	}
+	waitForIndexedCount(t, backend, tenantID, "sess-noid", 0)
 }
 
 func TestVectorOperator_SaveState_IndexFailureRetriesNextSave(t *testing.T) {
@@ -224,7 +233,7 @@ func TestVectorOperator_SaveState_IndexFailureRetriesNextSave(t *testing.T) {
 	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
 	backend.indexErr = errors.New("simulated index failure")
-	vop := NewVectorOperator(base, backend, dir, tenantID)
+	vop := NewVectorOperator(base, backend, dir)
 	ctx := context.Background()
 
 	state := SessionState{
@@ -252,9 +261,7 @@ func TestVectorOperator_SaveState_IndexFailureRetriesNextSave(t *testing.T) {
 	}
 
 	// Now it should be indexed.
-	if c := backend.indexedCount(tenantID, "sess-retry"); c != 1 {
-		t.Errorf("expected 1 indexed doc after retry, got %d", c)
-	}
+	waitForIndexedCount(t, backend, tenantID, "sess-retry", 1)
 }
 
 func TestVectorOperator_LoadState_DelegatesToBase(t *testing.T) {
@@ -262,7 +269,7 @@ func TestVectorOperator_LoadState_DelegatesToBase(t *testing.T) {
 	tenantID := "t1"
 	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir, tenantID)
+	vop := NewVectorOperator(base, backend, dir)
 	ctx := context.Background()
 
 	state := SessionState{
@@ -287,7 +294,7 @@ func TestVectorOperator_DeleteSession_CleansUpBackend(t *testing.T) {
 	tenantID := "t1"
 	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir, tenantID)
+	vop := NewVectorOperator(base, backend, dir)
 	ctx := context.Background()
 
 	state := SessionState{
@@ -299,6 +306,7 @@ func TestVectorOperator_DeleteSession_CleansUpBackend(t *testing.T) {
 	if err := vop.SaveState(ctx, tenantID, "sess-del", state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
+	waitForIndexedCount(t, backend, tenantID, "sess-del", 1)
 
 	if err := vop.DeleteSession(ctx, tenantID, "sess-del"); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
@@ -310,9 +318,7 @@ func TestVectorOperator_DeleteSession_CleansUpBackend(t *testing.T) {
 	}
 
 	// Indexed docs should be gone.
-	if c := backend.indexedCount(tenantID, "sess-del"); c != 0 {
-		t.Errorf("expected 0 indexed docs after delete, got %d", c)
-	}
+	waitForIndexedCount(t, backend, tenantID, "sess-del", 0)
 
 	// Session should be gone from base.
 	loaded, err := vop.LoadState(ctx, tenantID, "sess-del", All, 0)
@@ -329,7 +335,7 @@ func TestVectorOperator_DeleteSession_BackendError(t *testing.T) {
 	tenantID := "t1"
 	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir, tenantID)
+	vop := NewVectorOperator(base, backend, dir)
 	ctx := context.Background()
 
 	state := SessionState{
@@ -341,6 +347,7 @@ func TestVectorOperator_DeleteSession_BackendError(t *testing.T) {
 	if err := vop.SaveState(ctx, tenantID, "sess-delerr", state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
+	waitForIndexedCount(t, backend, tenantID, "sess-delerr", 1)
 
 	backend.delErr = errors.New("simulated delete failure")
 	err := vop.DeleteSession(ctx, tenantID, "sess-delerr")
@@ -354,7 +361,7 @@ func TestVectorOperator_Search(t *testing.T) {
 	tenantID := "t1"
 	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir, tenantID)
+	vop := NewVectorOperator(base, backend, dir)
 	ctx := context.Background()
 
 	state := SessionState{
@@ -368,6 +375,7 @@ func TestVectorOperator_Search(t *testing.T) {
 	if err := vop.SaveState(ctx, tenantID, "sess-search", state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
+	waitForIndexedCount(t, backend, tenantID, "sess-search", 3)
 
 	// Mock backend returns all indexed docs (up to topK).
 	results, err := vop.Search(ctx, tenantID, "sess-search", "fox", 2)
@@ -384,7 +392,7 @@ func TestVectorOperator_SearchTenantAcrossSessions(t *testing.T) {
 	tenantID := "t1"
 	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir, tenantID)
+	vop := NewVectorOperator(base, backend, dir)
 	ctx := context.Background()
 
 	stateA := SessionState{
@@ -405,6 +413,8 @@ func TestVectorOperator_SearchTenantAcrossSessions(t *testing.T) {
 	if err := vop.SaveState(ctx, tenantID, "sess-b", stateB); err != nil {
 		t.Fatalf("SaveState sess-b: %v", err)
 	}
+	waitForIndexedCount(t, backend, tenantID, "sess-a", 1)
+	waitForIndexedCount(t, backend, tenantID, "sess-b", 1)
 
 	results, err := vop.SearchTenant(ctx, tenantID, "invoice", 5)
 	if err != nil {
@@ -420,7 +430,7 @@ func TestVectorOperator_SearchZeroTopK(t *testing.T) {
 	tenantID := "t1"
 	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir, tenantID)
+	vop := NewVectorOperator(base, backend, dir)
 	ctx := context.Background()
 
 	results, err := vop.Search(ctx, tenantID, "sess-x", "query", 0)
@@ -437,7 +447,7 @@ func TestVectorOperator_SearchNonexistentSession(t *testing.T) {
 	tenantID := "t1"
 	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir, tenantID)
+	vop := NewVectorOperator(base, backend, dir)
 	ctx := context.Background()
 
 	results, err := vop.Search(ctx, tenantID, "nope", "query", 5)
@@ -454,7 +464,7 @@ func TestVectorOperator_ContextCancelled(t *testing.T) {
 	tenantID := "t1"
 	base := NewFileSessionOperator(dir, tenantID)
 	backend := newMockVectorBackend()
-	vop := NewVectorOperator(base, backend, dir, tenantID)
+	vop := NewVectorOperator(base, backend, dir)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 

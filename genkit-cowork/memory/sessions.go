@@ -480,7 +480,7 @@ func (s *Session) Save(ctx context.Context, sessionID string, data *session.Data
 		}
 
 		if s.opts.assetStore != nil {
-			if err := s.normalizeMediaParts(ctx, sessionID, msg, &data.State); err != nil {
+			if err := s.normalizeMediaParts(ctx, data.State.TenantID, sessionID, msg, &data.State); err != nil {
 				return fmt.Errorf("normalize media parts for message %q: %w", msg.MessageID, err)
 			}
 		}
@@ -557,7 +557,7 @@ func (s *Session) Save(ctx context.Context, sessionID string, data *session.Data
 	return s.opts.operator.SaveState(ctx, s.opts.tenantID, sessionID, data.State)
 }
 
-func (s *Session) normalizeMediaParts(ctx context.Context, sessionID string, msg *SessionMessage, state *SessionState) error {
+func (s *Session) normalizeMediaParts(ctx context.Context, tenantID, sessionID string, msg *SessionMessage, state *SessionState) error {
 	for i, part := range msg.Content.Content {
 		if part == nil || !part.IsMedia() {
 			continue
@@ -580,7 +580,7 @@ func (s *Session) normalizeMediaParts(ctx context.Context, sessionID string, msg
 		}
 
 		assetID := uuid.New().String()
-		absolutePath, err := s.opts.assetStore.Put(ctx, sessionID, assetID, mimeType, payload)
+		absolutePath, err := s.opts.assetStore.Put(ctx, tenantID, sessionID, assetID, mimeType, payload)
 		if err != nil {
 			return fmt.Errorf("store media asset: %w", err)
 		}
