@@ -21,6 +21,28 @@ import (
 	"testing"
 )
 
+func TestFileBlobDiskStore_PutFile_RejectsPathTraversal(t *testing.T) {
+	ctx := context.Background()
+	store := NewFileBlobDiskStore(t.TempDir())
+
+	cases := []struct {
+		name              string
+		tenantID, fileID string
+	}{
+		{"dotdot tenantID", "..", "file-1"},
+		{"slash tenantID", "tenant/evil", "file-1"},
+		{"dotdot fileID", "tenant-a", ".."},
+		{"slash fileID", "tenant-a", "file/evil"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := store.PutFile(ctx, tc.tenantID, tc.fileID, "doc.txt", "text/plain", []byte("x")); err == nil {
+				t.Fatalf("PutFile(%q, %q) expected error, got nil", tc.tenantID, tc.fileID)
+			}
+		})
+	}
+}
+
 func TestFileBlobDiskStore_ReadFile_ValidatesTenantScope(t *testing.T) {
 	ctx := context.Background()
 	store := NewFileBlobDiskStore(t.TempDir())

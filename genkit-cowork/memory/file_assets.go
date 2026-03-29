@@ -39,6 +39,15 @@ func (s *FileMediaAssetStore) Put(ctx context.Context, tenantID, sessionID, asse
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if err := validatePathSegment("tenantID", tenantID); err != nil {
+		return "", fmt.Errorf("write media asset: %w", err)
+	}
+	if err := validatePathSegment("sessionID", sessionID); err != nil {
+		return "", fmt.Errorf("write media asset: %w", err)
+	}
+	if err := validatePathSegment("assetID", assetID); err != nil {
+		return "", fmt.Errorf("write media asset: %w", err)
+	}
 
 	dir := filepath.Join(s.RootDir, tenantID, sessionID, "assets")
 	if err := os.MkdirAll(dir, 0755); err != nil {

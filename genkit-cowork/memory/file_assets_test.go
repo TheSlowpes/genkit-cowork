@@ -24,6 +24,33 @@ import (
 	"testing"
 )
 
+func TestFileMediaAssetStore_Put_RejectsPathTraversal(t *testing.T) {
+	ctx := context.Background()
+	store := NewFileMediaAssetStore(t.TempDir())
+
+	cases := []struct {
+		name                       string
+		tenantID, sessionID, assetID string
+	}{
+		{"empty tenantID", "", "session-1", "asset-1"},
+		{"dotdot tenantID", "..", "session-1", "asset-1"},
+		{"slash tenantID", "tenant/evil", "session-1", "asset-1"},
+		{"empty sessionID", "tenant-1", "", "asset-1"},
+		{"dotdot sessionID", "tenant-1", "..", "asset-1"},
+		{"slash sessionID", "tenant-1", "session/evil", "asset-1"},
+		{"empty assetID", "tenant-1", "session-1", ""},
+		{"dotdot assetID", "tenant-1", "session-1", ".."},
+		{"slash assetID", "tenant-1", "session-1", "asset/evil"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := store.Put(ctx, tc.tenantID, tc.sessionID, tc.assetID, "text/plain", []byte("x")); err == nil {
+				t.Fatalf("Put(%q, %q, %q) expected error, got nil", tc.tenantID, tc.sessionID, tc.assetID)
+			}
+		})
+	}
+}
+
 func TestFileMediaAssetStore_PutTenantScopedPathAndExtension(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

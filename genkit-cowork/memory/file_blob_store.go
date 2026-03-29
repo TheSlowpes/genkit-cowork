@@ -47,11 +47,11 @@ func (s *FileBlobDiskStore) PutFile(ctx context.Context, tenantID, fileID, fileN
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(tenantID) == "" {
-		return "", fmt.Errorf("write tenant file blob: tenantID is required")
+	if err := validatePathSegment("tenantID", tenantID); err != nil {
+		return "", fmt.Errorf("write tenant file blob: %w", err)
 	}
-	if strings.TrimSpace(fileID) == "" {
-		return "", fmt.Errorf("write tenant file blob: fileID is required")
+	if err := validatePathSegment("fileID", fileID); err != nil {
+		return "", fmt.Errorf("write tenant file blob: %w", err)
 	}
 
 	dir := filepath.Join(s.RootDir, tenantID, "files", "raw")
@@ -77,11 +77,11 @@ func (s *FileBlobDiskStore) ReadFile(ctx context.Context, tenantID, fileID, path
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(tenantID) == "" {
-		return nil, fmt.Errorf("read tenant file blob: tenantID is required")
+	if err := validatePathSegment("tenantID", tenantID); err != nil {
+		return nil, fmt.Errorf("read tenant file blob: %w", err)
 	}
-	if strings.TrimSpace(fileID) == "" {
-		return nil, fmt.Errorf("read tenant file blob: fileID is required")
+	if err := validatePathSegment("fileID", fileID); err != nil {
+		return nil, fmt.Errorf("read tenant file blob: %w", err)
 	}
 
 	rootAbs, err := filepath.Abs(s.RootDir)
