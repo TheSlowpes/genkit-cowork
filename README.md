@@ -241,7 +241,7 @@ Memory is implemented through a `Session` store plus pluggable `SessionOperator`
 | Ledger validation | `ValidateSessionLedger(state)` | Validates append-only sequencing and immutable-prefix constraints for a session ledger |
 | Replay window | `MessagesForTurn(state, turn)` | Reconstructs the exact message slice represented by a persisted turn sequence range |
 | In-memory backend | default (`defaultSessionOperator`) | Process-local map-based state storage |
-| File backend | `NewFileSessionOperator(rootDir)` | Durable JSON state at `rootDir/{sessionID}/state.json` |
+| File backend | `NewFileSessionOperator(rootDir, tenantID)` | Durable JSON state at `rootDir/{tenantID}/{sessionID}/state.json` |
 | Vector wrapper | `NewVectorOperator(base, backend, rootDir)` | Wraps a base operator and indexes new messages for semantic retrieval |
 | Local vector backend | `NewLocalVecBackend(g, name, cfg)` | `localvec`-based implementation of `VectorBackend` |
 | File records backend | `NewFileRecordOperator(rootDir)` | Durable tenant-global file and chunk records under `rootDir/{tenantID}/files` |
@@ -256,11 +256,7 @@ Memory is implemented through a `Session` store plus pluggable `SessionOperator`
 `NewFileSessionOperator` provides durable session state with per-session locks, atomic writes, append-only validation, and tenant consistency checks.
 
 ```go
-fileOp := memory.NewFileSessionOperator("./data/sessions")
-store := memory.NewSession(
-    memory.WithCustomSessionOperator(fileOp),
-    memory.WithPersistenceMode(memory.SlidingWindow, 100),
-)
+fileOp := memory.NewFileSessionOperator("./data/sessions", "tenant-1")
 ```
 
 ### Vector-augmented retrieval
@@ -268,7 +264,7 @@ store := memory.NewSession(
 `VectorOperator` composes on top of a base `SessionOperator`. It indexes new messages by `messageID` and supports semantic lookup with `Search`.
 
 ```go
-fileOp := memory.NewFileSessionOperator("./data/sessions")
+fileOp := memory.NewFileSessionOperator("./data/sessions", "tenant-1")
 
 vecBackend, _ := memory.NewLocalVecBackend(g, "session-memory", memory.LocalVecConfig{
     Embedder: embedder, // any ai.Embedder
