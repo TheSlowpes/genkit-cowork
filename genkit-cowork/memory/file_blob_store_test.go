@@ -43,6 +43,18 @@ func TestFileBlobDiskStore_ReadFile_ValidatesTenantScope(t *testing.T) {
 	}
 }
 
+func TestFileBlobDiskStore_PutFile_RequiresTenantAndFileID(t *testing.T) {
+	ctx := context.Background()
+	store := NewFileBlobDiskStore(t.TempDir())
+
+	if _, err := store.PutFile(ctx, "", "file-1", "doc.txt", "text/plain", []byte("hello")); err == nil {
+		t.Fatal("PutFile() expected error for empty tenantID, got nil")
+	}
+	if _, err := store.PutFile(ctx, "tenant-a", "", "doc.txt", "text/plain", []byte("hello")); err == nil {
+		t.Fatal("PutFile() expected error for empty fileID, got nil")
+	}
+}
+
 func TestFileBlobDiskStore_ReadFile_RequiresTenantAndFileID(t *testing.T) {
 	ctx := context.Background()
 	store := NewFileBlobDiskStore(t.TempDir())
