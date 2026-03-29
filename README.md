@@ -267,7 +267,8 @@ fileOp := memory.NewFileSessionOperator("./data/sessions", "tenant-1")
 fileOp := memory.NewFileSessionOperator("./data/sessions", "tenant-1")
 
 vecBackend, _ := memory.NewLocalVecBackend(g, "session-memory", memory.LocalVecConfig{
-    Embedder: embedder, // any ai.Embedder
+    Embedder: embedder,            // any ai.Embedder
+    IndexDir: "./data/localvec", // localvec persistence directory
 })
 
 vecOp := memory.NewVectorOperator(fileOp, vecBackend, "./data/sessions")

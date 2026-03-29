@@ -38,8 +38,9 @@ type VectorBackend interface {
 
 // LocalVecConfig configures the localvec-backed VectorBackend implementation.
 type LocalVecConfig struct {
-	Embedder        ai.Embedder
-	TenantID        string
+	Embedder ai.Embedder
+	// IndexDir is the filesystem directory used by localvec to persist index files.
+	IndexDir        string
 	OverFetchFactor int
 }
 
@@ -60,7 +61,7 @@ func NewLocalVecBackend(g *genkit.Genkit, name string, cfg LocalVecConfig) (Vect
 		g,
 		name,
 		localvec.Config{
-			Dir:      cfg.TenantID,
+			Dir:      cfg.IndexDir,
 			Embedder: cfg.Embedder,
 		},
 		nil,

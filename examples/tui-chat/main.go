@@ -93,7 +93,7 @@ func main() {
 	embedder := genkit.DefineEmbedder(g, "demo/tui-embedder", nil, simpleEmbed(256))
 	vecBackend, err := memory.NewLocalVecBackend(g, "tui-memory", memory.LocalVecConfig{
 		Embedder: embedder,
-		TenantID: indexDir,
+		IndexDir: indexDir,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "init vector backend: %v\n", err)
