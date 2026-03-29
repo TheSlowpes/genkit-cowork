@@ -47,6 +47,12 @@ func (s *FileBlobDiskStore) PutFile(ctx context.Context, tenantID, fileID, fileN
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if strings.TrimSpace(tenantID) == "" {
+		return "", fmt.Errorf("write tenant file blob: tenantID is required")
+	}
+	if strings.TrimSpace(fileID) == "" {
+		return "", fmt.Errorf("write tenant file blob: fileID is required")
+	}
 
 	dir := filepath.Join(s.RootDir, tenantID, "files", "raw")
 	if err := os.MkdirAll(dir, 0755); err != nil {
