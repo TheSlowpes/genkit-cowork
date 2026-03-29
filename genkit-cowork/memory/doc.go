@@ -50,7 +50,7 @@
 //
 // Create a file-backed store with vector indexing:
 //
-//	fileOp := memory.NewFileSessionOperator("./data/sessions")
+//	fileOp := memory.NewFileSessionOperator("./data/sessions", "tenant-123")
 //	vecOp := memory.NewVectorOperator(fileOp, backend, "./data/sessions")
 //	store := memory.NewSession(memory.WithCustomSessionOperator(vecOp))
 package memory
