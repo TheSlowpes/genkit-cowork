@@ -21,6 +21,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -36,6 +37,61 @@ type mockVectorBackend struct {
 	indexErr error
 	deleted  []string
 	delErr   error
+}
+
+type blockingVectorBackend struct {
+	indexStarted chan struct{}
+	allowIndex   chan struct{}
+
+	mu    sync.Mutex
+	calls []string
+}
+
+func newBlockingVectorBackend() *blockingVectorBackend {
+	return &blockingVectorBackend{
+		indexStarted: make(chan struct{}),
+		allowIndex:   make(chan struct{}),
+	}
+}
+
+func (b *blockingVectorBackend) Index(ctx context.Context, tenantID, sessionID string, docs []*ai.Document) error {
+	select {
+	case <-b.indexStarted:
+	default:
+		close(b.indexStarted)
+	}
+
+	b.mu.Lock()
+	b.calls = append(b.calls, "index")
+	b.mu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-b.allowIndex:
+		return nil
+	}
+}
+
+func (b *blockingVectorBackend) Delete(ctx context.Context, tenantID, sessionID string) error {
+	b.mu.Lock()
+	b.calls = append(b.calls, "delete")
+	b.mu.Unlock()
+	return nil
+}
+
+func (b *blockingVectorBackend) RetrieveTenant(ctx context.Context, tenantID, query string, topK int) ([]*ai.Document, error) {
+	return nil, nil
+}
+
+func (b *blockingVectorBackend) RetrieveSession(ctx context.Context, tenantID, sessionID, query string, topK int) ([]*ai.Document, error) {
+	return nil, nil
+}
+
+func (b *blockingVectorBackend) callSnapshot() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Clone(b.calls)
 }
 
 func newMockVectorBackend() *mockVectorBackend {
@@ -353,6 +409,62 @@ func TestVectorOperator_DeleteSession_BackendError(t *testing.T) {
 	err := vop.DeleteSession(ctx, tenantID, "sess-delerr")
 	if err == nil {
 		t.Fatal("expected error from backend delete failure, got nil")
+	}
+}
+
+func TestVectorOperator_DeleteSession_WaitsForIndexing(t *testing.T) {
+	dir := t.TempDir()
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
+	backend := newBlockingVectorBackend()
+	vop := NewVectorOperator(base, backend, dir)
+	ctx := context.Background()
+
+	state := SessionState{
+		TenantID: tenantID,
+		Messages: []SessionMessage{
+			makeMessage("m1", UIMessage, ai.RoleUser, "hello"),
+		},
+	}
+
+	if err := vop.SaveState(ctx, tenantID, "sess-serial", state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	select {
+	case <-backend.indexStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for indexing to start")
+	}
+
+	deleteDone := make(chan error, 1)
+	go func() {
+		deleteDone <- vop.DeleteSession(ctx, tenantID, "sess-serial")
+	}()
+
+	select {
+	case err := <-deleteDone:
+		t.Fatalf("DeleteSession finished before indexing unblocked: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if calls := backend.callSnapshot(); !slices.Equal(calls, []string{"index"}) {
+		t.Fatalf("backend calls before index unblock = %v, want [index]", calls)
+	}
+
+	close(backend.allowIndex)
+
+	select {
+	case err := <-deleteDone:
+		if err != nil {
+			t.Fatalf("DeleteSession: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("DeleteSession did not complete after indexing unblocked")
+	}
+
+	if calls := backend.callSnapshot(); !slices.Equal(calls, []string{"index", "delete"}) {
+		t.Fatalf("backend calls = %v, want [index delete]", calls)
 	}
 }
 

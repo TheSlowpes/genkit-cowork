@@ -37,8 +37,11 @@ type VectorOperator struct {
 	backend VectorBackend
 	rootDir string
 	mu      sync.Mutex
-	jobs    chan vectorIndexJob
-	pending map[string]map[string]bool
+	// backendMu serializes all backend operations. Index/Delete take the write
+	// lock, while retrieval operations take the read lock.
+	backendMu sync.RWMutex
+	jobs      chan vectorIndexJob
+	pending   map[string]map[string]bool
 }
 
 type vectorIndexJob struct {
@@ -148,7 +151,7 @@ func (v *VectorOperator) SaveState(ctx context.Context, tenantID, sessionID stri
 
 func (v *VectorOperator) processVectorIndexJobs() {
 	for job := range v.jobs {
-		if err := v.backend.Index(job.ctx, job.tenantID, job.sessionID, job.docs); err != nil {
+		if err := v.indexBackend(job.ctx, job.tenantID, job.sessionID, job.docs); err != nil {
 			slog.WarnContext(job.ctx, "vector indexing failed, messages will be retried on next save",
 				"sessionID", job.sessionID,
 				"messageCount", len(job.docs),
@@ -239,12 +242,13 @@ func (v *VectorOperator) DeleteSession(ctx context.Context, tenantID, sessionID 
 		return err
 	}
 
-	v.mu.Lock()
-	defer v.mu.Unlock()
-
-	if err := v.backend.Delete(ctx, tenantID, sessionID); err != nil {
+	if err := v.deleteBackend(ctx, tenantID, sessionID); err != nil {
 		return fmt.Errorf("vector backend delete: %w", err)
 	}
+
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	delete(v.pending, v.pendingSessionKey(tenantID, sessionID))
 
 	path := v.indexedIDsPath(tenantID, sessionID)
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -269,7 +273,7 @@ func (v *VectorOperator) SearchSession(ctx context.Context, tenantID, sessionID,
 		return nil, nil
 	}
 
-	docs, err := v.backend.RetrieveSession(ctx, tenantID, sessionID, query, topK)
+	docs, err := v.retrieveSessionBackend(ctx, tenantID, sessionID, query, topK)
 	if err != nil {
 		return nil, fmt.Errorf("vector backend retrieve: %w", err)
 	}
@@ -313,7 +317,7 @@ func (v *VectorOperator) SearchTenant(ctx context.Context, tenantID, query strin
 		return nil, nil
 	}
 
-	docs, err := v.backend.RetrieveTenant(ctx, tenantID, query, topK)
+	docs, err := v.retrieveTenantBackend(ctx, tenantID, query, topK)
 	if err != nil {
 		return nil, fmt.Errorf("vector backend retrieve tenant: %w", err)
 	}
@@ -422,4 +426,28 @@ func messageText(msg *SessionMessage) string {
 		}
 	}
 	return b.String()
+}
+
+func (v *VectorOperator) indexBackend(ctx context.Context, tenantID, sessionID string, docs []*ai.Document) error {
+	v.backendMu.Lock()
+	defer v.backendMu.Unlock()
+	return v.backend.Index(ctx, tenantID, sessionID, docs)
+}
+
+func (v *VectorOperator) deleteBackend(ctx context.Context, tenantID, sessionID string) error {
+	v.backendMu.Lock()
+	defer v.backendMu.Unlock()
+	return v.backend.Delete(ctx, tenantID, sessionID)
+}
+
+func (v *VectorOperator) retrieveSessionBackend(ctx context.Context, tenantID, sessionID, query string, topK int) ([]*ai.Document, error) {
+	v.backendMu.RLock()
+	defer v.backendMu.RUnlock()
+	return v.backend.RetrieveSession(ctx, tenantID, sessionID, query, topK)
+}
+
+func (v *VectorOperator) retrieveTenantBackend(ctx context.Context, tenantID, query string, topK int) ([]*ai.Document, error) {
+	v.backendMu.RLock()
+	defer v.backendMu.RUnlock()
+	return v.backend.RetrieveTenant(ctx, tenantID, query, topK)
 }
