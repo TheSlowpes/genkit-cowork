@@ -449,11 +449,6 @@ func (s *Session) Save(ctx context.Context, sessionID string, data *session.Data
 			lastSnapshotSequence = existing.Snapshots[len(existing.Snapshots)-1].Sequence
 		}
 
-		if s.opts.assetStore != nil {
-			if err := s.normalizeMediaParts(ctx, sessionID, msg, &data.State); err != nil {
-				return fmt.Errorf("normalize media parts for message %q: %w", msg.MessageID, err)
-			}
-		}
 	}
 
 	if len(data.State.Messages) < existingMessages {
@@ -705,96 +700,4 @@ func WithTokenEstimator(estimator TokenEstimator) SessionOption {
 	return func(opts *sessionOptions) {
 		opts.tokenEstimator = estimator
 	}
-}
-
-func (s *Session) normalizeMediaParts(ctx context.Context, sessionID string, msg *SessionMessage, state *SessionState) error {
-	for i, part := range msg.Content.Content {
-		if part == nil || !part.IsMedia() {
-			continue
-		}
-
-		if filepath.IsAbs(part.Text) {
-			state.Assets = upsertSessionAsset(state.Assets, SessionAsset{
-				AssetID:   filepath.Base(part.Text),
-				MessageID: msg.MessageID,
-				PartIndex: i,
-				MimeType:  part.ContentType,
-				Path:      part.Text,
-			})
-			continue
-		}
-
-		mimeType, payload, ok := parseDataURI(part.Text)
-		if !ok {
-			continue
-		}
-
-		assetID := uuid.New().String()
-		absolutePath, err := s.opts.assetStore.Put(ctx, sessionID, assetID, mimeType, payload)
-		if err != nil {
-			return fmt.Errorf("store media asset: %w", err)
-		}
-
-		part.Text = absolutePath
-		part.ContentType = mimeType
-		state.Assets = upsertSessionAsset(state.Assets, SessionAsset{
-			AssetID:   assetID,
-			MessageID: msg.MessageID,
-			PartIndex: i,
-			MimeType:  mimeType,
-			SizeBytes: len(payload),
-			Path:      absolutePath,
-		})
-
-	}
-	return nil
-}
-
-func upsertSessionAsset(assets []SessionAsset, asset SessionAsset) []SessionAsset {
-	for i := range assets {
-		if assets[i].MessageID == asset.MessageID && assets[i].PartIndex == asset.PartIndex {
-			assets[i] = asset
-			return assets
-		}
-	}
-
-	return append(assets, asset)
-}
-
-func parseDataURI(uri string) (mimeType string, data []byte, ok bool) {
-	if !strings.HasPrefix(uri, "data:") {
-		return "", nil, false
-	}
-
-	s := strings.TrimPrefix(uri, "data:")
-
-	parts := strings.SplitN(s, ",", 2)
-	if len(parts) != 2 {
-		return "", nil, false
-	}
-
-	meta := parts[0]
-	rawData := parts[1]
-
-	isBase64 := strings.HasSuffix(meta, ";base64")
-	if isBase64 {
-		mimeType = strings.TrimSuffix(meta, ";base64")
-		decoded, err := base64.StdEncoding.DecodeString(rawData)
-		if err != nil {
-			return "", nil, false
-		}
-		data = decoded
-	} else {
-		mimeType = meta
-		decoded, err := url.PathUnescape(rawData)
-		if err != nil {
-			return "", nil, false
-		}
-		data = []byte(decoded)
-	}
-
-	if mimeType == "" {
-		mimeType = "text/plain"
-	}
-	return mimeType, data, true
 }
