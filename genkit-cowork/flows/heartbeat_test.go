@@ -1321,6 +1321,7 @@ func TestNewHeartbeat_WithCustomLoopOperator(t *testing.T) {
 	h := NewHeartbeat(g, store, HeartbeatConfig{
 		Interval:  time.Minute,
 		SessionID: "hb-custom-op",
+		TenantID:  "tenant-1",
 		AgentConfig: &AgentLoopConfig{
 			Model: "test/hb-custom-op",
 		},
@@ -1371,6 +1372,7 @@ func TestNewHeartbeat_WithCustomAgentConfig(t *testing.T) {
 	h := NewHeartbeat(g, store, HeartbeatConfig{
 		Interval:  time.Minute,
 		SessionID: "hb-cfg-override",
+		TenantID:  "tenant-1",
 	},
 		WithCustomHeartbeatAgentConfig(AgentLoopConfig{
 			Model: "test/hb-default-model",
@@ -1406,6 +1408,7 @@ func TestNewHeartbeat_WithEventBus(t *testing.T) {
 	h := NewHeartbeat(g, store, HeartbeatConfig{
 		Interval:  time.Minute,
 		SessionID: "hb-bus",
+		TenantID:  "tenant-1",
 		AgentConfig: &AgentLoopConfig{
 			Model: "test/hb-bus",
 		},

@@ -118,7 +118,13 @@ func NewHeartbeat(
 		g,
 		"heartbeat",
 		func(ctx context.Context, input *HeartbeatInput) (*HeartbeatOutput, error) {
+			if input.TenantID == "" {
+				return nil, fmt.Errorf("tenantID is required")
+			}
 			tenantStore := store.ForTenant(input.TenantID)
+			if input.SessionID == "" {
+				return nil, fmt.Errorf("sessionID is required")
+			}
 			sess, err := session.Load(ctx, tenantStore, input.SessionID)
 			if err != nil {
 				sess, err = session.New(ctx,

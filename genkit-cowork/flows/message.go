@@ -109,7 +109,13 @@ func NewHandleMessageFlow(
 		g,
 		"handleMessage",
 		func(ctx context.Context, input *HandleMessageInput) (*HandleMessageOutput, error) {
+			if input.TenantID == "" {
+				return nil, fmt.Errorf("tenantID is required")
+			}
 			tenantStore := store.ForTenant(input.TenantID)
+			if input.SessionID == "" {
+				return nil, fmt.Errorf("sessionID is required")
+			}
 			sess, err := session.Load(ctx, tenantStore, input.SessionID)
 			if err != nil {
 				sess, err = session.New(ctx,
