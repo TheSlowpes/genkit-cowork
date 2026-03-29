@@ -195,6 +195,7 @@ func agentLoopHandler(ctx context.Context, input *AgentLoopInput, options *agent
 
 	turnNumber := 0
 	turnRecords := make([]AgentLoopTurn, 0)
+	lastModelFinishReason := ai.FinishReasonStop
 
 	emitIfBus(options.bus, ctx, AgentStart, AgentContext{
 		SessionID: input.SessionID,
@@ -244,6 +245,10 @@ func agentLoopHandler(ctx context.Context, input *AgentLoopInput, options *agent
 				Error:     err,
 			})
 			return nil, fmt.Errorf("generate response: %w", err)
+		}
+
+		if response.FinishReason != "" {
+			lastModelFinishReason = response.FinishReason
 		}
 
 		if response.Usage != nil {
@@ -299,7 +304,7 @@ func agentLoopHandler(ctx context.Context, input *AgentLoopInput, options *agent
 		turnRecord.ToolRequestCount = len(toolRequests)
 		if len(toolRequests) == 0 {
 			turnRecord.EndedAt = time.Now()
-			turnRecord.FinishReason = string(ai.FinishReasonStop)
+			turnRecord.FinishReason = string(lastModelFinishReason)
 			turnRecords = append(turnRecords, turnRecord)
 			emitIfBus(options.bus, ctx, TurnEnd, TurnContext{
 				SessionID:  input.SessionID,
@@ -532,7 +537,7 @@ func agentLoopHandler(ctx context.Context, input *AgentLoopInput, options *agent
 		History:      history,
 		Turns:        turnNumber,
 		TurnRecords:  turnRecords,
-		FinishReason: ai.FinishReasonStop,
+		FinishReason: lastModelFinishReason,
 	}, nil
 }
 

@@ -105,6 +105,13 @@ func textResponse(text string) *ai.ModelResponse {
 	}
 }
 
+// textResponseWithFinishReason creates a text ModelResponse with a custom finish reason.
+func textResponseWithFinishReason(text string, finishReason ai.FinishReason) *ai.ModelResponse {
+	res := textResponse(text)
+	res.FinishReason = finishReason
+	return res
+}
+
 // toolCallResponse creates a ModelResponse with one or more tool request parts.
 func toolCallResponse(calls ...ai.ToolRequest) *ai.ModelResponse {
 	parts := make([]*ai.Part, len(calls))
@@ -237,6 +244,37 @@ func TestAgentLoop_MultiTurnToolExecution(t *testing.T) {
 	}
 	if output.TurnRecords[1].FinishReason != string(ai.FinishReasonStop) {
 		t.Errorf("expected turn 2 finish reason stop, got %q", output.TurnRecords[1].FinishReason)
+	}
+}
+
+func TestAgentLoop_ReturnsFinalModelFinishReason(t *testing.T) {
+	ctx := context.Background()
+	g := newGenkitInstance(ctx)
+
+	mockDefineModel(g, "finish-reason-length", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return textResponseWithFinishReason("truncated", ai.FinishReasonLength), nil
+	})
+
+	agentLoop := NewAgentLoop(g)
+
+	output, err := agentLoop.Run(ctx,
+		&AgentLoopInput{
+			SessionID: "sess-finish-reason",
+			Messages:  []*ai.Message{ai.NewUserTextMessage("Give me a lot of text")},
+			Config:    AgentLoopConfig{Model: "test/finish-reason-length"},
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if output.FinishReason != ai.FinishReasonLength {
+		t.Errorf("expected output finish reason 'length', got %q", output.FinishReason)
+	}
+	if len(output.TurnRecords) != 1 {
+		t.Fatalf("expected 1 turn record, got %d", len(output.TurnRecords))
+	}
+	if output.TurnRecords[0].FinishReason != string(ai.FinishReasonLength) {
+		t.Errorf("expected turn 1 finish reason length, got %q", output.TurnRecords[0].FinishReason)
 	}
 }
 
