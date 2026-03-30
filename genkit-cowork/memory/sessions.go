@@ -336,6 +336,25 @@ func WithTenantID(tenantID string) SessionOption {
 	}
 }
 
+// WithTokenBudget configures load-time token-budget pruning.
+//
+// budget is interpreted by the configured TokenEstimator and only applies when
+// mode is TokenBudget.
+func WithTokenBudget(budget int) SessionOption {
+	return func(opts *sessionOptions) {
+		opts.mode = TokenBudget
+		opts.nMessages = budget
+		opts.tokenBudget = budget
+	}
+}
+
+// WithTokenEstimator sets the token estimator used by TokenBudget mode.
+func WithTokenEstimator(estimator TokenEstimator) SessionOption {
+	return func(opts *sessionOptions) {
+		opts.tokenEstimator = estimator
+	}
+}
+
 // PersistenceMode controls how many messages are returned on load.
 type PersistenceMode int
 
@@ -681,23 +700,4 @@ func MessagesForTurn(state SessionState, turn TurnRecord) ([]SessionMessage, err
 	}
 
 	return window, nil
-}
-
-// WithTokenBudget configures load-time token-budget pruning.
-//
-// budget is interpreted by the configured TokenEstimator and only applies when
-// mode is TokenBudget.
-func WithTokenBudget(budget int) SessionOption {
-	return func(opts *sessionOptions) {
-		opts.mode = TokenBudget
-		opts.nMessages = budget
-		opts.tokenBudget = budget
-	}
-}
-
-// WithTokenEstimator sets the token estimator used by TokenBudget mode.
-func WithTokenEstimator(estimator TokenEstimator) SessionOption {
-	return func(opts *sessionOptions) {
-		opts.tokenEstimator = estimator
-	}
 }
