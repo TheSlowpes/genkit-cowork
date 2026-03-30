@@ -90,7 +90,7 @@ func main() {
 	)
 
 	// 2. Create a tenant-scoped session store with vector indexing.
-	embedder := genkit.DefineEmbedder(g, "demo/tui-embedder", nil, simpleEmbed(256))
+	embedder := genkit.LookupEmbedder(g, "googleai/gemini-embedding-001")
 	vecBackend, err := memory.NewLocalVecBackend(g, "tui-memory", memory.LocalVecConfig{
 		Embedder: embedder,
 		IndexDir: indexDir,
@@ -219,33 +219,4 @@ func main() {
 			},
 		})
 	}
-}
-
-func simpleEmbed(dim int) ai.EmbedderFunc {
-	return func(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
-		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("embed request cancelled: %w", err)
-		}
-
-		res := &ai.EmbedResponse{Embeddings: make([]*ai.Embedding, 0, len(req.Input))}
-		for _, doc := range req.Input {
-			vec := make([]float32, dim)
-			text := messageText(ai.Message{Content: doc.Content})
-			for i, r := range text {
-				vec[i%dim] += float32(r%97) / 100
-			}
-			res.Embeddings = append(res.Embeddings, &ai.Embedding{Embedding: vec})
-		}
-		return res, nil
-	}
-}
-
-func messageText(msg ai.Message) string {
-	parts := make([]string, 0, len(msg.Content))
-	for _, part := range msg.Content {
-		if part.IsText() {
-			parts = append(parts, part.Text)
-		}
-	}
-	return strings.Join(parts, " ")
 }
