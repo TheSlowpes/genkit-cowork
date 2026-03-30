@@ -49,6 +49,8 @@ const (
 	tenantID  = "local"
 	maxTurns  = 20
 	workDir   = "."
+	indexDir  = "./.genkit-memory/index"
+	stateDir  = "./.genkit-memory/sessions"
 )
 
 // tuiChannelHandler implements flows.ChannelHandler for the terminal UI.
@@ -87,8 +89,22 @@ func main() {
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 	)
 
-	// 2. Create the in-memory session store.
-	store := memory.NewSession()
+	// 2. Create a tenant-scoped session store with vector indexing.
+	embedder := genkit.LookupEmbedder(g, "googleai/gemini-embedding-001")
+	vecBackend, err := memory.NewLocalVecBackend(g, "tui-memory", memory.LocalVecConfig{
+		Embedder: embedder,
+		IndexDir: indexDir,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "init vector backend: %v\n", err)
+		os.Exit(1)
+	}
+	fileBackend := memory.NewFileSessionOperator(stateDir, tenantID)
+	vectorOperator := memory.NewVectorOperator(fileBackend, vecBackend, stateDir)
+	store := memory.NewSession(
+		memory.WithCustomSessionOperator(vectorOperator),
+		memory.WithTenantID(tenantID),
+	)
 
 	// 3. Register the core tools.
 	cwd, err := os.Getwd()
@@ -99,15 +115,17 @@ func main() {
 	tools.NewReadTool(g, cwd)
 	tools.NewEditTool(g, cwd)
 	tools.NewWriteTool(g, cwd)
+	tools.NewSearchSessionMemoryTool(g, vectorOperator)
+	tools.NewSearchTenantMemoryTool(g, vectorOperator)
 
 	// 4. Build the agent config shared between the message and heartbeat flows.
 	agentCfg := flows.AgentLoopConfig{
 		Model:    model,
-		Tools:    []string{"bash", "read", "edit", "write"},
+		Tools:    []string{"bash", "read", "edit", "write", "search-session-memory", "search-tenant-memory"},
 		MaxTurns: maxTurns,
 		SystemPrompt: flows.BuildSystemPrompt(flows.SystemPromptOptions{
 			CustomPrompt: "You are a helpful assistant running in a terminal. " +
-				"You have access to bash, read, edit, and write tools. " +
+				"You have access to bash, read, edit, write, and memory search tools. " +
 				"Be concise.",
 		}),
 	}

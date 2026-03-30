@@ -26,7 +26,9 @@ import (
 	"image/png"
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 
 	"golang.org/x/image/draw"
 	"golang.org/x/image/webp"
@@ -56,10 +58,17 @@ func isValidImageMimeType(mimeType string) bool {
 	return slices.Contains(imageMimeTypes, mimeType)
 }
 
-// DetectImageMimeType reads the first 512 bytes of a file and returns its
-// MIME type if it is a supported image format. Returns "" for non-images
-// or on any read error.
+// DetectImageMimeType returns the MIME type of a file if it's a valid image type, or "" otherwise.
 func DetectImageMimeType(filePath string) string {
+	contentType := DetectMimeType(filePath)
+	if isValidImageMimeType(contentType) {
+		return contentType
+	}
+	return ""
+}
+
+// DetectMimeType reads the first 512 bytes of a file and returns its MIME type.
+func DetectMimeType(filePath string) string {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return ""
@@ -73,10 +82,20 @@ func DetectImageMimeType(filePath string) string {
 	}
 
 	contentType := http.DetectContentType(buffer[:n])
-	if isValidImageMimeType(contentType) {
-		return contentType
+	if strings.HasPrefix(contentType, "text/plain") || contentType == "application/octet-stream" {
+		ext := strings.ToLower(filepath.Ext(filePath))
+		switch ext {
+		case ".md", ".markdown":
+			contentType = "text/markdown"
+		case ".js", ".json":
+			contentType = "application/json"
+		case ".html", ".htm":
+			contentType = "text/html"
+		case ".csv":
+			contentType = "text/csv"
+		}
 	}
-	return ""
+	return contentType
 }
 
 // ResizeResult holds the output of an AutoResizeImage call.

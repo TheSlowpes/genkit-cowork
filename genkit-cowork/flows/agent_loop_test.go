@@ -105,6 +105,13 @@ func textResponse(text string) *ai.ModelResponse {
 	}
 }
 
+// textResponseWithFinishReason creates a text ModelResponse with a custom finish reason.
+func textResponseWithFinishReason(text string, finishReason ai.FinishReason) *ai.ModelResponse {
+	res := textResponse(text)
+	res.FinishReason = finishReason
+	return res
+}
+
 // toolCallResponse creates a ModelResponse with one or more tool request parts.
 func toolCallResponse(calls ...ai.ToolRequest) *ai.ModelResponse {
 	parts := make([]*ai.Part, len(calls))
@@ -126,7 +133,9 @@ func TestAgentLoop_SingleTurnNoTools(t *testing.T) {
 	ctx := context.Background()
 	g := newGenkitInstance(ctx)
 	mockDefineModel(g, "single-turn", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		return textResponse("Hello, world!"), nil
+		res := textResponse("Hello, world!")
+		res.Usage = &ai.GenerationUsage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15}
+		return res, nil
 	})
 
 	agentLoop := NewAgentLoop(g)
@@ -152,6 +161,18 @@ func TestAgentLoop_SingleTurnNoTools(t *testing.T) {
 	}
 	if len(output.History) != 2 {
 		t.Errorf("expected 2 messages in history, got %d", len(output.History))
+	}
+	if len(output.TurnRecords) != 1 {
+		t.Fatalf("expected 1 turn record, got %d", len(output.TurnRecords))
+	}
+	if output.TurnRecords[0].TurnNumber != 1 {
+		t.Errorf("expected turn record number 1, got %d", output.TurnRecords[0].TurnNumber)
+	}
+	if output.TurnRecords[0].PersistedMessageCount != 1 {
+		t.Errorf("expected persisted message count 1, got %d", output.TurnRecords[0].PersistedMessageCount)
+	}
+	if output.TurnRecords[0].TotalTokens != 15 {
+		t.Errorf("expected total tokens 15, got %d", output.TurnRecords[0].TotalTokens)
 	}
 }
 
@@ -211,6 +232,49 @@ func TestAgentLoop_MultiTurnToolExecution(t *testing.T) {
 	}
 	if output.History[2].Role != ai.RoleTool {
 		t.Errorf("expected history[2] role 'tool', got %q", output.History[2].Role)
+	}
+	if len(output.TurnRecords) != 2 {
+		t.Fatalf("expected 2 turn records, got %d", len(output.TurnRecords))
+	}
+	if output.TurnRecords[0].ToolRequestCount != 1 {
+		t.Errorf("expected turn 1 tool request count 1, got %d", output.TurnRecords[0].ToolRequestCount)
+	}
+	if output.TurnRecords[0].ToolResponsePartCount != 1 {
+		t.Errorf("expected turn 1 tool response parts 1, got %d", output.TurnRecords[0].ToolResponsePartCount)
+	}
+	if output.TurnRecords[1].FinishReason != string(ai.FinishReasonStop) {
+		t.Errorf("expected turn 2 finish reason stop, got %q", output.TurnRecords[1].FinishReason)
+	}
+}
+
+func TestAgentLoop_ReturnsFinalModelFinishReason(t *testing.T) {
+	ctx := context.Background()
+	g := newGenkitInstance(ctx)
+
+	mockDefineModel(g, "finish-reason-length", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return textResponseWithFinishReason("truncated", ai.FinishReasonLength), nil
+	})
+
+	agentLoop := NewAgentLoop(g)
+
+	output, err := agentLoop.Run(ctx,
+		&AgentLoopInput{
+			SessionID: "sess-finish-reason",
+			Messages:  []*ai.Message{ai.NewUserTextMessage("Give me a lot of text")},
+			Config:    AgentLoopConfig{Model: "test/finish-reason-length"},
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if output.FinishReason != ai.FinishReasonLength {
+		t.Errorf("expected output finish reason 'length', got %q", output.FinishReason)
+	}
+	if len(output.TurnRecords) != 1 {
+		t.Fatalf("expected 1 turn record, got %d", len(output.TurnRecords))
+	}
+	if output.TurnRecords[0].FinishReason != string(ai.FinishReasonLength) {
+		t.Errorf("expected turn 1 finish reason length, got %q", output.TurnRecords[0].FinishReason)
 	}
 }
 

@@ -162,7 +162,7 @@ func TestHandleMessage_NewSessionCreatedOnFirstMessage(t *testing.T) {
 	}
 
 	// Verify session was persisted by loading it
-	sessData, err := store.Get(ctx, "brand-new-session")
+	sessData, err := store.ForTenant("tenant-new").Get(ctx, "brand-new-session")
 	if err != nil {
 		t.Fatalf("failed to load session: %v", err)
 	}
@@ -175,6 +175,15 @@ func TestHandleMessage_NewSessionCreatedOnFirstMessage(t *testing.T) {
 	// Should have user message + model response
 	if len(sessData.State.Messages) != 2 {
 		t.Errorf("expected 2 persisted messages, got %d", len(sessData.State.Messages))
+	}
+	if len(sessData.State.Turns) != 1 {
+		t.Errorf("expected 1 persisted turn, got %d", len(sessData.State.Turns))
+	}
+	if sessData.State.Turns[0].TurnID == "" {
+		t.Error("expected persisted turn to have TurnID")
+	}
+	if sessData.State.Turns[0].FlowName != "handleMessage" {
+		t.Errorf("expected turn flow handleMessage, got %q", sessData.State.Turns[0].FlowName)
 	}
 }
 
@@ -190,13 +199,17 @@ func TestHandleMessage_MultiTurnToolExecution(t *testing.T) {
 		call := modelCalls.Add(1)
 		switch call {
 		case 1:
-			return toolCallResponse(ai.ToolRequest{
+			res := toolCallResponse(ai.ToolRequest{
 				Name:  "calculator",
 				Input: map[string]any{"expr": "2+2"},
 				Ref:   "calc-1",
-			}), nil
+			})
+			res.Usage = &ai.GenerationUsage{InputTokens: 12, OutputTokens: 3, TotalTokens: 15}
+			return res, nil
 		case 2:
-			return textResponse("The result is 4."), nil
+			res := textResponse("The result is 4.")
+			res.Usage = &ai.GenerationUsage{InputTokens: 9, OutputTokens: 4, TotalTokens: 13}
+			return res, nil
 		default:
 			t.Fatalf("unexpected model call %d", call)
 			return nil, nil
@@ -239,6 +252,15 @@ func TestHandleMessage_MultiTurnToolExecution(t *testing.T) {
 	// History: user + model(tool call) + tool(response) + model(final) = 4
 	if len(output.History) != 4 {
 		t.Errorf("expected 4 messages in history, got %d", len(output.History))
+	}
+	if len(output.History) > 0 {
+		last := output.History[len(output.History)-1]
+		if last.Metadata == nil {
+			t.Fatal("expected model message metadata")
+		}
+		if _, ok := last.Metadata["generationUsage"]; !ok {
+			t.Fatal("expected generationUsage in model message metadata")
+		}
 	}
 }
 
@@ -287,7 +309,7 @@ func TestHandleMessage_AllMessagesPersistedToSession(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	sessData, err := store.Get(ctx, "sess-all-msgs")
+	sessData, err := store.ForTenant("tenant-1").Get(ctx, "sess-all-msgs")
 	if err != nil {
 		t.Fatalf("failed to load session: %v", err)
 	}
@@ -299,6 +321,9 @@ func TestHandleMessage_AllMessagesPersistedToSession(t *testing.T) {
 	msgs := sessData.State.Messages
 	if len(msgs) != 4 {
 		t.Fatalf("expected 4 persisted messages, got %d", len(msgs))
+	}
+	if len(sessData.State.Turns) != 2 {
+		t.Fatalf("expected 2 persisted turns, got %d", len(sessData.State.Turns))
 	}
 
 	// Verify origins
@@ -327,6 +352,34 @@ func TestHandleMessage_AllMessagesPersistedToSession(t *testing.T) {
 	}
 	if msgs[3].Content.Role != ai.RoleModel {
 		t.Errorf("msg[3]: expected role 'model', got '%s'", msgs[3].Content.Role)
+	}
+
+	for i := range sessData.State.Turns {
+		turn := sessData.State.Turns[i]
+		window, err := memory.MessagesForTurn(sessData.State, turn)
+		if err != nil {
+			t.Fatalf("MessagesForTurn(turn=%d): %v", i, err)
+		}
+		if len(window) != turn.MessageCount {
+			t.Fatalf("turn %d window size = %d, want %d", i, len(window), turn.MessageCount)
+		}
+		toolEventCount := 0
+		for _, e := range turn.Events {
+			if e.Type == "flow.output" {
+				if got, ok := e.Metadata["toolResponses"].(int); ok {
+					toolEventCount = got
+				}
+			}
+		}
+		toolMessagesInWindow := 0
+		for _, msg := range window {
+			if msg.Content.Role == ai.RoleTool {
+				toolMessagesInWindow++
+			}
+		}
+		if toolEventCount > 0 && toolMessagesInWindow == 0 {
+			t.Fatalf("turn %d reports tool responses but has no tool messages in reconstructed window", i)
+		}
 	}
 }
 
@@ -548,7 +601,7 @@ func TestHandleMessage_InterruptAndResume(t *testing.T) {
 	}
 
 	// Verify session persisted the interrupted state
-	sessData, err := store.Get(ctx, "sess-msg-int")
+	sessData, err := store.ForTenant("tenant-1").Get(ctx, "sess-msg-int")
 	if err != nil {
 		t.Fatalf("phase 1: failed to load session: %v", err)
 	}
@@ -558,6 +611,9 @@ func TestHandleMessage_InterruptAndResume(t *testing.T) {
 	// Should have: user message + annotated model message = 2
 	if len(sessData.State.Messages) != 2 {
 		t.Fatalf("phase 1: expected 2 persisted messages, got %d", len(sessData.State.Messages))
+	}
+	if len(sessData.State.Turns) != 1 {
+		t.Fatalf("phase 1: expected 1 persisted turn, got %d", len(sessData.State.Turns))
 	}
 
 	// Phase 2: Resume with respond
@@ -769,7 +825,7 @@ func TestHandleMessage_MultipleMessagesAccumulateInSession(t *testing.T) {
 		}
 	}
 
-	sessData, err := store.Get(ctx, "sess-accum")
+	sessData, err := store.ForTenant("tenant-1").Get(ctx, "sess-accum")
 	if err != nil {
 		t.Fatalf("failed to load session: %v", err)
 	}
@@ -780,6 +836,9 @@ func TestHandleMessage_MultipleMessagesAccumulateInSession(t *testing.T) {
 	// 3 rounds x 2 messages (user + model) = 6
 	if len(sessData.State.Messages) != 6 {
 		t.Fatalf("expected 6 persisted messages, got %d", len(sessData.State.Messages))
+	}
+	if len(sessData.State.Turns) != 3 {
+		t.Fatalf("expected 3 persisted turns, got %d", len(sessData.State.Turns))
 	}
 
 	// Verify alternating user/model
@@ -835,7 +894,7 @@ func TestHandleMessage_DifferentOrigins(t *testing.T) {
 		}
 	}
 
-	sessData, err := store.Get(ctx, "sess-origins")
+	sessData, err := store.ForTenant("tenant-1").Get(ctx, "sess-origins")
 	if err != nil {
 		t.Fatalf("failed to load session: %v", err)
 	}

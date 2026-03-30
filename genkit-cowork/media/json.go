@@ -14,10 +14,31 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package media provides MIME-aware helpers used by file-reading and memory
-// ingestion pipelines.
-//
-// Current capabilities include:
-//   - image MIME detection and resize helpers
-//   - text/structured extraction for txt, markdown, json, csv, and html
 package media
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"github.com/firebase/genkit/go/ai"
+)
+
+type jsonProcessor struct{}
+
+func (p jsonProcessor) Process(ctx context.Context, data []byte) ([]*ai.Document, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	var payload any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, fmt.Errorf("parse json document: %w", err)
+	}
+	normalized, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("format json document: %w", err)
+	}
+
+	return chunksToDocuments("application/json", newDefaultTextChunker().chunk(string(normalized))), nil
+}

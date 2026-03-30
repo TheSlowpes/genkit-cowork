@@ -1,4 +1,5 @@
 .genkit
+docs/
+skills/
 ./docs/
 ./skills/
-tui-chat

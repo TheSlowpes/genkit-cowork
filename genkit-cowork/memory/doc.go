@@ -14,5 +14,34 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package memory provides session persistence primitives for agent state.
+// Package memory provides persistence primitives for conversational agent
+// memory.
+//
+// # Overview
+//
+// The package stores session state as structured data that can be persisted in
+// memory, files, or custom backends. Message records include origin, kind, and
+// timestamps so callers can preserve a complete interaction timeline while
+// still applying load-time pruning policies.
+//
+// Vector-backed retrieval is optional. A SessionOperator can be wrapped with a
+// VectorOperator to index textual message content for semantic recall while
+// keeping the canonical session state in the primary operator.
+//
+// Session media assets can be persisted through MediaAssetStore
+// implementations such as FileMediaAssetStore. When configured via
+// WithMediaAssetStore, Session.Save normalizes data URI media parts into
+// filesystem assets under a tenant/session scope.
+//
+// # Examples
+//
+// Create a default in-memory store:
+//
+//	store := memory.NewSession()
+//
+// Create a file-backed store with vector indexing:
+//
+//	fileOp := memory.NewFileSessionOperator("./data/sessions", "tenant-123")
+//	vecOp := memory.NewVectorOperator(fileOp, backend, "./data/sessions")
+//	store := memory.NewSession(memory.WithCustomSessionOperator(vecOp))
 package memory

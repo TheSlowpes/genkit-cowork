@@ -190,8 +190,8 @@ The framework is built around four pillars:
 │   │  Memory   │  │  Skills   │                   │
 │   │           │  │           │                   │
 │   │  sessions │  │  discover │                   │
-│   │  retrieval│  │  list     │                   │
-│   │  recall   │  │  resolve  │                   │
+│   │  file     │  │  list     │                   │
+│   │  vector   │  │  resolve  │                   │
 │   └───────────┘  └───────────┘                   │
 │                                                  │
 │          ┌─────────────────┐                     │
@@ -204,6 +204,7 @@ Each pillar can be adopted independently. Use the full framework or pick individ
 
 - **Tools only** — register `NewBashTool`, `NewReadTool`, `NewEditTool`, `NewWriteTool` with any Genkit instance.
 - **Flows only** — use the agent loop, message handling, heartbeat, or reply flows.
+- **Memory only** — use `NewSession` with in-memory, file-backed, or vector-augmented operators.
 - **Skills only** — register the `Skills` plugin to discover and serve domain knowledge.
 - **Mix and match** — combine pillars based on your use case.
 
@@ -224,6 +225,87 @@ Each pillar can be adopted independently. Use the full framework or pick individ
 | Read | `NewReadTool(g, cwd, ...opts)` | File/image reading with pagination, truncation, auto-resize |
 | Edit | `NewEditTool(g, cwd, ...opts)` | Find-and-replace with exact/fuzzy matching, unified diff |
 | Write | `NewWriteTool(g, cwd, ...opts)` | File creation with auto-mkdir, operator interface |
+
+## Memory
+
+Memory is implemented through a `Session` store plus pluggable `SessionOperator` backends.
+
+### Core types
+
+| Type | Constructor / API | Description |
+|------|-------------------|-------------|
+| Session store | `NewSession(...opts)` | Implements `session.Store[SessionState]` for Genkit flows |
+| Persistence mode | `WithPersistenceMode(mode, n)` | Load behavior: `All`, `SlidingWindow`, `TailEndsPruning`, `TokenBudget` |
+| Media asset store | `WithMediaAssetStore(store)` | Normalizes media data URI parts into persisted files and tracks `SessionAsset` metadata |
+| Tenant binding | `WithTenantID(id)` / `ForTenant(id)` | Scopes `Get`/`Save` operations to a tenant in a `session.Store`-compatible API |
+| Ledger validation | `ValidateSessionLedger(state)` | Validates append-only sequencing and immutable-prefix constraints for a session ledger |
+| Replay window | `MessagesForTurn(state, turn)` | Reconstructs the exact message slice represented by a persisted turn sequence range |
+| In-memory backend | default (`defaultSessionOperator`) | Process-local map-based state storage |
+| File backend | `NewFileSessionOperator(rootDir, tenantID)` | Durable JSON state at `rootDir/{tenantID}/{sessionID}/state.json` |
+| Vector wrapper | `NewVectorOperator(base, backend, rootDir)` | Wraps a base operator and indexes new messages for semantic retrieval |
+| Local vector backend | `NewLocalVecBackend(g, name, cfg)` | `localvec`-based implementation of `VectorBackend` |
+| File media asset backend | `NewFileMediaAssetStore(rootDir)` | Filesystem-backed asset persistence at `rootDir/{tenantID}/{sessionID}/assets` with document loading and chunk index files |
+
+### File-backed sessions
+
+`NewFileSessionOperator` provides durable session state with per-session locks, atomic writes, append-only validation, and tenant consistency checks.
+
+```go
+fileOp := memory.NewFileSessionOperator("./data/sessions", "tenant-1")
+```
+
+### Vector-augmented retrieval
+
+`VectorOperator` composes on top of a base `SessionOperator`. It indexes new messages by `messageID` and supports semantic lookup with `Search`.
+
+```go
+fileOp := memory.NewFileSessionOperator("./data/sessions", "tenant-1")
+
+vecBackend, _ := memory.NewLocalVecBackend(g, "session-memory", memory.LocalVecConfig{
+    Embedder: embedder,            // any ai.Embedder
+    IndexDir: "./data/localvec", // localvec persistence directory
+})
+
+vecOp := memory.NewVectorOperator(fileOp, vecBackend, "./data/sessions")
+
+store := memory.NewSession(
+    memory.WithCustomSessionOperator(vecOp),
+    memory.WithTenantID("tenant-1"),
+)
+
+results, err := vecOp.Search(ctx, "tenant-1", "session-1", "customer asked about invoice", 5)
+_ = results
+_ = err
+```
+
+### Session assets
+
+Use `WithMediaAssetStore` to persist media/data URI parts to disk and track
+`SessionAsset` metadata in session state.
+
+```go
+assetStore := memory.NewFileMediaAssetStore("./data/assets")
+
+store := memory.NewSession(
+    memory.WithTenantID("tenant-1"),
+    memory.WithMediaAssetStore(assetStore),
+)
+
+// During Session.Save, data URI media parts are normalized to absolute files
+// under ./data/assets/{tenantID}/{sessionID}/assets.
+```
+
+### Stored message model
+
+Each `SessionMessage` stores `MessageID`, `Origin`, `Kind`, `Content`, and `Timestamp`.
+
+- `Kind` is auto-derived when missing: tool-role messages become `instrumental`, others default to `episodic`.
+- Additional kinds (`semantic`, `procedural`) are available for higher-level memory workflows.
+- `Session.Save` auto-fills missing `MessageID` and `Timestamp`.
+
+### Examples
+
+- `examples/pgvector/main.go` shows pgvector wiring for session memory only by wrapping the Genkit PostgreSQL plugin as a `memory.VectorBackend` and plugging it into `memory.NewVectorOperator`.
 
 ## Skills
 
@@ -310,16 +392,29 @@ genkit-cowork/
 │   ├── diff.go               # LCS-based line diff algorithm
 │   ├── truncate.go           # Output truncation utilities
 │   ├── path.go               # Path resolution utilities
-│   └── constants.go          # Output limits
+│   ├── constants.go          # Output limits
+│   └── memory_retrieval.go   # Tenant/session memory retrieval tools
 ├── plugins/            # Genkit plugins
 │   └── skills/               # Skill discovery and serving
 │       ├── skills.go          # Plugin struct, Init, tool registration
 │       ├── skill_parser.go    # SKILL.md frontmatter parsing
 │       └── skill_scanner.go   # Directory scanning, skill discovery
-├── media/              # Image detection and processing
-│   └── mime.go               # MIME detection, image resizing
-├── memory/             # Session persistence
-│   └── sessions.go           # Session store, message origins
+├── media/              # MIME detection and processing
+│   ├── mime.go               # Image MIME detection, image resizing
+│   ├── registry.go           # MIME to DocumentProcessor registry
+│   ├── documents.go          # DocumentProcessor interface
+│   ├── shared.go             # Shared chunking and processor helpers
+│   └── *_processor.go        # One file per MIME-specific DocumentProcessor
+├── memory/             # Session persistence and retrieval
+│   ├── sessions.go           # Session store, message models, persistence modes
+│   ├── turns.go              # Turn ledger records and ledger validation
+│   ├── snapshots.go          # State snapshot records and checksum support
+│   ├── assets.go             # Session asset model and media asset store interface
+│   ├── file_assets.go        # Filesystem media asset store implementation
+│   ├── file_sessions.go      # File-backed SessionOperator (JSON + atomic write)
+│   ├── vector_sessions.go    # VectorOperator wrapper + semantic search
+│   └── vector_backend.go     # Vector backend interface + localvec backend
 └── utils/              # Shared utilities
-    └── shell.go              # Shell environment management
+    ├── shell.go              # Shell environment management
+    └── path_segment.go       # Path segment validation for filesystem safety
 ```

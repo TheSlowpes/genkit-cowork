@@ -1,0 +1,651 @@
+// Copyright 2026 Kevin Lopes
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+package memory
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/firebase/genkit/go/ai"
+)
+
+// --- mock vector backend ---
+
+type mockVectorBackend struct {
+	mu       sync.Mutex
+	indexed  map[string]map[string][]*ai.Document
+	indexErr error
+	deleted  []string
+	delErr   error
+}
+
+type blockingVectorBackend struct {
+	indexStarted chan struct{}
+	allowIndex   chan struct{}
+
+	mu    sync.Mutex
+	calls []string
+}
+
+func newBlockingVectorBackend() *blockingVectorBackend {
+	return &blockingVectorBackend{
+		indexStarted: make(chan struct{}),
+		allowIndex:   make(chan struct{}),
+	}
+}
+
+func (b *blockingVectorBackend) Index(ctx context.Context, tenantID, sessionID string, docs []*ai.Document) error {
+	select {
+	case <-b.indexStarted:
+	default:
+		close(b.indexStarted)
+	}
+
+	b.mu.Lock()
+	b.calls = append(b.calls, "index")
+	b.mu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-b.allowIndex:
+		return nil
+	}
+}
+
+func (b *blockingVectorBackend) Delete(ctx context.Context, tenantID, sessionID string) error {
+	b.mu.Lock()
+	b.calls = append(b.calls, "delete")
+	b.mu.Unlock()
+	return nil
+}
+
+func (b *blockingVectorBackend) RetrieveTenant(ctx context.Context, tenantID, query string, topK int) ([]*ai.Document, error) {
+	return nil, nil
+}
+
+func (b *blockingVectorBackend) RetrieveSession(ctx context.Context, tenantID, sessionID, query string, topK int) ([]*ai.Document, error) {
+	return nil, nil
+}
+
+func (b *blockingVectorBackend) callSnapshot() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Clone(b.calls)
+}
+
+func newMockVectorBackend() *mockVectorBackend {
+	return &mockVectorBackend{
+		indexed: make(map[string]map[string][]*ai.Document),
+	}
+}
+
+func (m *mockVectorBackend) Index(ctx context.Context, tenantID, sessionID string, docs []*ai.Document) error {
+	if m.indexErr != nil {
+		return m.indexErr
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.indexed[tenantID]; !ok {
+		m.indexed[tenantID] = make(map[string][]*ai.Document)
+	}
+	m.indexed[tenantID][sessionID] = append(m.indexed[tenantID][sessionID], docs...)
+	return nil
+}
+
+func (m *mockVectorBackend) RetrieveTenant(ctx context.Context, tenantID, query string, topK int) ([]*ai.Document, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var docs []*ai.Document
+	for _, sessDocs := range m.indexed[tenantID] {
+		docs = append(docs, sessDocs...)
+	}
+	if len(docs) == 0 {
+		return nil, nil
+	}
+	if topK > len(docs) {
+		topK = len(docs)
+	}
+	return docs[:topK], nil
+}
+
+func (m *mockVectorBackend) RetrieveSession(ctx context.Context, tenantID, sessionID, query string, topK int) ([]*ai.Document, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	docs := m.indexed[tenantID][sessionID]
+	if len(docs) == 0 {
+		return nil, nil
+	}
+	if topK > len(docs) {
+		topK = len(docs)
+	}
+	return docs[:topK], nil
+}
+
+func (m *mockVectorBackend) Delete(ctx context.Context, tenantID, sessionID string) error {
+	if m.delErr != nil {
+		return m.delErr
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deleted = append(m.deleted, tenantID+"/"+sessionID)
+	if _, ok := m.indexed[tenantID]; ok {
+		delete(m.indexed[tenantID], sessionID)
+	}
+	return nil
+}
+
+func (m *mockVectorBackend) indexedCount(tenantID, sessionID string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.indexed[tenantID][sessionID])
+}
+
+func waitForIndexedCount(t *testing.T, backend *mockVectorBackend, tenantID, sessionID string, want int) {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := backend.indexedCount(tenantID, sessionID); got == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if got := backend.indexedCount(tenantID, sessionID); got != want {
+		t.Fatalf("indexedCount(%q, %q) = %d, want %d", tenantID, sessionID, got, want)
+	}
+}
+
+// --- VectorOperator tests ---
+
+func TestVectorOperator_SaveState_IndexesNewMessages(t *testing.T) {
+	dir := t.TempDir()
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
+	backend := newMockVectorBackend()
+	vop := NewVectorOperator(base, backend, dir)
+	ctx := context.Background()
+
+	state := SessionState{
+		TenantID: "t1",
+		Messages: []SessionMessage{
+			makeMessage("m1", UIMessage, ai.RoleUser, "hello world"),
+			makeMessage("m2", ModelMessage, ai.RoleModel, "hi there"),
+		},
+	}
+
+	if err := vop.SaveState(ctx, tenantID, "sess-1", state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	waitForIndexedCount(t, backend, tenantID, "sess-1", 2)
+}
+
+func TestVectorOperator_SaveState_SkipsAlreadyIndexed(t *testing.T) {
+	dir := t.TempDir()
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
+	backend := newMockVectorBackend()
+	vop := NewVectorOperator(base, backend, dir)
+	ctx := context.Background()
+
+	state := SessionState{
+		TenantID: "t1",
+		Messages: []SessionMessage{
+			makeMessage("m1", UIMessage, ai.RoleUser, "hello world"),
+		},
+	}
+	if err := vop.SaveState(ctx, tenantID, "sess-1", state); err != nil {
+		t.Fatalf("SaveState 1: %v", err)
+	}
+
+	// Save again with an additional message.
+	state.Messages = append(state.Messages, makeMessage("m2", ModelMessage, ai.RoleModel, "reply"))
+	if err := vop.SaveState(ctx, tenantID, "sess-1", state); err != nil {
+		t.Fatalf("SaveState 2: %v", err)
+	}
+
+	// Only m2 should have been newly indexed.
+	waitForIndexedCount(t, backend, tenantID, "sess-1", 2)
+}
+
+func TestVectorOperator_SaveState_SkipsEmptyMessages(t *testing.T) {
+	dir := t.TempDir()
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
+	backend := newMockVectorBackend()
+	vop := NewVectorOperator(base, backend, dir)
+	ctx := context.Background()
+
+	state := SessionState{
+		TenantID: "t1",
+		Messages: []SessionMessage{
+			{
+				MessageID: "m-empty",
+				Origin:    UIMessage,
+				Kind:      KindEpisodic,
+				Content:   ai.Message{Role: ai.RoleUser, Content: []*ai.Part{}},
+			},
+		},
+	}
+	if err := vop.SaveState(ctx, tenantID, "sess-empty", state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	waitForIndexedCount(t, backend, tenantID, "sess-empty", 0)
+}
+
+func TestVectorOperator_SaveState_SkipsNoMessageID(t *testing.T) {
+	dir := t.TempDir()
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
+	backend := newMockVectorBackend()
+	vop := NewVectorOperator(base, backend, dir)
+	ctx := context.Background()
+
+	state := SessionState{
+		TenantID: "t1",
+		Messages: []SessionMessage{
+			{
+				// No MessageID
+				Origin:  UIMessage,
+				Kind:    KindEpisodic,
+				Content: ai.Message{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("text")}},
+			},
+		},
+	}
+	if err := vop.SaveState(ctx, tenantID, "sess-noid", state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	waitForIndexedCount(t, backend, tenantID, "sess-noid", 0)
+}
+
+func TestVectorOperator_SaveState_IndexFailureRetriesNextSave(t *testing.T) {
+	dir := t.TempDir()
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
+	backend := newMockVectorBackend()
+	backend.indexErr = errors.New("simulated index failure")
+	vop := NewVectorOperator(base, backend, dir)
+	ctx := context.Background()
+
+	state := SessionState{
+		TenantID: "t1",
+		Messages: []SessionMessage{
+			makeMessage("m1", UIMessage, ai.RoleUser, "hello"),
+		},
+	}
+
+	// First save: indexing fails but SaveState returns nil.
+	if err := vop.SaveState(ctx, tenantID, "sess-retry", state); err != nil {
+		t.Fatalf("SaveState should not error on index failure: %v", err)
+	}
+
+	// Verify no indexed IDs file was created (so retry happens).
+	idsPath := filepath.Join(dir, tenantID, "sess-retry", "indexed_ids.json")
+	if _, err := os.Stat(idsPath); !errors.Is(err, os.ErrNotExist) {
+		t.Error("expected indexed_ids.json to not exist after index failure")
+	}
+
+	// Fix the backend and save again.
+	backend.indexErr = nil
+	if err := vop.SaveState(ctx, tenantID, "sess-retry", state); err != nil {
+		t.Fatalf("SaveState retry: %v", err)
+	}
+
+	// Now it should be indexed.
+	waitForIndexedCount(t, backend, tenantID, "sess-retry", 1)
+}
+
+func TestVectorOperator_LoadState_DelegatesToBase(t *testing.T) {
+	dir := t.TempDir()
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
+	backend := newMockVectorBackend()
+	vop := NewVectorOperator(base, backend, dir)
+	ctx := context.Background()
+
+	state := SessionState{
+		TenantID: "t1",
+		Messages: makeMessages(5),
+	}
+	if err := vop.SaveState(ctx, tenantID, "sess-ld", state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	loaded, err := vop.LoadState(ctx, tenantID, "sess-ld", SlidingWindow, 2)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if len(loaded.Messages) != 2 {
+		t.Errorf("expected 2 messages with SlidingWindow, got %d", len(loaded.Messages))
+	}
+}
+
+func TestVectorOperator_DeleteSession_CleansUpBackend(t *testing.T) {
+	dir := t.TempDir()
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
+	backend := newMockVectorBackend()
+	vop := NewVectorOperator(base, backend, dir)
+	ctx := context.Background()
+
+	state := SessionState{
+		TenantID: "t1",
+		Messages: []SessionMessage{
+			makeMessage("m1", UIMessage, ai.RoleUser, "hello"),
+		},
+	}
+	if err := vop.SaveState(ctx, tenantID, "sess-del", state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	waitForIndexedCount(t, backend, tenantID, "sess-del", 1)
+
+	if err := vop.DeleteSession(ctx, tenantID, "sess-del"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+
+	// Backend should have received Delete call.
+	if len(backend.deleted) != 1 || backend.deleted[0] != tenantID+"/sess-del" {
+		t.Errorf("expected backend.Delete called with sess-del, got %v", backend.deleted)
+	}
+
+	// Indexed docs should be gone.
+	waitForIndexedCount(t, backend, tenantID, "sess-del", 0)
+
+	// Session should be gone from base.
+	loaded, err := vop.LoadState(ctx, tenantID, "sess-del", All, 0)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if loaded != nil {
+		t.Errorf("expected nil after delete, got %+v", loaded)
+	}
+}
+
+func TestVectorOperator_DeleteSession_BackendError(t *testing.T) {
+	dir := t.TempDir()
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
+	backend := newMockVectorBackend()
+	vop := NewVectorOperator(base, backend, dir)
+	ctx := context.Background()
+
+	state := SessionState{
+		TenantID: "t1",
+		Messages: []SessionMessage{
+			makeMessage("m1", UIMessage, ai.RoleUser, "hello"),
+		},
+	}
+	if err := vop.SaveState(ctx, tenantID, "sess-delerr", state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	waitForIndexedCount(t, backend, tenantID, "sess-delerr", 1)
+
+	backend.delErr = errors.New("simulated delete failure")
+	err := vop.DeleteSession(ctx, tenantID, "sess-delerr")
+	if err == nil {
+		t.Fatal("expected error from backend delete failure, got nil")
+	}
+}
+
+func TestVectorOperator_DeleteSession_WaitsForIndexing(t *testing.T) {
+	dir := t.TempDir()
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
+	backend := newBlockingVectorBackend()
+	vop := NewVectorOperator(base, backend, dir)
+	ctx := context.Background()
+
+	state := SessionState{
+		TenantID: tenantID,
+		Messages: []SessionMessage{
+			makeMessage("m1", UIMessage, ai.RoleUser, "hello"),
+		},
+	}
+
+	if err := vop.SaveState(ctx, tenantID, "sess-serial", state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	select {
+	case <-backend.indexStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for indexing to start")
+	}
+
+	deleteDone := make(chan error, 1)
+	go func() {
+		deleteDone <- vop.DeleteSession(ctx, tenantID, "sess-serial")
+	}()
+
+	select {
+	case err := <-deleteDone:
+		t.Fatalf("DeleteSession finished before indexing unblocked: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if calls := backend.callSnapshot(); !slices.Equal(calls, []string{"index"}) {
+		t.Fatalf("backend calls before index unblock = %v, want [index]", calls)
+	}
+
+	close(backend.allowIndex)
+
+	select {
+	case err := <-deleteDone:
+		if err != nil {
+			t.Fatalf("DeleteSession: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("DeleteSession did not complete after indexing unblocked")
+	}
+
+	if calls := backend.callSnapshot(); !slices.Equal(calls, []string{"index", "delete"}) {
+		t.Fatalf("backend calls = %v, want [index delete]", calls)
+	}
+}
+
+func TestVectorOperator_Search(t *testing.T) {
+	dir := t.TempDir()
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
+	backend := newMockVectorBackend()
+	vop := NewVectorOperator(base, backend, dir)
+	ctx := context.Background()
+
+	state := SessionState{
+		TenantID: "t1",
+		Messages: []SessionMessage{
+			makeMessage("m1", UIMessage, ai.RoleUser, "the quick brown fox"),
+			makeMessage("m2", ModelMessage, ai.RoleModel, "jumps over the lazy dog"),
+			makeMessage("m3", UIMessage, ai.RoleUser, "something unrelated"),
+		},
+	}
+	if err := vop.SaveState(ctx, tenantID, "sess-search", state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	waitForIndexedCount(t, backend, tenantID, "sess-search", 3)
+
+	// Mock backend returns all indexed docs (up to topK).
+	results, err := vop.Search(ctx, tenantID, "sess-search", "fox", 2)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("expected 2 results, got %d", len(results))
+	}
+}
+
+func TestVectorOperator_SearchTenantAcrossSessions(t *testing.T) {
+	dir := t.TempDir()
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
+	backend := newMockVectorBackend()
+	vop := NewVectorOperator(base, backend, dir)
+	ctx := context.Background()
+
+	stateA := SessionState{
+		TenantID: tenantID,
+		Messages: []SessionMessage{
+			makeMessage("a1", UIMessage, ai.RoleUser, "invoice for march"),
+		},
+	}
+	stateB := SessionState{
+		TenantID: tenantID,
+		Messages: []SessionMessage{
+			makeMessage("b1", UIMessage, ai.RoleUser, "invoice for april"),
+		},
+	}
+	if err := vop.SaveState(ctx, tenantID, "sess-a", stateA); err != nil {
+		t.Fatalf("SaveState sess-a: %v", err)
+	}
+	if err := vop.SaveState(ctx, tenantID, "sess-b", stateB); err != nil {
+		t.Fatalf("SaveState sess-b: %v", err)
+	}
+	waitForIndexedCount(t, backend, tenantID, "sess-a", 1)
+	waitForIndexedCount(t, backend, tenantID, "sess-b", 1)
+
+	results, err := vop.SearchTenant(ctx, tenantID, "invoice", 5)
+	if err != nil {
+		t.Fatalf("SearchTenant: %v", err)
+	}
+	if len(results) < 2 {
+		t.Fatalf("expected at least 2 tenant results, got %d", len(results))
+	}
+}
+
+func TestVectorOperator_SearchZeroTopK(t *testing.T) {
+	dir := t.TempDir()
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
+	backend := newMockVectorBackend()
+	vop := NewVectorOperator(base, backend, dir)
+	ctx := context.Background()
+
+	results, err := vop.Search(ctx, tenantID, "sess-x", "query", 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if results != nil {
+		t.Errorf("expected nil for topK=0, got %v", results)
+	}
+}
+
+func TestVectorOperator_SearchNonexistentSession(t *testing.T) {
+	dir := t.TempDir()
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
+	backend := newMockVectorBackend()
+	vop := NewVectorOperator(base, backend, dir)
+	ctx := context.Background()
+
+	results, err := vop.Search(ctx, tenantID, "nope", "query", 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if results != nil {
+		t.Errorf("expected nil for nonexistent session, got %v", results)
+	}
+}
+
+func TestVectorOperator_ContextCancelled(t *testing.T) {
+	dir := t.TempDir()
+	tenantID := "t1"
+	base := NewFileSessionOperator(dir, tenantID)
+	backend := newMockVectorBackend()
+	vop := NewVectorOperator(base, backend, dir)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	state := SessionState{
+		TenantID: "t1",
+		Messages: []SessionMessage{makeMessage("m1", UIMessage, ai.RoleUser, "hello")},
+	}
+
+	if err := vop.SaveState(ctx, tenantID, "sess-ctx", state); err == nil {
+		t.Fatal("expected error from cancelled context on SaveState")
+	}
+
+	if _, err := vop.LoadState(ctx, tenantID, "sess-ctx", All, 0); err == nil {
+		t.Fatal("expected error from cancelled context on LoadState")
+	}
+
+	if err := vop.DeleteSession(ctx, tenantID, "sess-ctx"); err == nil {
+		t.Fatal("expected error from cancelled context on DeleteSession")
+	}
+
+	if _, err := vop.Search(ctx, tenantID, "sess-ctx", "query", 5); err == nil {
+		t.Fatal("expected error from cancelled context on Search")
+	}
+}
+
+func TestMessageText(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  SessionMessage
+		want string
+	}{
+		{
+			name: "single text part",
+			msg: SessionMessage{
+				Content: ai.Message{
+					Content: []*ai.Part{ai.NewTextPart("hello")},
+				},
+			},
+			want: "hello",
+		},
+		{
+			name: "multiple text parts",
+			msg: SessionMessage{
+				Content: ai.Message{
+					Content: []*ai.Part{
+						ai.NewTextPart("hello"),
+						ai.NewTextPart("world"),
+					},
+				},
+			},
+			want: "hello world",
+		},
+		{
+			name: "empty content",
+			msg: SessionMessage{
+				Content: ai.Message{
+					Content: []*ai.Part{},
+				},
+			},
+			want: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := messageText(&tc.msg)
+			if got != tc.want {
+				t.Errorf("expected %q, got %q", tc.want, got)
+			}
+		})
+	}
+}

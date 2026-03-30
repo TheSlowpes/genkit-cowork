@@ -973,7 +973,7 @@ func TestHeartbeatRun_SessionPersistence(t *testing.T) {
 	h.Run(ctx, time.Now())
 
 	// Verify session was created and has messages
-	sessData, err := store.Get(ctx, "hb-persist")
+	sessData, err := store.ForTenant("tenant-test").Get(ctx, "hb-persist")
 	if err != nil {
 		t.Fatalf("failed to load session: %v", err)
 	}
@@ -985,6 +985,12 @@ func TestHeartbeatRun_SessionPersistence(t *testing.T) {
 	}
 	if len(sessData.State.Messages) == 0 {
 		t.Error("expected session to have messages after heartbeat run")
+	}
+	if len(sessData.State.Turns) != 1 {
+		t.Errorf("expected 1 persisted turn after heartbeat run, got %d", len(sessData.State.Turns))
+	}
+	if len(sessData.State.Turns) > 0 && sessData.State.Turns[0].TurnID == "" {
+		t.Error("expected persisted heartbeat turn to have TurnID")
 	}
 }
 
@@ -1013,7 +1019,7 @@ func TestHeartbeatRun_SessionPersistenceAcrossRuns(t *testing.T) {
 	h.Run(ctx, time.Now())
 	h.Run(ctx, time.Now())
 
-	sessData, err := store.Get(ctx, "hb-multi-run")
+	sessData, err := store.ForTenant("tenant-1").Get(ctx, "hb-multi-run")
 	if err != nil {
 		t.Fatalf("failed to load session: %v", err)
 	}
@@ -1024,6 +1030,22 @@ func TestHeartbeatRun_SessionPersistenceAcrossRuns(t *testing.T) {
 	// Should have accumulated messages from both runs
 	if len(sessData.State.Messages) < 2 {
 		t.Errorf("expected at least 2 messages from 2 runs, got %d", len(sessData.State.Messages))
+	}
+	if len(sessData.State.Turns) < 2 {
+		t.Errorf("expected at least 2 turns from 2 runs, got %d", len(sessData.State.Turns))
+	}
+	for i := range sessData.State.Turns {
+		turn := sessData.State.Turns[i]
+		window, err := memory.MessagesForTurn(sessData.State, turn)
+		if err != nil {
+			t.Fatalf("MessagesForTurn(turn=%d): %v", i, err)
+		}
+		if len(window) != turn.MessageCount {
+			t.Fatalf("turn %d window size = %d, want %d", i, len(window), turn.MessageCount)
+		}
+		if turn.FlowName != "heartbeat" {
+			t.Fatalf("turn %d flow = %q, want heartbeat", i, turn.FlowName)
+		}
 	}
 }
 
@@ -1048,7 +1070,7 @@ func TestHeartbeatRun_HeartbeatOrigin(t *testing.T) {
 
 	h.Run(ctx, time.Now())
 
-	sessData, err := store.Get(ctx, "hb-origin")
+	sessData, err := store.ForTenant("tenant-1").Get(ctx, "hb-origin")
 	if err != nil {
 		t.Fatalf("failed to load session: %v", err)
 	}
@@ -1299,6 +1321,7 @@ func TestNewHeartbeat_WithCustomLoopOperator(t *testing.T) {
 	h := NewHeartbeat(g, store, HeartbeatConfig{
 		Interval:  time.Minute,
 		SessionID: "hb-custom-op",
+		TenantID:  "tenant-1",
 		AgentConfig: &AgentLoopConfig{
 			Model: "test/hb-custom-op",
 		},
@@ -1349,6 +1372,7 @@ func TestNewHeartbeat_WithCustomAgentConfig(t *testing.T) {
 	h := NewHeartbeat(g, store, HeartbeatConfig{
 		Interval:  time.Minute,
 		SessionID: "hb-cfg-override",
+		TenantID:  "tenant-1",
 	},
 		WithCustomHeartbeatAgentConfig(AgentLoopConfig{
 			Model: "test/hb-default-model",
@@ -1384,6 +1408,7 @@ func TestNewHeartbeat_WithEventBus(t *testing.T) {
 	h := NewHeartbeat(g, store, HeartbeatConfig{
 		Interval:  time.Minute,
 		SessionID: "hb-bus",
+		TenantID:  "tenant-1",
 		AgentConfig: &AgentLoopConfig{
 			Model: "test/hb-bus",
 		},

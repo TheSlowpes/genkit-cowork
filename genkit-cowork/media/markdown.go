@@ -14,10 +14,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package media provides MIME-aware helpers used by file-reading and memory
-// ingestion pipelines.
-//
-// Current capabilities include:
-//   - image MIME detection and resize helpers
-//   - text/structured extraction for txt, markdown, json, csv, and html
 package media
+
+import (
+	"context"
+
+	"github.com/firebase/genkit/go/ai"
+)
+
+type markdownProcessor struct{}
+
+func (p markdownProcessor) Process(ctx context.Context, data []byte) ([]*ai.Document, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return chunksToDocuments("text/markdown", newDefaultTextChunker().chunk(string(data))), nil
+}
