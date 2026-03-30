@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package memory
+package utils
 
 import "testing"
 
@@ -27,8 +27,8 @@ func TestValidatePathSegment(t *testing.T) {
 	}
 	for _, v := range valid {
 		t.Run("valid/"+v, func(t *testing.T) {
-			if err := validatePathSegment("field", v); err != nil {
-				t.Fatalf("validatePathSegment(%q) unexpected error: %v", v, err)
+			if err := ValidatePathSegment("field", v); err != nil {
+				t.Fatalf("ValidatePathSegment(%q) unexpected error: %v", v, err)
 			}
 		})
 	}
@@ -45,8 +45,8 @@ func TestValidatePathSegment(t *testing.T) {
 	}
 	for _, tc := range invalid {
 		t.Run("invalid/"+tc.desc, func(t *testing.T) {
-			if err := validatePathSegment("field", tc.value); err == nil {
-				t.Fatalf("validatePathSegment(%q) expected error, got nil", tc.value)
+			if err := ValidatePathSegment("field", tc.value); err == nil {
+				t.Fatalf("ValidatePathSegment(%q) expected error, got nil", tc.value)
 			}
 		})
 	}

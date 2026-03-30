@@ -122,7 +122,7 @@ func formatMemoryResults(messages []memory.SessionMessage) string {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		b.WriteString(fmt.Sprintf("%d. id=%s kind=%s origin=%s text=%q", i+1, msg.MessageID, msg.Kind, msg.Origin, msg.Content.Text()))
+		fmt.Fprintf(&b, "%d. id=%s kind=%s origin=%s text=%q", i+1, msg.MessageID, msg.Kind, msg.Origin, msg.Content.Text())
 	}
 	return b.String()
 }

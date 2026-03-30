@@ -244,12 +244,7 @@ Memory is implemented through a `Session` store plus pluggable `SessionOperator`
 | File backend | `NewFileSessionOperator(rootDir, tenantID)` | Durable JSON state at `rootDir/{tenantID}/{sessionID}/state.json` |
 | Vector wrapper | `NewVectorOperator(base, backend, rootDir)` | Wraps a base operator and indexes new messages for semantic retrieval |
 | Local vector backend | `NewLocalVecBackend(g, name, cfg)` | `localvec`-based implementation of `VectorBackend` |
-| File records backend | `NewFileRecordOperator(rootDir)` | Durable tenant-global file and chunk records under `rootDir/{tenantID}/files` |
-| File ingest service | `NewFileIngestService(files, blobs, extractor, indexer)` | Stores tenant files, extracts text from supported MIME types, chunks, and indexes for recall |
-| File blob store | `NewFileBlobDiskStore(rootDir)` | Stores raw tenant file bytes under `rootDir/{tenantID}/files/raw` |
-| Insight backend | `NewFileInsightOperator(rootDir)` | Durable tenant-scoped consolidation run ledger and immutable insight records |
-| Preference backend | `NewFilePreferenceOperator(rootDir)` | Durable tenant-scoped explicit and implicit preference records |
-| Consolidation service | `NewConsolidationService(...)` | Runs tenant consolidation, derives insights (LLM deriver), persists run/insights, and optionally indexes insights |
+| File media asset backend | `NewFileMediaAssetStore(rootDir)` | Filesystem-backed asset persistence at `rootDir/{tenantID}/{sessionID}/assets` with document loading and chunk index files |
 
 ### File-backed sessions
 
@@ -283,86 +278,21 @@ _ = results
 _ = err
 ```
 
-### Tenant-global file memory (text + structured)
+### Session assets
 
-`FileIngestService` adds cross-session tenant recall for uploaded files. It currently supports text and structured formats: `text/plain`, `text/markdown`, `application/json`, `text/csv`, and `text/html`.
-
-```go
-fileRecords := memory.NewFileRecordOperator("./data/memory")
-blobStore := memory.NewFileBlobDiskStore("./data/memory")
-indexer := memory.NewVectorFileIndexer(vecBackend)
-
-ingest := memory.NewFileIngestService(fileRecords, blobStore, nil, indexer)
-
-ingested, err := ingest.Ingest(ctx, memory.FileIngestInput{
-    TenantID:  "tenant-1",
-    SessionID: "session-a",
-    FileName:  "./docs/policy.md",
-    Data:      []byte("# Policy\nInvoices close monthly."),
-})
-_ = ingested
-_ = err
-
-chunks, err := ingest.SearchTenantFiles(ctx, memory.FileChunkSearchInput{
-    TenantID: "tenant-1",
-    Query:    "invoice policy",
-    TopK:     5,
-})
-_ = chunks
-_ = err
-```
-
-### Consolidation (nightly enrichment)
-
-`ConsolidationService` derives immutable tenant insights from sessions and tenant-global files. The default LLM deriver expects a model already registered in the same Genkit instance.
+Use `WithMediaAssetStore` to persist media/data URI parts to disk and track
+`SessionAsset` metadata in session state.
 
 ```go
-insightStore := memory.NewFileInsightOperator("./data/memory")
-deriver := memory.NewLLMInsightDeriver(g, "googleai/gemini-2.0-flash")
-insightIndexer := memory.NewVectorInsightIndexer(vecBackend)
+assetStore := memory.NewFileMediaAssetStore("./data/assets")
 
-consolidation := memory.NewConsolidationService(
-    sessionOp,
-    fileRecords,
-    insightStore,
-    memory.NewFilePreferenceOperator("./data/memory"),
-    deriver,
-    insightIndexer,
-    memory.ConsolidationConfig{
-        Model:                         "googleai/gemini-2.0-flash",
-        PromptVersion:                 "v1",
-        PreferencePromotionConfidence: 0.8,
-    },
+store := memory.NewSession(
+    memory.WithTenantID("tenant-1"),
+    memory.WithMediaAssetStore(assetStore),
 )
 
-run, err := consolidation.RunTenant(ctx, "tenant-1")
-_ = run
-_ = err
-
-results, err := consolidation.SearchTenantInsights(ctx, "tenant-1", "invoice policy", 5)
-_ = results
-_ = err
-```
-
-### Tenant preferences
-
-Preferences are first-class tenant records and can be explicit (user provided) or implicit (promoted from consolidation preference candidates with confidence/provenance).
-
-```go
-prefs := memory.NewFilePreferenceOperator("./data/memory")
-
-saved, err := prefs.SavePreference(ctx, "tenant-1", memory.PreferenceRecord{
-    Key:        "response_style",
-    Value:      "concise",
-    Source:     memory.PreferenceSourceExplicit,
-    Confidence: 1,
-})
-_ = saved
-_ = err
-
-all, err := prefs.ListPreferences(ctx, "tenant-1", memory.PreferenceFilter{Status: memory.PreferenceStatusActive})
-_ = all
-_ = err
+// During Session.Save, data URI media parts are normalized to absolute files
+// under ./data/assets/{tenantID}/{sessionID}/assets.
 ```
 
 ### Stored message model
@@ -375,7 +305,7 @@ Each `SessionMessage` stores `MessageID`, `Origin`, `Kind`, `Content`, and `Time
 
 ### Examples
 
-- `examples/pgvector/main.go` shows the most basic pgvector wiring by wrapping the Genkit PostgreSQL plugin as a `memory.VectorBackend` and plugging it into `memory.NewVectorOperator`.
+- `examples/pgvector/main.go` shows pgvector wiring for session memory only by wrapping the Genkit PostgreSQL plugin as a `memory.VectorBackend` and plugging it into `memory.NewVectorOperator`.
 
 ## Skills
 
@@ -450,7 +380,6 @@ genkit-cowork/
 │   ├── heartbeat.go          # Scheduled heartbeat runner
 │   ├── heartbeat_config.go   # Heartbeat configuration types
 │   ├── heartbeat_result.go   # Result parsing and classification
-│   ├── consolidation.go      # Optional consolidation flow wrapper
 │   ├── reply.go              # Channel-routed reply delivery
 │   ├── event.go              # EventBus and typed lifecycle events
 │   └── event_context.go      # Event payload types
@@ -464,9 +393,7 @@ genkit-cowork/
 │   ├── truncate.go           # Output truncation utilities
 │   ├── path.go               # Path resolution utilities
 │   ├── constants.go          # Output limits
-│   ├── memory_retrieval.go   # Tenant/session memory retrieval tools
-│   ├── file_memory.go        # Tenant-global file memory tools
-│   └── insight_retrieval.go  # Tenant insight retrieval tool
+│   └── memory_retrieval.go   # Tenant/session memory retrieval tools
 ├── plugins/            # Genkit plugins
 │   └── skills/               # Skill discovery and serving
 │       ├── skills.go          # Plugin struct, Init, tool registration
@@ -474,7 +401,10 @@ genkit-cowork/
 │       └── skill_scanner.go   # Directory scanning, skill discovery
 ├── media/              # MIME detection and processing
 │   ├── mime.go               # Image MIME detection, image resizing
-│   └── text_extract.go       # Text/structured MIME extraction (txt/md/json/csv/html)
+│   ├── registry.go           # MIME to DocumentProcessor registry
+│   ├── documents.go          # DocumentProcessor interface
+│   ├── shared.go             # Shared chunking and processor helpers
+│   └── *_processor.go        # One file per MIME-specific DocumentProcessor
 ├── memory/             # Session persistence and retrieval
 │   ├── sessions.go           # Session store, message models, persistence modes
 │   ├── turns.go              # Turn ledger records and ledger validation
@@ -482,16 +412,9 @@ genkit-cowork/
 │   ├── assets.go             # Session asset model and media asset store interface
 │   ├── file_assets.go        # Filesystem media asset store implementation
 │   ├── file_sessions.go      # File-backed SessionOperator (JSON + atomic write)
-│   ├── files.go              # Tenant-global file + chunk records and interfaces
-│   ├── file_files.go         # File-backed FileOperator for file/chunk metadata
-│   ├── file_blob_store.go    # Raw tenant file blob store
-│   ├── file_ingest.go        # MIME-aware file ingest, chunking, indexing, recall service
-│   ├── file_recall.go        # Tenant file recall helper API
-│   ├── insights.go           # Insight records + consolidation run ledger operators
-│   ├── consolidation.go      # Tenant consolidation service and LLM deriver
-│   ├── preferences.go        # Tenant preference records and preference operators
 │   ├── vector_sessions.go    # VectorOperator wrapper + semantic search
 │   └── vector_backend.go     # Vector backend interface + localvec backend
 └── utils/              # Shared utilities
-    └── shell.go              # Shell environment management
+    ├── shell.go              # Shell environment management
+    └── path_segment.go       # Path segment validation for filesystem safety
 ```

@@ -28,19 +28,10 @@
 // VectorOperator to index textual message content for semantic recall while
 // keeping the canonical session state in the primary operator.
 //
-// Tenant-global file memory is also supported through FileIngestService.
-// File ingestion stores immutable tenant file records and chunk records,
-// extracts canonical text from supported MIME types (txt, markdown, json,
-// csv, html), and indexes chunks for cross-session recall.
-//
-// ConsolidationService provides tenant-scoped enrichment over sessions and
-// files. It supports LLM-based insight derivation, immutable InsightRecord
-// persistence, consolidation run idempotency, and optional vector indexing for
-// insight recall.
-//
-// PreferenceOperator provides tenant-scoped explicit and implicit preference
-// records. Consolidation can promote high-confidence preference-candidate
-// insights into implicit PreferenceRecords with provenance evidence.
+// Session media assets can be persisted through MediaAssetStore
+// implementations such as FileMediaAssetStore. When configured via
+// WithMediaAssetStore, Session.Save normalizes data URI media parts into
+// filesystem assets under a tenant/session scope.
 //
 // # Examples
 //

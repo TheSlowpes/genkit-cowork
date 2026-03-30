@@ -14,19 +14,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package memory
+package utils
 
 import (
 	"fmt"
 	"strings"
 )
 
-// validatePathSegment ensures that a value used as a single filesystem path
+// ValidatePathSegment ensures that a value used as a single filesystem path
 // component is safe. It rejects empty strings, values that contain path
-// separators ('/' or '\'), and dot-directory references ('.' and '..') to
+// separators ('/' or '\\'), and dot-directory references ('.' and '..') to
 // prevent path-traversal attacks when the value is interpolated into a
 // filepath.Join call.
-func validatePathSegment(name, value string) error {
+func ValidatePathSegment(name, value string) error {
 	if strings.TrimSpace(value) == "" {
 		return fmt.Errorf("%s is required", name)
 	}

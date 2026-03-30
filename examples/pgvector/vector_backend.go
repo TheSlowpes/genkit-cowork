@@ -50,20 +50,12 @@ func (b *PGVectorBackend) Index(ctx context.Context, tenantID, _ string, docs []
 			doc.Metadata = make(map[string]any)
 		}
 		doc.Metadata["tenantID"] = tenantID
-		if _, ok := doc.Metadata["recordType"]; !ok {
-			doc.Metadata["recordType"] = recordTypeSessionMessage
-		}
 
 		copyMetadata(doc.Metadata, "sessionID", "session_id")
 		copyMetadata(doc.Metadata, "tenantID", "tenant_id")
 		copyMetadata(doc.Metadata, "messageID", "message_id")
-		copyMetadata(doc.Metadata, "recordType", "record_type")
-		copyMetadata(doc.Metadata, "fileID", "file_id")
-		copyMetadata(doc.Metadata, "chunkID", "chunk_id")
-		copyMetadata(doc.Metadata, "mimeType", "mime_type")
-		copyMetadata(doc.Metadata, "fileName", "file_name")
-		copyMetadata(doc.Metadata, "uploadedAt", "uploaded_at")
-		copyMetadata(doc.Metadata, "extractionMode", "extraction_mode")
+		copyMetadata(doc.Metadata, "kind", "kind")
+		copyMetadata(doc.Metadata, "origin", "origin")
 	}
 
 	return b.docStore.Index(ctx, docs)
@@ -82,16 +74,11 @@ func (b *PGVectorBackend) RetrieveTenant(ctx context.Context, tenantID, query st
 	}
 
 	for _, doc := range resp.Documents {
-		copyMetadata(doc.Metadata, "record_type", "recordType")
 		copyMetadata(doc.Metadata, "message_id", "messageID")
 		copyMetadata(doc.Metadata, "session_id", "sessionID")
 		copyMetadata(doc.Metadata, "tenant_id", "tenantID")
-		copyMetadata(doc.Metadata, "file_id", "fileID")
-		copyMetadata(doc.Metadata, "chunk_id", "chunkID")
-		copyMetadata(doc.Metadata, "mime_type", "mimeType")
-		copyMetadata(doc.Metadata, "file_name", "fileName")
-		copyMetadata(doc.Metadata, "uploaded_at", "uploadedAt")
-		copyMetadata(doc.Metadata, "extraction_mode", "extractionMode")
+		copyMetadata(doc.Metadata, "kind", "kind")
+		copyMetadata(doc.Metadata, "origin", "origin")
 	}
 
 	return resp.Documents, nil
@@ -110,16 +97,11 @@ func (b *PGVectorBackend) RetrieveSession(ctx context.Context, tenantID, session
 	}
 
 	for _, doc := range resp.Documents {
-		copyMetadata(doc.Metadata, "record_type", "recordType")
 		copyMetadata(doc.Metadata, "message_id", "messageID")
 		copyMetadata(doc.Metadata, "session_id", "sessionID")
 		copyMetadata(doc.Metadata, "tenant_id", "tenantID")
-		copyMetadata(doc.Metadata, "file_id", "fileID")
-		copyMetadata(doc.Metadata, "chunk_id", "chunkID")
-		copyMetadata(doc.Metadata, "mime_type", "mimeType")
-		copyMetadata(doc.Metadata, "file_name", "fileName")
-		copyMetadata(doc.Metadata, "uploaded_at", "uploadedAt")
-		copyMetadata(doc.Metadata, "extraction_mode", "extractionMode")
+		copyMetadata(doc.Metadata, "kind", "kind")
+		copyMetadata(doc.Metadata, "origin", "origin")
 	}
 
 	return resp.Documents, nil
@@ -129,38 +111,6 @@ func (b *PGVectorBackend) Delete(ctx context.Context, tenantID, sessionID string
 	query := fmt.Sprintf(`DELETE FROM "%s"."%s" WHERE tenant_id = $1 AND session_id = $2`, b.schema, b.table)
 	_, err := b.pool.Exec(ctx, query, tenantID, sessionID)
 	return err
-}
-
-func (b *PGVectorBackend) RetrieveTenantByRecordType(ctx context.Context, tenantID, query, recordType string, topK int) ([]*ai.Document, error) {
-	resp, err := b.retriever.Retrieve(ctx, &ai.RetrieverRequest{
-		Query: ai.DocumentFromText(query, nil),
-		Options: &postgresql.RetrieverOptions{
-			K: topK,
-			Filter: fmt.Sprintf(
-				"tenant_id = '%s' AND record_type = '%s'",
-				escapeLiteral(tenantID),
-				escapeLiteral(recordType),
-			),
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	for _, doc := range resp.Documents {
-		copyMetadata(doc.Metadata, "record_type", "recordType")
-		copyMetadata(doc.Metadata, "message_id", "messageID")
-		copyMetadata(doc.Metadata, "session_id", "sessionID")
-		copyMetadata(doc.Metadata, "tenant_id", "tenantID")
-		copyMetadata(doc.Metadata, "file_id", "fileID")
-		copyMetadata(doc.Metadata, "chunk_id", "chunkID")
-		copyMetadata(doc.Metadata, "mime_type", "mimeType")
-		copyMetadata(doc.Metadata, "file_name", "fileName")
-		copyMetadata(doc.Metadata, "uploaded_at", "uploadedAt")
-		copyMetadata(doc.Metadata, "extraction_mode", "extractionMode")
-	}
-
-	return resp.Documents, nil
 }
 
 func simpleEmbed(dim int) ai.EmbedderFunc {

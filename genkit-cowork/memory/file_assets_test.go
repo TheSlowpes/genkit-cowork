@@ -18,6 +18,7 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,7 +30,7 @@ func TestFileMediaAssetStore_Put_RejectsPathTraversal(t *testing.T) {
 	store := NewFileMediaAssetStore(t.TempDir())
 
 	cases := []struct {
-		name                       string
+		name                         string
 		tenantID, sessionID, assetID string
 	}{
 		{"empty tenantID", "", "session-1", "asset-1"},
@@ -101,5 +102,96 @@ func TestFileMediaAssetStore_DeleteSessionAssetsTenantScoped(t *testing.T) {
 	}
 	if _, err := os.Stat(pathB); err != nil {
 		t.Fatalf("tenant-b asset should still exist, stat err = %v", err)
+	}
+}
+
+func TestFileMediaAssetStore_PutWritesAssetManifest(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store := NewFileMediaAssetStore(root)
+
+	if _, err := store.Put(ctx, "tenant-1", "session-1", "asset-1", "text/plain", []byte("hello world")); err != nil {
+		t.Fatalf("Put() error = %v", err)
+	}
+
+	assets, err := store.ListAssets(ctx, "tenant-1", "session-1")
+	if err != nil {
+		t.Fatalf("ListAssets() error = %v", err)
+	}
+	if len(assets) != 1 {
+		t.Fatalf("len(ListAssets()) = %d, want 1", len(assets))
+	}
+	if assets[0].AssetID != "asset-1" {
+		t.Fatalf("assetID = %q, want %q", assets[0].AssetID, "asset-1")
+	}
+	if assets[0].IngestStatus != AssetIngestPending {
+		t.Fatalf("ingestStatus = %q, want %q", assets[0].IngestStatus, AssetIngestPending)
+	}
+
+	indexPath := filepath.Join(root, "tenant-1", "session-1", "assets", "index.json")
+	b, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("ReadFile(index.json) error = %v", err)
+	}
+	if len(b) == 0 {
+		t.Fatal("index.json was empty")
+	}
+}
+
+func TestFileMediaAssetStore_LoadWritesChunkIndexJSON(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store := NewFileMediaAssetStore(root)
+
+	if _, err := store.Put(ctx, "tenant-1", "session-1", "asset-1", "text/plain", []byte(strings.Repeat("abc ", 500))); err != nil {
+		t.Fatalf("Put() error = %v", err)
+	}
+
+	docs, err := store.Load(ctx, "tenant-1", "session-1", "asset-1")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("Load() returned no docs")
+	}
+
+	chunkPath := filepath.Join(root, "tenant-1", "session-1", "assets", "asset-1.index.json")
+	b, err := os.ReadFile(chunkPath)
+	if err != nil {
+		t.Fatalf("ReadFile(chunk index) error = %v", err)
+	}
+
+	var index []map[string]any
+	if err := json.Unmarshal(b, &index); err != nil {
+		t.Fatalf("Unmarshal(chunk index) error = %v", err)
+	}
+	if len(index) != len(docs) {
+		t.Fatalf("chunk index len = %d, want %d", len(index), len(docs))
+	}
+
+	assets, err := store.ListAssets(ctx, "tenant-1", "session-1")
+	if err != nil {
+		t.Fatalf("ListAssets() error = %v", err)
+	}
+	if assets[0].IngestStatus != AssetIngestCompleted {
+		t.Fatalf("ingestStatus = %q, want %q", assets[0].IngestStatus, AssetIngestCompleted)
+	}
+}
+
+func TestFileMediaAssetStore_LoadUnsupportedTypeReturnsExpectedError(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store := NewFileMediaAssetStore(root)
+
+	if _, err := store.Put(ctx, "tenant-1", "session-1", "asset-1", "application/pdf", []byte("%PDF-1.7")); err != nil {
+		t.Fatalf("Put() error = %v", err)
+	}
+
+	_, err := store.Load(ctx, "tenant-1", "session-1", "asset-1")
+	if err == nil {
+		t.Fatal("Load() expected error, got nil")
+	}
+	if got, want := err.Error(), "process document: file type not supported"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
 	}
 }

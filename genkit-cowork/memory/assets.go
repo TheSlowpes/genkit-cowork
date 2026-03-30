@@ -16,21 +16,45 @@
 
 package memory
 
-import "context"
+import (
+	"context"
+	"time"
+
+	"github.com/firebase/genkit/go/ai"
+)
 
 // SessionAsset records a stored media asset associated with a message part.
 type SessionAsset struct {
-	AssetID   string `json:"assetID"`
-	MessageID string `json:"messageID"`
-	PartIndex int    `json:"partIndex"`
-	MimeType  string `json:"mimeType"`
-	SizeBytes int    `json:"sizeBytes"`
-	Path      string `json:"path"`
+	AssetID      string            `json:"assetID"`
+	MessageID    string            `json:"messageID"`
+	Name         string            `json:"name"`
+	PartIndex    int               `json:"partIndex"`
+	MimeType     string            `json:"mimeType"`
+	SizeBytes    int               `json:"sizeBytes"`
+	SHA256       string            `json:"sha256"`
+	Path         string            `json:"path"`
+	UploadedAt   time.Time         `json:"uploadedAt"`
+	IngestStatus AssetIngestStatus `json:"ingestStatus"`
+	IngestedAt   time.Time         `json:"ingestedAt"`
+	Metadata     map[string]string `json:"metadata,omitempty"`
 }
 
 // MediaAssetStore persists and deletes media assets referenced by session
 // messages.
 type MediaAssetStore interface {
 	Put(ctx context.Context, tenantID, sessionID, assetID, mimeType string, data []byte) (absolutePath string, err error)
+	Load(ctx context.Context, tenantID, sessionID, assetID string) (docs []ai.Document, err error)
+	ListAssets(ctx context.Context, tenantID, sessionID string) (assets []SessionAsset, err error)
 	DeleteSessionAssets(ctx context.Context, tenantID, sessionID string) error
 }
+
+type AssetIngestStatus string
+
+const (
+	// AssetIngestPending indicates the asset is persisted but not yet fully ingested.
+	AssetIngestPending AssetIngestStatus = "pending"
+	// AssetIngestCompleted indicates parse/chunk/index completed successfully.
+	AssetIngestCompleted AssetIngestStatus = "completed"
+	// AssetIngestFailed indicates ingestion failed and Error contains details.
+	AssetIngestFailed AssetIngestStatus = "failed"
+)

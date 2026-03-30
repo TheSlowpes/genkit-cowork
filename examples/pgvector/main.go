@@ -33,9 +33,6 @@ const (
 	embeddingDim = 8
 	schemaName   = "public"
 	tableName    = "session_memory"
-
-	recordTypeSessionMessage = "session_message"
-	recordTypeFileChunk      = "file_chunk"
 )
 
 func main() {
@@ -78,17 +75,10 @@ func main() {
 		OverwriteExisting: true,
 		MetadataColumns: []postgresql.Column{
 			{Name: "tenant_id", DataType: "TEXT", Nullable: false},
-			{Name: "record_type", DataType: "TEXT", Nullable: false},
 			{Name: "session_id", DataType: "TEXT", Nullable: true},
 			{Name: "message_id", DataType: "TEXT", Nullable: true},
 			{Name: "kind", DataType: "TEXT", Nullable: true},
 			{Name: "origin", DataType: "TEXT", Nullable: true},
-			{Name: "file_id", DataType: "TEXT", Nullable: true},
-			{Name: "chunk_id", DataType: "TEXT", Nullable: true},
-			{Name: "mime_type", DataType: "TEXT", Nullable: true},
-			{Name: "file_name", DataType: "TEXT", Nullable: true},
-			{Name: "uploaded_at", DataType: "TEXT", Nullable: true},
-			{Name: "extraction_mode", DataType: "TEXT", Nullable: true},
 		},
 	})
 	if err != nil {
@@ -103,17 +93,10 @@ func main() {
 		IDColumn:        "id",
 		MetadataColumns: []string{
 			"tenant_id",
-			"record_type",
 			"session_id",
 			"message_id",
 			"kind",
 			"origin",
-			"file_id",
-			"chunk_id",
-			"mime_type",
-			"file_name",
-			"uploaded_at",
-			"extraction_mode",
 		},
 		Embedder: embedder,
 	})
@@ -166,42 +149,5 @@ func main() {
 
 	for i, msg := range matches {
 		log.Printf("match %d id=%s kind=%s text=%q", i+1, msg.MessageID, msg.Kind, messageText(msg.Content))
-	}
-
-	fileOperator := memory.NewFileRecordOperator("./data/files")
-	blobStore := memory.NewFileBlobDiskStore("./data/files")
-	fileIndexer := memory.NewVectorFileIndexer(vectorBackend)
-	fileIngest := memory.NewFileIngestService(fileOperator, blobStore, nil, fileIndexer)
-
-	fileIngested, err := fileIngest.Ingest(ctx, memory.FileIngestInput{
-		TenantID:      tenantID,
-		SessionID:     "session-2",
-		SourceChannel: memory.UIMessage,
-		FileName:      "billing-policy.md",
-		Data: []byte("# Billing Policy\n" +
-			"Invoices are generated monthly.\n" +
-			"Disputes must be opened within 15 days."),
-	})
-	if err != nil {
-		log.Fatalf("failed to ingest tenant file memory: %v", err)
-	}
-	log.Printf("file ingested id=%s chunks=%d", fileIngested.File.FileID, len(fileIngested.Chunks))
-
-	fileChunkDocs, err := vectorBackend.RetrieveTenantByRecordType(
-		ctx,
-		tenantID,
-		"invoice dispute policy",
-		recordTypeFileChunk,
-		5,
-	)
-	if err != nil {
-		log.Fatalf("failed to retrieve file chunks with record_type filter: %v", err)
-	}
-
-	for i, doc := range fileChunkDocs {
-		fileID, _ := doc.Metadata["fileID"].(string)
-		chunkID, _ := doc.Metadata["chunkID"].(string)
-		fileName, _ := doc.Metadata["fileName"].(string)
-		log.Printf("file chunk match %d fileID=%s chunkID=%s fileName=%s text=%q", i+1, fileID, chunkID, fileName, messageText(ai.Message{Content: doc.Content}))
 	}
 }

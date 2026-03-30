@@ -43,6 +43,21 @@ func (s *testAssetStore) DeleteSessionAssets(ctx context.Context, tenantID, sess
 	return nil
 }
 
+func (s *testAssetStore) Load(ctx context.Context, tenantID, sessionID, assetID string) ([]ai.Document, error) {
+	_ = ctx
+	_ = tenantID
+	_ = sessionID
+	_ = assetID
+	return nil, nil
+}
+
+func (s *testAssetStore) ListAssets(ctx context.Context, tenantID, sessionID string) ([]SessionAsset, error) {
+	_ = ctx
+	_ = tenantID
+	_ = sessionID
+	return nil, nil
+}
+
 // --- helpers ---
 
 func makeMessage(id string, origin MessageOrigin, role ai.Role, text string) SessionMessage {
