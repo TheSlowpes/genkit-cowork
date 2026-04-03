@@ -14,5 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package utils provides shared utility helpers used across the framework.
+// Package utils provides shared utility helpers used across the framework,
+// including shell environment management, path safety helpers, and default
+// workspace layout resolution for local .genkit directories.
 package utils

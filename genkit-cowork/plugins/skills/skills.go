@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -40,6 +41,15 @@ var defaultSkillsDirs = []string{
 	"./.agent/skills",
 	"./agent/skills",
 	"./docs/skills",
+	defaultGenkitSkillsDir(),
+}
+
+func defaultGenkitSkillsDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".genkit", "skills")
 }
 
 // SkillDefinition holds the parsed contents of the SKILL.md frontmatter block.
@@ -124,6 +134,9 @@ func (s *Skills) Init(ctx context.Context) []api.Action {
 	// Resolve skills directory.
 	if s.SkillsDir == "" {
 		for _, dir := range defaultSkillsDirs {
+			if dir == "" {
+				continue
+			}
 			info, err := os.Stat(dir)
 			if err == nil && info.IsDir() {
 				s.SkillsDir = dir

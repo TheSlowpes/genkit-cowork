@@ -45,6 +45,35 @@ editTool  := tools.NewEditTool(g, "/working/dir")
 writeTool := tools.NewWriteTool(g, "/working/dir")
 ```
 
+### Default local workspace layout
+
+For local-first apps, a practical default is a single `.genkit` home directory in
+the user home, with tenant-scoped workspaces:
+
+```text
+~/.genkit/
+  traces/
+  workspace/
+    <tenant-id>/
+  memory/
+    sessions/
+    index/
+    assets/
+  skills/
+```
+
+Use `utils.ResolveWorkspaceLayout(tenantID)` and
+`utils.EnsureWorkspaceLayout(ctx, layout)` to compute and create this layout.
+
+For session-level navigation from the workspace, use
+`utils.EnsureSessionWorkspaceLinks(ctx, layout, tenantID, sessionID)` to create:
+
+- `~/.genkit/workspace/<tenant-id>/sessions/<session-id>/memory` -> `~/.genkit/memory/sessions/<tenant-id>/<session-id>`
+- `~/.genkit/workspace/<tenant-id>/sessions/<session-id>/index` -> `~/.genkit/memory/index/<tenant-id>/<session-id>`
+
+- `GENKIT_HOME` overrides `~/.genkit`.
+- `GENKIT_WORKSPACE` overrides the workspace root (`~/.genkit/workspace`).
+
 ### 3. Set up message handling
 
 `HandleMessageFlow` is a session-backed chat flow. It loads or creates session state, runs the agent loop, and persists the conversation:
@@ -325,7 +354,7 @@ g, _ := genkit.Init(ctx,
 )
 ```
 
-When `SkillsDir` is not set, the plugin searches for the first existing directory among: `./skills`, `./SKILLS`, `./.agent/skills`, `./agent/skills`, `./docs/skills`. If none are found, the plugin starts with an empty skill set and does not panic.
+When `SkillsDir` is not set, the plugin searches for the first existing directory among: `./skills`, `./SKILLS`, `./.agent/skills`, `./agent/skills`, `./docs/skills`, and `~/.genkit/skills`. If none are found, the plugin starts with an empty skill set and does not panic.
 
 After `Init`, register the tool with a Genkit instance:
 

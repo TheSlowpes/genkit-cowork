@@ -32,12 +32,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/TheSlowpes/genkit-cowork/genkit-cowork/flows"
 	"github.com/TheSlowpes/genkit-cowork/genkit-cowork/memory"
 	"github.com/TheSlowpes/genkit-cowork/genkit-cowork/tools"
+	"github.com/TheSlowpes/genkit-cowork/genkit-cowork/utils"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
@@ -48,9 +50,6 @@ const (
 	sessionID = "tui-chat"
 	tenantID  = "local"
 	maxTurns  = 20
-	workDir   = "."
-	indexDir  = "./.genkit-memory/index"
-	stateDir  = "./.genkit-memory/sessions"
 )
 
 // tuiChannelHandler implements flows.ChannelHandler for the terminal UI.
@@ -90,6 +89,24 @@ func main() {
 	)
 
 	// 2. Create a tenant-scoped session store with vector indexing.
+	layout, err := utils.ResolveWorkspaceLayout(tenantID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resolve workspace layout: %v\n", err)
+		os.Exit(1)
+	}
+	if err := utils.EnsureWorkspaceLayout(ctx, layout); err != nil {
+		fmt.Fprintf(os.Stderr, "ensure workspace layout: %v\n", err)
+		os.Exit(1)
+	}
+	if err := utils.EnsureSessionWorkspaceLinks(ctx, layout, tenantID, sessionID); err != nil {
+		fmt.Fprintf(os.Stderr, "ensure workspace links: %v\n", err)
+		os.Exit(1)
+	}
+
+	indexDir := filepath.Join(layout.MemoryIndexDir, tenantID)
+	stateDir := layout.MemorySessionsDir
+	assetDir := layout.MemoryAssetsDir
+
 	embedder := genkit.LookupEmbedder(g, "googleai/gemini-embedding-001")
 	vecBackend, err := memory.NewLocalVecBackend(g, "tui-memory", memory.LocalVecConfig{
 		Embedder: embedder,
@@ -101,16 +118,15 @@ func main() {
 	}
 	fileBackend := memory.NewFileSessionOperator(stateDir, tenantID)
 	vectorOperator := memory.NewVectorOperator(fileBackend, vecBackend, stateDir)
+	assetStore := memory.NewFileMediaAssetStore(assetDir)
 	store := memory.NewSession(
 		memory.WithCustomSessionOperator(vectorOperator),
 		memory.WithTenantID(tenantID),
+		memory.WithMediaAssetStore(assetStore),
 	)
 
 	// 3. Register the core tools.
-	cwd, err := os.Getwd()
-	if err != nil {
-		cwd = workDir
-	}
+	cwd := layout.WorkspaceTenantDir
 	tools.NewBashTool(g, cwd)
 	tools.NewReadTool(g, cwd)
 	tools.NewEditTool(g, cwd)
