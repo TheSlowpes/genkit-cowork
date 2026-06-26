@@ -662,6 +662,44 @@ func TestHandleMessage_InterruptAndResume(t *testing.T) {
 	if resumeOutput.Response.Text() != "Deployed successfully." {
 		t.Errorf("phase 2: expected 'Deployed successfully.', got %q", resumeOutput.Response.Text())
 	}
+
+	resumeSessData, err := store.ForTenant("tenant-1").Get(ctx, "sess-msg-int")
+	if err != nil {
+		t.Fatalf("phase 2: failed to load session: %v", err)
+	}
+	if resumeSessData == nil {
+		t.Fatal("phase 2: expected session to exist")
+	}
+	if len(resumeSessData.State.Messages) != 4 {
+		t.Fatalf("phase 2: expected 4 persisted messages, got %d", len(resumeSessData.State.Messages))
+	}
+	resumedToolMsg := resumeSessData.State.Messages[2]
+	if resumedToolMsg.Content.Role != ai.RoleTool {
+		t.Fatalf("phase 2: expected message 2 to be a resumed tool message, got %q", resumedToolMsg.Content.Role)
+	}
+	if resumedToolMsg.Origin != memory.ToolMessage {
+		t.Errorf("phase 2: expected resumed tool origin %q, got %q", memory.ToolMessage, resumedToolMsg.Origin)
+	}
+	if resumedToolMsg.Content.Metadata == nil || resumedToolMsg.Content.Metadata["resumed"] == nil {
+		t.Fatal("phase 2: expected Genkit resumed metadata on persisted tool message")
+	}
+	if resumeSessData.State.Messages[3].Content.Text() != "Deployed successfully." {
+		t.Errorf("phase 2: expected final persisted model response, got %q", resumeSessData.State.Messages[3].Content.Text())
+	}
+	if len(resumeSessData.State.Turns) != 2 {
+		t.Fatalf("phase 2: expected 2 persisted turns, got %d", len(resumeSessData.State.Turns))
+	}
+	lastTurn := resumeSessData.State.Turns[1]
+	if lastTurn.MessageCount != 2 {
+		t.Fatalf("phase 2: expected resumed turn to cover 2 messages, got %d", lastTurn.MessageCount)
+	}
+	window, err := memory.MessagesForTurn(resumeSessData.State, lastTurn)
+	if err != nil {
+		t.Fatalf("phase 2: MessagesForTurn(resumed): %v", err)
+	}
+	if len(window) != 2 || window[0].Content.Role != ai.RoleTool || window[1].Content.Role != ai.RoleModel {
+		t.Fatalf("phase 2: expected resumed turn window [tool, model], got %+v", window)
+	}
 }
 
 // --- Phase 6: Event Bus Integration ---

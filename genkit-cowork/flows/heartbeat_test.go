@@ -1479,4 +1479,51 @@ func TestHeartbeatRun_WithToolExecution(t *testing.T) {
 	if result.DeliveryContent != "database is healthy" {
 		t.Errorf("expected 'database is healthy', got %q", result.DeliveryContent)
 	}
+
+	sessData, err := store.ForTenant("tenant-1").Get(ctx, "hb-tools")
+	if err != nil {
+		t.Fatalf("failed to load heartbeat session: %v", err)
+	}
+	if sessData == nil {
+		t.Fatal("expected heartbeat session to exist")
+	}
+	msgs := sessData.State.Messages
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 persisted automatic tool-loop messages, got %d", len(msgs))
+	}
+	if msgs[0].Content.Role != ai.RoleModel {
+		t.Fatalf("msg[0]: expected model tool-request message, got %q", msgs[0].Content.Role)
+	}
+	if len(msgs[0].Content.Content) != 1 || !msgs[0].Content.Content[0].IsToolRequest() {
+		t.Fatalf("msg[0]: expected one tool request part, got %+v", msgs[0].Content.Content)
+	}
+	if msgs[1].Content.Role != ai.RoleTool {
+		t.Fatalf("msg[1]: expected tool response message, got %q", msgs[1].Content.Role)
+	}
+	if len(msgs[1].Content.Content) != 1 || !msgs[1].Content.Content[0].IsToolResponse() {
+		t.Fatalf("msg[1]: expected one tool response part, got %+v", msgs[1].Content.Content)
+	}
+	if msgs[2].Content.Role != ai.RoleModel {
+		t.Fatalf("msg[2]: expected final model message, got %q", msgs[2].Content.Role)
+	}
+	if msgs[2].Content.Text() != "HEARTBEAT_OK database is healthy" {
+		t.Errorf("msg[2]: expected final heartbeat text, got %q", msgs[2].Content.Text())
+	}
+	if len(sessData.State.Turns) != 2 {
+		t.Fatalf("expected 2 persisted heartbeat turns, got %d", len(sessData.State.Turns))
+	}
+	firstWindow, err := memory.MessagesForTurn(sessData.State, sessData.State.Turns[0])
+	if err != nil {
+		t.Fatalf("MessagesForTurn(first): %v", err)
+	}
+	if len(firstWindow) != 2 || firstWindow[0].Content.Role != ai.RoleModel || firstWindow[1].Content.Role != ai.RoleTool {
+		t.Fatalf("expected first heartbeat turn window [model, tool], got %+v", firstWindow)
+	}
+	secondWindow, err := memory.MessagesForTurn(sessData.State, sessData.State.Turns[1])
+	if err != nil {
+		t.Fatalf("MessagesForTurn(second): %v", err)
+	}
+	if len(secondWindow) != 1 || secondWindow[0].Content.Role != ai.RoleModel {
+		t.Fatalf("expected second heartbeat turn window [model], got %+v", secondWindow)
+	}
 }
