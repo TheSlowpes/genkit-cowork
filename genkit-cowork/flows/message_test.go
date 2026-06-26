@@ -755,8 +755,8 @@ func TestHandleMessage_EventBusIntegration(t *testing.T) {
 		AgentStart,
 		TurnStart, MessageStart, MessageEnd,
 		ToolExecutionStart, ToolExecutionEnd,
-		TurnEnd,
 		TurnStart, MessageStart, MessageEnd,
+		TurnEnd,
 		TurnEnd,
 		AgentEnd,
 	}

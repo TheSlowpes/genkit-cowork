@@ -18,7 +18,6 @@ package flows
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -26,6 +25,8 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/genkit"
 )
+
+const defaultCoworkMaxTurns = 50
 
 // AgentLoopConfig configures model/tool behavior for each loop run.
 type AgentLoopConfig struct {
@@ -171,9 +172,16 @@ func NewAgentLoop(
 
 func agentLoopHandler(ctx context.Context, input *AgentLoopInput, options *agentLoopOptions) (*AgentLoopOutput, error) {
 	config := input.Config
-	genOptions := make([]ai.GenerateOption, 0, len(options.baseOpts)+4)
+	recorder := newAgentLoopRecorder(input.SessionID, config, options.bus)
+	genOptions := make([]ai.GenerateOption, 0, len(options.baseOpts)+8)
 	genOptions = append(genOptions, options.baseOpts...)
-	genOptions = append(genOptions, ai.WithReturnToolRequests(true))
+	genOptions = append(genOptions, ai.WithUse(recorder.middleware()))
+	if config.MaxTurns > 0 {
+		genOptions = append(genOptions, ai.WithMaxTurns(config.MaxTurns))
+	} else if len(options.baseOpts) == 0 {
+		genOptions = append(genOptions, ai.WithMaxTurns(defaultCoworkMaxTurns))
+	}
+
 	var toolsRef []ai.ToolRef
 	for _, toolName := range config.Tools {
 		if tool, ok := options.operator.LookupTool(toolName); ok {
@@ -190,12 +198,15 @@ func agentLoopHandler(ctx context.Context, input *AgentLoopInput, options *agent
 		genOptions = append(genOptions, ai.WithSystemFn(config.SystemPrompt))
 	}
 
-	history := make([]*ai.Message, len(input.Messages))
-	copy(history, input.Messages)
-
-	turnNumber := 0
-	turnRecords := make([]AgentLoopTurn, 0)
-	lastModelFinishReason := ai.FinishReasonStop
+	messages := make([]*ai.Message, len(input.Messages))
+	copy(messages, input.Messages)
+	genOptions = append(genOptions, ai.WithMessages(messages...))
+	if len(input.ToolResponses) > 0 {
+		genOptions = append(genOptions, ai.WithToolResponses(input.ToolResponses...))
+	}
+	if len(input.ToolRestarts) > 0 {
+		genOptions = append(genOptions, ai.WithToolRestarts(input.ToolRestarts...))
+	}
 
 	emitIfBus(options.bus, ctx, AgentStart, AgentContext{
 		SessionID: input.SessionID,
@@ -204,325 +215,23 @@ func agentLoopHandler(ctx context.Context, input *AgentLoopInput, options *agent
 		Config:    input.Config,
 	})
 
-	var resumeOpts []ai.GenerateOption
-	if len(input.ToolResponses) > 0 {
-		resumeOpts = append(resumeOpts, ai.WithToolResponses(input.ToolResponses...))
-	}
-	if len(input.ToolRestarts) > 0 {
-		resumeOpts = append(resumeOpts, ai.WithToolRestarts(input.ToolRestarts...))
-	}
-
-	for {
-		turnNumber++
-		turnStartedAt := time.Now()
-		turnRecord := AgentLoopTurn{
-			TurnNumber: turnNumber,
-			StartedAt:  turnStartedAt,
-		}
-
-		if config.MaxTurns > 0 && turnNumber > config.MaxTurns {
-			return nil, fmt.Errorf("agent loop exceeded max turns (%d)", config.MaxTurns)
-		}
-
-		emitIfBus(options.bus, ctx, TurnStart, TurnContext{
-			SessionID:  input.SessionID,
-			TurnNumber: turnNumber,
-			Messages:   history,
-		})
-
-		callOpts := append(genOptions, ai.WithMessages(history...))
-		isResumeTurn := turnNumber == 1 && len(resumeOpts) > 0
-		if isResumeTurn {
-			callOpts = append(callOpts, resumeOpts...)
-		}
-		response, err := options.operator.Generate(ctx, callOpts...)
-		if err != nil {
-			emitIfBus(options.bus, ctx, AgentEnd, AgentContext{
-				SessionID: input.SessionID,
-				ModelName: input.Config.Model,
-				Tools:     input.Config.Tools,
-				Config:    input.Config,
-				Error:     err,
-			})
-			return nil, fmt.Errorf("generate response: %w", err)
-		}
-
-		if response.FinishReason != "" {
-			lastModelFinishReason = response.FinishReason
-		}
-
-		if response.Usage != nil {
-			turnRecord.InputTokens = response.Usage.InputTokens
-			turnRecord.OutputTokens = response.Usage.OutputTokens
-			turnRecord.TotalTokens = response.Usage.TotalTokens
-			if response.Message.Metadata == nil {
-				response.Message.Metadata = make(map[string]any)
-			}
-			response.Message.Metadata["generationUsage"] = map[string]any{
-				"inputTokens":  response.Usage.InputTokens,
-				"outputTokens": response.Usage.OutputTokens,
-				"totalTokens":  response.Usage.TotalTokens,
-			}
-		}
-
-		// After a resume turn, Genkit's handleResumeOption internally creates a
-		// tool response message and prepends it to the messages sent to the model.
-		// However, response.Request is not populated by Genkit's Generate in the
-		// ReturnToolRequests path, so we reconstruct the tool response message
-		// from the resume inputs and insert it into history ourselves.
-		if isResumeTurn {
-			var resumeParts []*ai.Part
-			resumeParts = append(resumeParts, input.ToolResponses...)
-			resumeParts = append(resumeParts, input.ToolRestarts...)
-			if len(resumeParts) > 0 {
-				toolMsg := &ai.Message{
-					Role:     ai.RoleTool,
-					Content:  resumeParts,
-					Metadata: map[string]any{"resumed": true},
-				}
-				history = append(history, toolMsg)
-				turnRecord.PersistedMessageCount++
-			}
-		}
-
-		emitIfBus(options.bus, ctx, MessageStart, MessageContext{
+	response, err := options.operator.Generate(ctx, genOptions...)
+	if err != nil {
+		emitIfBus(options.bus, ctx, AgentEnd, AgentContext{
 			SessionID: input.SessionID,
-			Role:      response.Message.Role,
-			Message:   response.Message,
+			ModelName: input.Config.Model,
+			Tools:     input.Config.Tools,
+			Config:    input.Config,
+			Error:     err,
 		})
-		emitIfBus(options.bus, ctx, MessageEnd, MessageContext{
-			SessionID: input.SessionID,
-			Role:      response.Message.Role,
-			Message:   response.Message,
-		})
-
-		history = append(history, response.Message)
-		turnRecord.ResponseRole = response.Message.Role
-		turnRecord.PersistedMessageCount++
-
-		toolRequests := response.ToolRequests()
-		turnRecord.ToolRequestCount = len(toolRequests)
-		if len(toolRequests) == 0 {
-			turnRecord.EndedAt = time.Now()
-			turnRecord.FinishReason = string(lastModelFinishReason)
-			turnRecords = append(turnRecords, turnRecord)
-			emitIfBus(options.bus, ctx, TurnEnd, TurnContext{
-				SessionID:  input.SessionID,
-				TurnNumber: turnNumber,
-				Messages:   history,
-				Response:   response.Message,
-			})
-			break
-		}
-
-		// Build a map from (name, ref) to index in response.Message.Content
-		// so we can annotate the correct parts on interrupt.
-		type toolExecResult struct {
-			output  any
-			content []*ai.Part
-		}
-		completedTools := make(map[int]toolExecResult) // key: index in response.Message.Content
-
-		var toolResponseParts []*ai.Part
-		var toolCallMessages []*ai.Message
-		interrupted := false
-		var execSummaries []ToolExecutionRecord
-
-		// Build an ordered list of (toolRequest, contentIndex) pairs so we can
-		// correlate tool requests back to their position in the model message.
-		type toolReqEntry struct {
-			request      *ai.ToolRequest
-			contentIndex int
-		}
-		var toolReqEntries []toolReqEntry
-		for i, part := range response.Message.Content {
-			if part.IsToolRequest() {
-				toolReqEntries = append(toolReqEntries, toolReqEntry{
-					request:      part.ToolRequest,
-					contentIndex: i,
-				})
-			}
-		}
-
-		for entryIdx, entry := range toolReqEntries {
-			toolReq := entry.request
-
-			startEvent, _ := emitIfBus(options.bus, ctx, ToolExecutionStart, ToolExecutionContext{
-				SessionID: input.SessionID,
-				ToolName:  toolReq.Name,
-				Input:     toolReq.Input,
-			})
-
-			toolInput := toolReq.Input
-			if startEvent != nil {
-				toolInput = startEvent.Data.Input
-			}
-
-			start := time.Now()
-			tool, ok := options.operator.LookupTool(toolReq.Name)
-			if !ok {
-				return nil, fmt.Errorf("tool not found: %s", toolReq.Name)
-			}
-			multipartOutput, toolErr := tool.RunRawMultipart(ctx, toolInput)
-			duration := time.Since(start)
-			execSummary := ToolExecutionRecord{
-				ToolName:  toolReq.Name,
-				ToolRef:   toolReq.Ref,
-				StartedAt: start,
-				EndedAt:   start.Add(duration),
-				Duration:  duration,
-			}
-
-			isInterrupt, interruptMeta := ai.IsToolInterruptError(toolErr)
-			if isInterrupt {
-				execSummary.Interrupted = true
-				if toolErr != nil {
-					execSummary.Error = toolErr.Error()
-				}
-				execSummaries = append(execSummaries, execSummary)
-				// Emit ToolExecutionUpdate with interrupt info
-				emitIfBus(options.bus, ctx, ToolExecutionUpdate, ToolExecutionContext{
-					SessionID:         input.SessionID,
-					ToolName:          toolReq.Name,
-					Input:             toolInput,
-					Duration:          duration,
-					Interrupted:       true,
-					InterruptMetadata: interruptMeta,
-				})
-
-				// Emit ToolExecutionEnd with the error
-				emitIfBus(options.bus, ctx, ToolExecutionEnd, ToolExecutionContext{
-					SessionID:   input.SessionID,
-					ToolName:    toolReq.Name,
-					Input:       toolInput,
-					Duration:    duration,
-					Error:       toolErr,
-					Interrupted: true,
-				})
-
-				// Build annotated model message with interrupt/pendingOutput metadata
-				annotatedMsg := cloneMessage(response.Message)
-
-				// Annotate completed tools with pendingOutput
-				for completedIdx, result := range completedTools {
-					setPartMetadata(annotatedMsg.Content[completedIdx], "pendingOutput", result.output)
-				}
-
-				// Annotate the interrupted tool
-				if interruptMeta != nil {
-					setPartMetadata(annotatedMsg.Content[entry.contentIndex], "interrupt", interruptMeta)
-				} else {
-					setPartMetadata(annotatedMsg.Content[entry.contentIndex], "interrupt", true)
-				}
-
-				// Annotate remaining unexecuted tools
-				for _, remaining := range toolReqEntries[entryIdx+1:] {
-					setPartMetadata(annotatedMsg.Content[remaining.contentIndex], "interrupt", true)
-				}
-
-				// Replace the model message in history with the annotated version
-				history[len(history)-1] = annotatedMsg
-
-				// Collect interrupted parts
-				var interruptParts []*ai.Part
-				for _, part := range annotatedMsg.Content {
-					if part.IsInterrupt() {
-						interruptParts = append(interruptParts, part)
-					}
-				}
-
-				// Emit TurnEnd and AgentEnd
-				emitIfBus(options.bus, ctx, TurnEnd, TurnContext{
-					SessionID:  input.SessionID,
-					TurnNumber: turnNumber,
-					Messages:   history,
-					Response:   annotatedMsg,
-				})
-
-				emitIfBus(options.bus, ctx, AgentEnd, AgentContext{
-					SessionID: input.SessionID,
-					ModelName: input.Config.Model,
-					Tools:     input.Config.Tools,
-					Config:    input.Config,
-				})
-
-				turnRecord.Interrupted = true
-				turnRecord.ToolExecutionSummaries = execSummaries
-				turnRecord.EndedAt = time.Now()
-				turnRecord.FinishReason = string(ai.FinishReasonInterrupted)
-				turnRecords = append(turnRecords, turnRecord)
-
-				return &AgentLoopOutput{
-					SessionID:    input.SessionID,
-					Response:     annotatedMsg,
-					History:      history,
-					Turns:        turnNumber,
-					TurnRecords:  turnRecords,
-					FinishReason: ai.FinishReasonInterrupted,
-					Interrupts:   interruptParts,
-				}, nil
-			}
-
-			if toolErr != nil {
-				execSummary.Error = toolErr.Error()
-			}
-			execSummaries = append(execSummaries, execSummary)
-
-			var toolOutput any
-			var toolContent []*ai.Part
-			if multipartOutput != nil {
-				toolOutput = multipartOutput.Output
-				toolContent = multipartOutput.Content
-			}
-
-			// Track completed tool for potential pendingOutput annotation
-			completedTools[entry.contentIndex] = toolExecResult{
-				output:  toolOutput,
-				content: toolContent,
-			}
-
-			emitIfBus(options.bus, ctx, ToolExecutionEnd, ToolExecutionContext{
-				SessionID: input.SessionID,
-				ToolName:  toolReq.Name,
-				Input:     toolInput,
-				Output:    toolOutput,
-				Duration:  duration,
-				Error:     toolErr,
-			})
-
-			toolResponseParts = append(toolResponseParts, ai.NewToolResponsePart(&ai.ToolResponse{
-				Name:    toolReq.Name,
-				Ref:     toolReq.Ref,
-				Content: toolContent,
-				Output:  toolOutput,
-			}))
-		}
-
-		if interrupted {
-			continue
-		}
-
-		toolMsg := &ai.Message{
-			Role:    ai.RoleTool,
-			Content: toolResponseParts,
-		}
-		history = append(history, toolMsg)
-		turnRecord.PersistedMessageCount++
-		turnRecord.ToolResponsePartCount = len(toolResponseParts)
-		turnRecord.ToolExecutionSummaries = execSummaries
-		turnRecord.EndedAt = time.Now()
-		turnRecord.FinishReason = "continue"
-		turnRecords = append(turnRecords, turnRecord)
-		toolCallMessages = append(toolCallMessages, toolMsg)
-
-		emitIfBus(options.bus, ctx, TurnEnd, TurnContext{
-			SessionID:  input.SessionID,
-			TurnNumber: turnNumber,
-			Messages:   history,
-			Response:   response.Message,
-			ToolCalls:  toolCallMessages,
-		})
+		return nil, fmt.Errorf("generate response: %w", err)
 	}
+	if response.Request == nil {
+		response.Request = &ai.ModelRequest{Messages: messages}
+	}
+	annotateGenerationUsage(response)
+	history := response.History()
+	turnRecords := buildAgentLoopTurnRecords(history, len(messages), response, recorder)
 
 	emitIfBus(options.bus, ctx, AgentEnd, AgentContext{
 		SessionID: input.SessionID,
@@ -533,36 +242,140 @@ func agentLoopHandler(ctx context.Context, input *AgentLoopInput, options *agent
 
 	return &AgentLoopOutput{
 		SessionID:    input.SessionID,
-		Response:     history[len(history)-1],
+		Response:     response.Message,
 		History:      history,
-		Turns:        turnNumber,
+		Turns:        len(turnRecords),
 		TurnRecords:  turnRecords,
-		FinishReason: lastModelFinishReason,
+		FinishReason: response.FinishReason,
+		Interrupts:   response.Interrupts(),
 	}, nil
 }
 
 // --- Helpers ---
 
-func cloneMessage(msg *ai.Message) *ai.Message {
-	if msg == nil {
-		return nil
+func annotateGenerationUsage(response *ai.ModelResponse) {
+	if response == nil || response.Message == nil || response.Usage == nil {
+		return
 	}
-	data, err := json.Marshal(msg)
-	if err != nil {
-		panic(fmt.Sprintf("cloneMessage: marshal failed: %v", err))
+	if response.Message.Metadata == nil {
+		response.Message.Metadata = make(map[string]any)
 	}
-	var cloned ai.Message
-	if err := json.Unmarshal(data, &cloned); err != nil {
-		panic(fmt.Sprintf("cloneMessage: unmarshal failed: %v", err))
+	response.Message.Metadata["generationUsage"] = map[string]any{
+		"inputTokens":  response.Usage.InputTokens,
+		"outputTokens": response.Usage.OutputTokens,
+		"totalTokens":  response.Usage.TotalTokens,
 	}
-	return &cloned
 }
 
-func setPartMetadata(part *ai.Part, key string, value any) {
-	if part.Metadata == nil {
-		part.Metadata = make(map[string]any)
+func buildAgentLoopTurnRecords(history []*ai.Message, priorHistoryLen int, response *ai.ModelResponse, recorder *agentLoopRecorder) []AgentLoopTurn {
+	modelRecords := recorder.snapshotModelRecords()
+	toolRecords := recorder.snapshotToolRecords()
+	records := make([]AgentLoopTurn, 0)
+	modelIndex := 0
+	toolIndex := 0
+	resumedMessageCount := 0
+	for i := priorHistoryLen; i < len(history); i++ {
+		msg := history[i]
+		if msg == nil {
+			continue
+		}
+		if msg.Role == ai.RoleTool && isResumedToolMessage(msg) {
+			resumedMessageCount++
+			continue
+		}
+		if msg.Role != ai.RoleModel {
+			continue
+		}
+
+		turn := AgentLoopTurn{
+			TurnNumber:            len(records) + 1,
+			StartedAt:             time.Now(),
+			EndedAt:               time.Now(),
+			ResponseRole:          msg.Role,
+			PersistedMessageCount: 1 + resumedMessageCount,
+			ToolRequestCount:      countToolRequests(msg),
+			Interrupted:           countInterrupts(msg) > 0,
+		}
+		resumedMessageCount = 0
+		if modelIndex < len(modelRecords) {
+			modelRecord := modelRecords[modelIndex]
+			turn.StartedAt = modelRecord.StartedAt
+			turn.EndedAt = modelRecord.EndedAt
+			turn.InputTokens = modelRecord.InputTokens
+			turn.OutputTokens = modelRecord.OutputTokens
+			turn.TotalTokens = modelRecord.TotalTokens
+		}
+		modelIndex++
+
+		if i+1 < len(history) && history[i+1] != nil && history[i+1].Role == ai.RoleTool {
+			toolMsg := history[i+1]
+			turn.PersistedMessageCount++
+			turn.ToolResponsePartCount = len(toolMsg.Content)
+			toolCount := turn.ToolRequestCount
+			toolCount = min(toolCount, len(toolRecords)-toolIndex)
+			if toolCount > 0 {
+				turn.ToolExecutionSummaries = append(turn.ToolExecutionSummaries, toolRecords[toolIndex:toolIndex+toolCount]...)
+				turn.EndedAt = maxToolEnd(turn.EndedAt, turn.ToolExecutionSummaries)
+				toolIndex += toolCount
+			}
+			i++
+		}
+		if turn.Interrupted && toolIndex < len(toolRecords) {
+			turn.ToolExecutionSummaries = append(turn.ToolExecutionSummaries, toolRecords[toolIndex:]...)
+			turn.EndedAt = maxToolEnd(turn.EndedAt, turn.ToolExecutionSummaries)
+			toolIndex = len(toolRecords)
+		}
+
+		if turn.Interrupted {
+			turn.FinishReason = string(ai.FinishReasonInterrupted)
+		} else if i >= len(history)-1 {
+			turn.FinishReason = string(response.FinishReason)
+			if turn.FinishReason == "" {
+				turn.FinishReason = string(ai.FinishReasonStop)
+			}
+		} else {
+			turn.FinishReason = "continue"
+		}
+		records = append(records, turn)
 	}
-	part.Metadata[key] = value
+	return records
+}
+
+func isResumedToolMessage(msg *ai.Message) bool {
+	if msg.Metadata == nil {
+		return false
+	}
+	_, ok := msg.Metadata["resumed"]
+	return ok
+}
+
+func countToolRequests(msg *ai.Message) int {
+	count := 0
+	for _, part := range msg.Content {
+		if part.IsToolRequest() {
+			count++
+		}
+	}
+	return count
+}
+
+func countInterrupts(msg *ai.Message) int {
+	count := 0
+	for _, part := range msg.Content {
+		if part.IsInterrupt() {
+			count++
+		}
+	}
+	return count
+}
+
+func maxToolEnd(end time.Time, records []ToolExecutionRecord) time.Time {
+	for _, record := range records {
+		if record.EndedAt.After(end) {
+			end = record.EndedAt
+		}
+	}
+	return end
 }
 
 func emitIfBus[T any](bus *EventBus, ctx context.Context, eventType EventType, data T) (*Event[T], error) {

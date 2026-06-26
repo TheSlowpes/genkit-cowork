@@ -1437,7 +1437,7 @@ func TestHeartbeatRun_WithToolExecution(t *testing.T) {
 		if call == 1 {
 			return toolCallResponse(ai.ToolRequest{
 				Name:  "check-status",
-				Input: map[string]any{"service": "db"},
+				Input: map[string]any{"value": "db"},
 				Ref:   "ref-1",
 			}), nil
 		}

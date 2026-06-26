@@ -314,7 +314,7 @@ func TestAgentLoop_MaxTurnsSafetyLimit(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for max turns exceeded, got nil")
 	}
-	if !strings.Contains(err.Error(), "agent loop exceeded max turns (3)") {
+	if !strings.Contains(err.Error(), "exceeded maximum tool call iterations (3)") {
 		t.Errorf("expected max turns error, got %q", err.Error())
 	}
 }
@@ -405,8 +405,8 @@ func TestAgentLoop_EventEmissionOrder(t *testing.T) {
 		AgentStart,
 		TurnStart, MessageStart, MessageEnd,
 		ToolExecutionStart, ToolExecutionEnd,
-		TurnEnd,
 		TurnStart, MessageStart, MessageEnd,
+		TurnEnd,
 		TurnEnd,
 		AgentEnd,
 	}
@@ -501,6 +501,81 @@ func TestAgentLoop_HookMutatesToolInput(t *testing.T) {
 	}
 }
 
+func TestAgentLoopRecorderMiddleware_MutatesToolInput(t *testing.T) {
+	ctx := context.Background()
+	g := newGenkitInstance(ctx)
+
+	var modelCalls atomic.Int32
+	mockDefineModel(g, "recorder-mutate", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		call := modelCalls.Add(1)
+		if call == 1 {
+			return &ai.ModelResponse{
+				Request: req,
+				Message: &ai.Message{
+					Role: ai.RoleModel,
+					Content: []*ai.Part{ai.NewToolRequestPart(&ai.ToolRequest{
+						Name:  "bash",
+						Input: map[string]any{"command": "rm -rf /"},
+						Ref:   "ref-1",
+					})},
+				},
+			}, nil
+		}
+		return &ai.ModelResponse{
+			Request:      req,
+			FinishReason: ai.FinishReasonStop,
+			Message:      ai.NewModelTextMessage("done"),
+		}, nil
+	})
+
+	var receivedInput any
+	tool := mockDefineTool(g, "bash", "bash tool",
+		func(tc *ai.ToolContext, input any) (*ai.MultipartToolResponse, error) {
+			receivedInput = input
+			return &ai.MultipartToolResponse{Output: "executed"}, nil
+		},
+	)
+
+	bus := NewEventBus()
+	Subscribe(bus, ToolExecutionStart, EventHandler[ToolExecutionContext](func(ctx context.Context, e *Event[ToolExecutionContext]) error {
+		e.Data.Input = map[string]any{"command": "echo sanitized"}
+		return nil
+	}))
+
+	recorder := newAgentLoopRecorder("sess-recorder-mutate", AgentLoopConfig{Model: "test/recorder-mutate", Tools: []string{"bash"}}, bus)
+	resp, err := genkit.Generate(ctx, g,
+		ai.WithModelName("test/recorder-mutate"),
+		ai.WithMessages(ai.NewUserTextMessage("do something dangerous")),
+		ai.WithTools(tool),
+		ai.WithUse(recorder.middleware()),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Text() != "done" {
+		t.Errorf("expected final model response, got %q", resp.Text())
+	}
+
+	inputMap, ok := receivedInput.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map input, got %T", receivedInput)
+	}
+	if inputMap["command"] != "echo sanitized" {
+		t.Errorf("expected sanitized command, got %q", inputMap["command"])
+	}
+
+	toolRecords := recorder.snapshotToolRecords()
+	if len(toolRecords) != 1 {
+		t.Fatalf("expected 1 tool record, got %d", len(toolRecords))
+	}
+	if toolRecords[0].ToolName != "bash" {
+		t.Errorf("expected tool name bash, got %q", toolRecords[0].ToolName)
+	}
+	if toolRecords[0].ToolRef != "ref-1" {
+		t.Errorf("expected tool ref ref-1, got %q", toolRecords[0].ToolRef)
+	}
+}
+
 func TestAgentLoop_ToolNotFound(t *testing.T) {
 	ctx := context.Background()
 	g := newGenkitInstance(ctx)
@@ -525,7 +600,7 @@ func TestAgentLoop_ToolNotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for missing tool, got nil")
 	}
-	if !strings.Contains(err.Error(), "tool not found: nonexistent") {
+	if !strings.Contains(err.Error(), `tool "nonexistent" not found`) {
 		t.Errorf("expected error containing 'tool not found: nonexistent', got %q", err.Error())
 	}
 }
@@ -769,8 +844,8 @@ func TestAgentLoop_TurnContextPopulatedCorrectly(t *testing.T) {
 	if turnEnds[0].Response == nil {
 		t.Error("turn-end[0]: expected response to be set")
 	}
-	if len(turnEnds[0].ToolCalls) != 1 {
-		t.Errorf("turn-end[0]: expected 1 tool call message, got %d", len(turnEnds[0].ToolCalls))
+	if len(turnEnds[0].ToolCalls) != 0 {
+		t.Errorf("turn-end[0]: expected automatic loop to omit manual tool call messages, got %d", len(turnEnds[0].ToolCalls))
 	}
 
 	if turnStarts[1].TurnNumber != 2 {
@@ -954,8 +1029,7 @@ func TestAgentLoop_ToolInterrupt_BatchPartialComplete(t *testing.T) {
 	)
 	mockDefineTool(g, "bash", "bash tool",
 		func(tc *ai.ToolContext, input GenericInput) (*ai.MultipartToolResponse, error) {
-			t.Fatal("bash should not be called — it comes after the interrupt")
-			return nil, nil
+			return &ai.MultipartToolResponse{Output: "bash completed"}, nil
 		},
 	)
 
@@ -977,9 +1051,8 @@ func TestAgentLoop_ToolInterrupt_BatchPartialComplete(t *testing.T) {
 	if output.FinishReason != ai.FinishReasonInterrupted {
 		t.Errorf("expected FinishReason 'interrupted', got %q", output.FinishReason)
 	}
-	// 2 interrupt parts: confirm + bash (skipped)
-	if len(output.Interrupts) != 2 {
-		t.Fatalf("expected 2 interrupt parts, got %d", len(output.Interrupts))
+	if len(output.Interrupts) != 1 {
+		t.Fatalf("expected 1 interrupt part, got %d", len(output.Interrupts))
 	}
 
 	annotated := output.Response
@@ -1000,10 +1073,10 @@ func TestAgentLoop_ToolInterrupt_BatchPartialComplete(t *testing.T) {
 	if interruptMeta["step"] != "confirm_delete" {
 		t.Errorf("expected interrupt step 'confirm_delete', got %v", interruptMeta["step"])
 	}
-	// Part 2 = bash (skipped) — should have interrupt=true
+	// Part 2 = bash (completed concurrently) — should have pendingOutput.
 	bashPart := annotated.Content[2]
-	if bashPart.Metadata == nil || bashPart.Metadata["interrupt"] == nil {
-		t.Error("expected interrupt metadata on skipped bash part")
+	if bashPart.Metadata == nil || bashPart.Metadata["pendingOutput"] == nil {
+		t.Error("expected pendingOutput on completed bash tool request part")
 	}
 }
 
@@ -1096,6 +1169,112 @@ func TestAgentLoop_ToolInterrupt_EventEmission(t *testing.T) {
 	}
 	if updateCtx.InterruptMetadata["reason"] != "needs_approval" {
 		t.Errorf("expected interrupt reason 'needs_approval', got %v", updateCtx.InterruptMetadata["reason"])
+	}
+}
+
+func TestAgentLoopRecorderMiddleware_ToolInterruptEventEmission(t *testing.T) {
+	ctx := context.Background()
+	g := newGenkitInstance(ctx)
+
+	mockDefineModel(g, "recorder-interrupt", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{
+			Request: req,
+			Message: &ai.Message{
+				Role: ai.RoleModel,
+				Content: []*ai.Part{ai.NewToolRequestPart(&ai.ToolRequest{
+					Name:  "confirm",
+					Input: map[string]any{"action": "deploy"},
+					Ref:   "confirm-1",
+				})},
+			},
+		}, nil
+	})
+
+	tool := mockDefineTool(g, "confirm", "confirm action",
+		func(tc *ai.ToolContext, input ConfirmInput) (*ai.MultipartToolResponse, error) {
+			return nil, tc.Interrupt(&ai.InterruptOptions{
+				Metadata: map[string]any{"reason": "needs_approval"},
+			})
+		},
+	)
+
+	bus := NewEventBus()
+	var events []EventType
+	var updateCtx ToolExecutionContext
+	var endCtx ToolExecutionContext
+	var mu sync.Mutex
+	record := func(eventType EventType) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, eventType)
+	}
+
+	Subscribe(bus, ToolExecutionStart, EventHandler[ToolExecutionContext](func(ctx context.Context, e *Event[ToolExecutionContext]) error {
+		record(ToolExecutionStart)
+		return nil
+	}))
+	Subscribe(bus, ToolExecutionUpdate, EventHandler[ToolExecutionContext](func(ctx context.Context, e *Event[ToolExecutionContext]) error {
+		record(ToolExecutionUpdate)
+		updateCtx = e.Data
+		return nil
+	}))
+	Subscribe(bus, ToolExecutionEnd, EventHandler[ToolExecutionContext](func(ctx context.Context, e *Event[ToolExecutionContext]) error {
+		record(ToolExecutionEnd)
+		endCtx = e.Data
+		return nil
+	}))
+
+	recorder := newAgentLoopRecorder("sess-recorder-interrupt", AgentLoopConfig{Model: "test/recorder-interrupt", Tools: []string{"confirm"}}, bus)
+	resp, err := genkit.Generate(ctx, g,
+		ai.WithModelName("test/recorder-interrupt"),
+		ai.WithMessages(ai.NewUserTextMessage("deploy")),
+		ai.WithTools(tool),
+		ai.WithUse(recorder.middleware()),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.FinishReason != ai.FinishReasonInterrupted {
+		t.Fatalf("expected interrupted finish reason, got %q", resp.FinishReason)
+	}
+	if len(resp.Interrupts()) != 1 {
+		t.Fatalf("expected 1 interrupt, got %d", len(resp.Interrupts()))
+	}
+
+	wantEvents := []EventType{ToolExecutionStart, ToolExecutionUpdate, ToolExecutionEnd}
+	if len(events) != len(wantEvents) {
+		t.Fatalf("events = %v, want %v", events, wantEvents)
+	}
+	for i := range wantEvents {
+		if events[i] != wantEvents[i] {
+			t.Errorf("events[%d] = %q, want %q", i, events[i], wantEvents[i])
+		}
+	}
+	if !updateCtx.Interrupted {
+		t.Error("expected update event to be marked interrupted")
+	}
+	if updateCtx.InterruptMetadata["reason"] != "needs_approval" {
+		t.Errorf("expected update reason needs_approval, got %v", updateCtx.InterruptMetadata["reason"])
+	}
+	if !endCtx.Interrupted {
+		t.Error("expected end event to be marked interrupted")
+	}
+	if endCtx.Error == nil {
+		t.Fatal("expected end event error")
+	}
+	if endCtx.ToolName != "confirm" {
+		t.Errorf("expected end tool name confirm, got %q", endCtx.ToolName)
+	}
+
+	toolRecords := recorder.snapshotToolRecords()
+	if len(toolRecords) != 1 {
+		t.Fatalf("expected 1 tool record, got %d", len(toolRecords))
+	}
+	if !toolRecords[0].Interrupted {
+		t.Error("expected tool record to be interrupted")
+	}
+	if toolRecords[0].Error == "" {
+		t.Error("expected tool record error")
 	}
 }
 
