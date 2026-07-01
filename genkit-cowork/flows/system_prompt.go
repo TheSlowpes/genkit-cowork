@@ -28,7 +28,7 @@ import (
 
 // defaultTools is the canonical ordered tool set used when SelectedTools is
 // not specified.
-var defaultTools = []string{"bash", "read", "edit", "write"}
+var defaultTools = []string{"bash", "find", "read", "edit", "write"}
 
 // ContextFile is a named file whose contents are embedded in the system prompt
 // as project-specific context.
@@ -47,7 +47,7 @@ type SystemPromptOptions struct {
 	CustomPrompt string
 
 	// SelectedTools is the ordered list of tool names active for the agent.
-	// Defaults to ["bash", "read", "edit", "write"] when nil or empty.
+	// Defaults to ["bash", "find", "read", "edit", "write"] when nil or empty.
 	// Used only to derive tool-specific usage guidelines; Genkit sends the
 	// actual tool definitions to the model separately.
 	SelectedTools []string
@@ -92,7 +92,7 @@ func BuildSystemPrompt(opts SystemPromptOptions) ai.PromptFn {
 }
 
 // DefaultSystemPrompt returns an ai.PromptFn that generates a system prompt
-// using the default tool set (bash, read, edit, write), the process working
+// using the default tool set (bash, find, read, edit, write), the process working
 // directory, and today's date. It is a convenience wrapper around
 // BuildSystemPrompt with zero configuration.
 func DefaultSystemPrompt() ai.PromptFn {
@@ -123,6 +123,7 @@ func buildPromptString(opts SystemPromptOptions) string {
 	}
 
 	hasBash := toolSet["bash"]
+	hasFind := toolSet["find"]
 	hasRead := toolSet["read"]
 	hasEdit := toolSet["edit"]
 	hasWrite := toolSet["write"]
@@ -137,7 +138,7 @@ func buildPromptString(opts SystemPromptOptions) string {
 	if opts.CustomPrompt != "" {
 		prompt = opts.CustomPrompt
 	} else {
-		guidelinesText := buildGuidelinesText(hasBash, hasRead, hasEdit, hasWrite, opts.Guidelines)
+		guidelinesText := buildGuidelinesText(hasBash, hasFind, hasRead, hasEdit, hasWrite, opts.Guidelines)
 
 		prompt = fmt.Sprintf(
 			"You are a capable assistant that helps users get work done. "+
@@ -168,7 +169,7 @@ func buildPromptString(opts SystemPromptOptions) string {
 
 // buildGuidelinesText returns the formatted bullet list of guidelines derived
 // from the active tool set, extended by any caller-supplied extras.
-func buildGuidelinesText(hasBash, hasRead, hasEdit, hasWrite bool, extra []string) string {
+func buildGuidelinesText(hasBash, hasFind, hasRead, hasEdit, hasWrite bool, extra []string) string {
 	seen := make(map[string]bool)
 	var list []string
 	add := func(g string) {
@@ -180,7 +181,10 @@ func buildGuidelinesText(hasBash, hasRead, hasEdit, hasWrite bool, extra []strin
 	}
 
 	if hasBash {
-		add("Use bash for file operations like ls, find, grep")
+		add("Use bash for command execution and shell pipelines")
+	}
+	if hasFind {
+		add("Use find for file discovery by glob pattern")
 	}
 	if hasRead && hasEdit {
 		add("Use read to examine files before editing")

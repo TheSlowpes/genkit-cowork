@@ -27,6 +27,7 @@
 // Usage:
 //
 //	GEMINI_API_KEY=<your-key> go run ./examples/tui-chat
+//	READ_ONLY=1 GEMINI_API_KEY=<your-key> go run ./examples/tui-chat
 package main
 
 import (
@@ -86,6 +87,7 @@ func (h *tuiChannelHandler) Acknowledge(_ context.Context, _ *flows.AcknowledgeI
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	readOnly := readOnlyMode()
 
 	// 1. Initialize Genkit with the Google AI plugin.
 	g := genkit.Init(ctx,
@@ -115,23 +117,32 @@ func main() {
 	if err != nil {
 		cwd = workDir
 	}
-	tools.NewBashTool(g, cwd)
+	tools.NewFindTool(g, cwd)
 	tools.NewReadTool(g, cwd)
-	tools.NewEditTool(g, cwd)
-	tools.NewWriteTool(g, cwd)
-	tools.NewSearchSessionMemoryTool(g, vectorOperator)
-	tools.NewSearchTenantMemoryTool(g, vectorOperator)
+	agentTools := []string{"find", "read"}
+	agentPrompt := "You are a helpful assistant running in a terminal. " +
+		"You have access to find and read tools only. " +
+		"Do not modify files or run commands. Be concise."
+	if !readOnly {
+		tools.NewBashTool(g, cwd)
+		tools.NewEditTool(g, cwd)
+		tools.NewWriteTool(g, cwd)
+		tools.NewSearchSessionMemoryTool(g, vectorOperator)
+		tools.NewSearchTenantMemoryTool(g, vectorOperator)
+		agentTools = []string{"bash", "find", "read", "edit", "write", "search-session-memory", "search-tenant-memory"}
+		agentPrompt = "You are a helpful assistant running in a terminal. " +
+			"You have access to bash, find, read, edit, write, and memory search tools. " +
+			"Be concise."
+	}
 
 	// 4. Build the agent config shared between the message and heartbeat flows.
 	// MaxTurns is forwarded to Genkit's automatic tool loop as a safety bound.
 	agentCfg := flows.AgentLoopConfig{
 		Model:    model,
-		Tools:    []string{"bash", "read", "edit", "write", "search-session-memory", "search-tenant-memory"},
+		Tools:    agentTools,
 		MaxTurns: maxTurns,
 		SystemPrompt: flows.BuildSystemPrompt(flows.SystemPromptOptions{
-			CustomPrompt: "You are a helpful assistant running in a terminal. " +
-				"You have access to bash, read, edit, write, and memory search tools. " +
-				"Be concise.",
+			CustomPrompt: agentPrompt,
 		}),
 	}
 
@@ -188,6 +199,10 @@ func main() {
 	// 8. Run the TUI read-eval-print loop.
 	fmt.Println("=== genkit-cowork TUI Chat ===")
 	fmt.Printf("Model: %s  |  Type your message and press Enter. Ctrl-C to quit.\n\n", model)
+	if readOnly {
+		fmt.Println("READ_ONLY enabled: only find and read tools are available.")
+		fmt.Println()
+	}
 
 	type inputEvent struct {
 		line string
@@ -250,5 +265,18 @@ func main() {
 				ChatID: sessionID,
 			},
 		})
+	}
+}
+
+func readOnlyMode() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("READ_ONLY")))
+	if value == "" {
+		return false
+	}
+	switch value {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
 	}
 }

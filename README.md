@@ -41,6 +41,7 @@ import "github.com/TheSlowpes/genkit-cowork/genkit-cowork/tools"
 bashTool := tools.NewBashTool(g, "/working/dir",
     tools.WithCommandPrefix("#!/bin/bash\nset -e\n"),
 )
+findTool  := tools.NewFindTool(g, "/working/dir")
 readTool  := tools.NewReadTool(g, "/working/dir")
 editTool  := tools.NewEditTool(g, "/working/dir")
 writeTool := tools.NewWriteTool(g, "/working/dir")
@@ -54,7 +55,7 @@ writeTool := tools.NewWriteTool(g, "/working/dir")
 messageFlow := flows.NewHandleMessageFlow(g, store,
     flows.WithCustomAgentConfig(flows.AgentLoopConfig{
         Model:    "googleai/gemini-2.0-flash",
-        Tools:    []string{"bash", "read", "edit", "write"},
+        Tools:    []string{"bash", "find", "read", "edit", "write"},
         MaxTurns: 25,
     }),
 )
@@ -226,10 +227,10 @@ The framework is built around four pillars:
 │   │   Flows   │  │   Tools   │                   │
 │   │           │  │           │                   │
 │   │  agent    │  │  bash     │                   │
-│   │  loop     │  │  read     │                   │
-│   │  message  │  │  edit     │                   │
-│   │  heartbeat│  │  write    │                   │
-│   │  reply    │  │           │                   │
+│   │  loop     │  │  find     │                   │
+│   │  message  │  │  read     │                   │
+│   │  heartbeat│  │  edit     │                   │
+│   │  reply    │  │  write    │                   │
 │   └───────────┘  └───────────┘                   │
 │                                                  │
 │   ┌───────────┐  ┌───────────┐                   │
@@ -248,7 +249,7 @@ The framework is built around four pillars:
 
 Each pillar can be adopted independently. Use the full framework or pick individual pieces:
 
-- **Tools only** — register `NewBashTool`, `NewReadTool`, `NewEditTool`, `NewWriteTool` with any Genkit instance.
+- **Tools only** — register `NewBashTool`, `NewFindTool`, `NewReadTool`, `NewEditTool`, `NewWriteTool` with any Genkit instance.
 - **Flows only** — use the agent loop, message handling, heartbeat, or reply flows.
 - **Memory only** — use `NewSession` with in-memory, file-backed, or vector-augmented operators.
 - **Skills only** — register the `Skills` plugin to discover and serve domain knowledge.
@@ -268,6 +269,7 @@ Each pillar can be adopted independently. Use the full framework or pick individ
 | Tool | Constructor | Description |
 |------|------------|-------------|
 | Bash | `NewBashTool(g, cwd, ...opts)` | Shell command execution with timeout, env, spawn hooks |
+| Find | `NewFindTool(g, cwd, ...opts)` | Glob-based file discovery with `**`, `.gitignore`, and truncation |
 | Read | `NewReadTool(g, cwd, ...opts)` | File/image reading with pagination, truncation, auto-resize |
 | Edit | `NewEditTool(g, cwd, ...opts)` | Find-and-replace with exact/fuzzy matching, unified diff |
 | Write | `NewWriteTool(g, cwd, ...opts)` | File creation with auto-mkdir, operator interface |
@@ -352,6 +354,7 @@ Each `SessionMessage` stores `MessageID`, `Origin`, `Kind`, `Content`, and `Time
 ### Examples
 
 - `examples/pgvector/main.go` shows pgvector wiring for session memory only by wrapping the Genkit PostgreSQL plugin as a `memory.VectorBackend` and plugging it into `memory.NewVectorOperator`.
+- `examples/tui-chat/main.go` wires tools, flows, memory, and reply delivery into a terminal chat. Set `READ_ONLY=1` to restrict the agent to only the `find` and `read` tools.
 
 ## Skills
 
