@@ -86,7 +86,8 @@ func WithEventBus(bus *EventBus) AgentLoopOption {
 	}
 }
 
-// WithCustomGenerateOptions sets base generate options applied on every turn.
+// WithCustomGenerateOptions sets base generate options for the underlying
+// Genkit Generate call.
 func WithCustomGenerateOptions(opts ...ai.GenerateOption) AgentLoopOption {
 	return func(loopOpts *agentLoopOptions) {
 		loopOpts.baseOpts = opts

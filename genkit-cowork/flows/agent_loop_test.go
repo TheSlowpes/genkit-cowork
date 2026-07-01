@@ -856,12 +856,12 @@ func TestAgentLoop_TurnContextPopulatedCorrectly(t *testing.T) {
 	}
 }
 
-func TestAgentLoop_MaxTurnsZeroMeansUnlimited(t *testing.T) {
+func TestAgentLoop_MaxTurnsZeroUsesCoworkDefault(t *testing.T) {
 	ctx := context.Background()
 	g := newGenkitInstance(ctx)
 
 	var modelCalls atomic.Int32
-	mockDefineModel(g, "unlimited", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	mockDefineModel(g, "default-max-turns", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		call := modelCalls.Add(1)
 		if call <= 5 {
 			return toolCallResponse(ai.ToolRequest{Name: "step", Input: map[string]any{}, Ref: fmt.Sprintf("r%d", call)}), nil
@@ -882,9 +882,9 @@ func TestAgentLoop_MaxTurnsZeroMeansUnlimited(t *testing.T) {
 			SessionID: "sess-14",
 			Messages:  []*ai.Message{ai.NewUserTextMessage("go")},
 			Config: AgentLoopConfig{
-				Model:    "test/unlimited",
+				Model:    "test/default-max-turns",
 				Tools:    []string{"step"},
-				MaxTurns: 0, // unlimited
+				MaxTurns: 0,
 			},
 		},
 	)
