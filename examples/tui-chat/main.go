@@ -34,6 +34,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
 	"time"
 
@@ -83,7 +84,8 @@ func (h *tuiChannelHandler) Acknowledge(_ context.Context, _ *flows.AcknowledgeI
 }
 
 func main() {
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 
 	// 1. Initialize Genkit with the Google AI plugin.
 	g := genkit.Init(ctx,
@@ -187,13 +189,40 @@ func main() {
 	fmt.Println("=== genkit-cowork TUI Chat ===")
 	fmt.Printf("Model: %s  |  Type your message and press Enter. Ctrl-C to quit.\n\n", model)
 
+	type inputEvent struct {
+		line string
+		err  error
+	}
+	inputCh := make(chan inputEvent)
 	scanner := bufio.NewScanner(os.Stdin)
+	go func() {
+		defer close(inputCh)
+		for scanner.Scan() {
+			inputCh <- inputEvent{line: scanner.Text()}
+		}
+		if err := scanner.Err(); err != nil {
+			inputCh <- inputEvent{err: err}
+		}
+	}()
+
 	for {
 		fmt.Print("You: ")
-		if !scanner.Scan() {
+		var event inputEvent
+		var ok bool
+		select {
+		case <-ctx.Done():
+			fmt.Println()
+			return
+		case event, ok = <-inputCh:
+			if !ok {
+				return
+			}
+		}
+		if event.err != nil {
+			fmt.Fprintf(os.Stderr, "read input: %v\n", event.err)
 			break
 		}
-		line := strings.TrimSpace(scanner.Text())
+		line := strings.TrimSpace(event.line)
 		if line == "" {
 			continue
 		}
