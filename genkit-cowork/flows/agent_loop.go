@@ -231,7 +231,7 @@ func agentLoopHandler(ctx context.Context, input *AgentLoopInput, options *agent
 		response.Request = &ai.ModelRequest{Messages: messages}
 	}
 	annotateGenerationUsage(response)
-	history := response.History()
+	history := conversationHistory(response.History())
 	turnRecords := buildAgentLoopTurnRecords(history, len(messages), response, recorder)
 
 	emitIfBus(options.bus, ctx, AgentEnd, AgentContext{
@@ -266,6 +266,20 @@ func annotateGenerationUsage(response *ai.ModelResponse) {
 		"outputTokens": response.Usage.OutputTokens,
 		"totalTokens":  response.Usage.TotalTokens,
 	}
+}
+
+func conversationHistory(history []*ai.Message) []*ai.Message {
+	if len(history) == 0 {
+		return history
+	}
+	filtered := make([]*ai.Message, 0, len(history))
+	for _, msg := range history {
+		if msg != nil && msg.Role == ai.RoleSystem {
+			continue
+		}
+		filtered = append(filtered, msg)
+	}
+	return filtered
 }
 
 func buildAgentLoopTurnRecords(history []*ai.Message, priorHistoryLen int, response *ai.ModelResponse, recorder *agentLoopRecorder) []AgentLoopTurn {

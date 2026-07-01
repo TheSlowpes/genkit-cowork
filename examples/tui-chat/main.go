@@ -151,7 +151,7 @@ func main() {
 
 	// 7. Wire up the Heartbeat flow; it delivers alerts to the TUI channel.
 	heartbeat := flows.NewHeartbeat(g, store, flows.HeartbeatConfig{
-		Interval:  2 * time.Minute,
+		Interval:  30 * time.Minute,
 		SessionID: sessionID,
 		TenantID:  tenantID,
 		AgentConfig: &flows.AgentLoopConfig{
