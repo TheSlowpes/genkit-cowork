@@ -179,7 +179,7 @@ func agentLoopHandler(ctx context.Context, input *AgentLoopInput, options *agent
 	genOptions = append(genOptions, ai.WithUse(recorder.middleware()))
 	if config.MaxTurns > 0 {
 		genOptions = append(genOptions, ai.WithMaxTurns(config.MaxTurns))
-	} else if len(options.baseOpts) == 0 {
+	} else {
 		genOptions = append(genOptions, ai.WithMaxTurns(defaultCoworkMaxTurns))
 	}
 

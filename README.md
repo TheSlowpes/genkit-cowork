@@ -362,7 +362,7 @@ Skills are domain-specific knowledge modules discovered from a directory of `SKI
 ```go
 import "github.com/TheSlowpes/genkit-cowork/genkit-cowork/plugins/skills"
 
-g, _ := genkit.Init(ctx,
+g := genkit.Init(ctx,
     genkit.WithDefaultModel("googleai/gemini-2.0-flash"),
     genkit.WithPlugins(&skills.Skills{
         SkillsDir:     "./skills", // optional; falls back to default search paths
