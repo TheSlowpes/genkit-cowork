@@ -31,7 +31,7 @@ In practical terms, Flows provide:
 The project currently implements four concrete flow layers:
 
 1. **Agent loop (`agentLoop`)**
-   - Core think/act loop that calls the model, executes tool requests, and continues until the model stops requesting tools.
+   - Core think/act loop built on Genkit's automatic `Generate` tool loop. It calls the model with configured tools, lets Genkit execute tool requests and resume interrupts, and persists the returned history shape.
 2. **Message handling (`handleMessage`)**
    - Session-aware wrapper around `agentLoop` for user/chat style turns.
    - Loads or creates a session, appends incoming messages, runs the loop, and persists new history.
@@ -51,21 +51,23 @@ The project currently implements four concrete flow layers:
 At the core of every Flow is an agent loop. This is the cycle the model moves through as it reasons, calls tools, receives results, and
 decides whether to continue or stop.
 
-agentLoop stages, in order:
+agentLoop stages:
 
 1. Emit `agent-start`.
-2. For each turn, emit `turn-start`.
-3. Call model generation with history, configured tools, and model/system options.
-4. Emit `message-start` and `message-end` for the model response.
-5. If no tool requests are present, emit `turn-end`, then finish.
-6. If tool requests are present, execute each tool call, append a tool message, emit `turn-end`, and continue.
-7. Emit `agent-end` on completion (or before returning on generation failure).
+2. Call `genkit.Generate` once with the configured model, tools, history, system prompt, max-turn guard, resume parts, and cowork recorder middleware.
+3. For each Genkit tool-loop iteration, the recorder emits `turn-start`.
+4. The model response triggers `message-start` and `message-end`.
+5. Tool requests are executed by Genkit. The recorder emits `tool-execution-start`, optional `tool-execution-update` for interrupts, and `tool-execution-end`.
+6. The recorder emits `turn-end` as Genkit iterations unwind. With nested automatic tool-loop recursion, later turn-end events can appear before earlier outer turn-end events.
+7. Persist `response.History()` and reconstruct turn records from the returned history plus recorder timing data.
+8. Emit `agent-end` on completion or generation failure.
 
 Additional behavior:
 
-- Optional `MaxTurns` guard returns an error when exceeded.
-- Resume support via `toolResponses` and `toolRestarts` on the first turn.
-- Interrupt support: if a tool returns an interrupt error, the loop returns `FinishReasonInterrupted` and surfaces interrupt parts.
+- Optional `MaxTurns` guard is enforced by Genkit. When unset, cowork applies a bounded default.
+- Resume support uses Genkit `ToolResponses` and `ToolRestarts`; successful resumes add a tool message with `Metadata["resumed"]`.
+- Interrupt support uses Genkit interrupt metadata. The loop returns `FinishReasonInterrupted`, surfaces interrupt parts, and preserves `pendingOutput` metadata for sibling tools that completed during the interrupted batch.
+- Sibling tool calls may execute concurrently because Genkit owns the tool loop.
 
 ---
 
@@ -85,7 +87,7 @@ Important implementation notes:
 - `message-update` is defined but not currently emitted by `agentLoop` (no token streaming events yet).
 - `tool-execution-update` is currently emitted for tool interrupts.
 - Event handlers run synchronously in registration order.
-- `tool-execution-start` can mutate tool input through returned event data (`event.Data.Input`), and that mutated input is used for execution.
+- `tool-execution-start` can mutate tool input through returned event data (`event.Data.Input`), and that mutated input is used by Genkit's tool execution.
 - Most event emission call sites currently ignore handler errors; events are primarily observational in the current implementation.
 
 ---
@@ -97,7 +99,7 @@ Both `handleMessage` and `heartbeat` persist loop output into session state:
 - Load existing session by `SessionID`, or create one with `TenantID`.
 - Build model history from stored session messages.
 - Run `agentLoop`.
-- Persist only newly generated messages back to the session.
+- Persist only newly generated messages from `response.History()` back to the session, including model tool-request messages, tool response messages, resumed tool messages, and final model messages.
 
 Origin mapping in persisted messages:
 

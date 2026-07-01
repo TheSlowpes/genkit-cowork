@@ -16,7 +16,9 @@
 
 // Package main is a minimal terminal-based chat application that demonstrates
 // how to wire together the genkit-cowork pillars: tools, flows, memory, and
-// the reply-channel abstraction.
+// the reply-channel abstraction. The message and heartbeat flows use Genkit's
+// automatic tool loop, while genkit-cowork adds session persistence, memory
+// indexing, turn records, and reply routing.
 //
 // It registers the TUI itself as a ChannelHandler for memory.UIMessage, so
 // every agent reply is routed through the SendReply flow and printed to
@@ -32,6 +34,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
 	"time"
 
@@ -81,7 +84,8 @@ func (h *tuiChannelHandler) Acknowledge(_ context.Context, _ *flows.AcknowledgeI
 }
 
 func main() {
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 
 	// 1. Initialize Genkit with the Google AI plugin.
 	g := genkit.Init(ctx,
@@ -119,6 +123,7 @@ func main() {
 	tools.NewSearchTenantMemoryTool(g, vectorOperator)
 
 	// 4. Build the agent config shared between the message and heartbeat flows.
+	// MaxTurns is forwarded to Genkit's automatic tool loop as a safety bound.
 	agentCfg := flows.AgentLoopConfig{
 		Model:    model,
 		Tools:    []string{"bash", "read", "edit", "write", "search-session-memory", "search-tenant-memory"},
@@ -148,7 +153,7 @@ func main() {
 
 	// 7. Wire up the Heartbeat flow; it delivers alerts to the TUI channel.
 	heartbeat := flows.NewHeartbeat(g, store, flows.HeartbeatConfig{
-		Interval:  2 * time.Minute,
+		Interval:  30 * time.Minute,
 		SessionID: sessionID,
 		TenantID:  tenantID,
 		AgentConfig: &flows.AgentLoopConfig{
@@ -184,13 +189,40 @@ func main() {
 	fmt.Println("=== genkit-cowork TUI Chat ===")
 	fmt.Printf("Model: %s  |  Type your message and press Enter. Ctrl-C to quit.\n\n", model)
 
+	type inputEvent struct {
+		line string
+		err  error
+	}
+	inputCh := make(chan inputEvent)
 	scanner := bufio.NewScanner(os.Stdin)
+	go func() {
+		defer close(inputCh)
+		for scanner.Scan() {
+			inputCh <- inputEvent{line: scanner.Text()}
+		}
+		if err := scanner.Err(); err != nil {
+			inputCh <- inputEvent{err: err}
+		}
+	}()
+
 	for {
 		fmt.Print("You: ")
-		if !scanner.Scan() {
+		var event inputEvent
+		var ok bool
+		select {
+		case <-ctx.Done():
+			fmt.Println()
+			return
+		case event, ok = <-inputCh:
+			if !ok {
+				return
+			}
+		}
+		if event.err != nil {
+			fmt.Fprintf(os.Stderr, "read input: %v\n", event.err)
 			break
 		}
-		line := strings.TrimSpace(scanner.Text())
+		line := strings.TrimSpace(event.line)
 		if line == "" {
 			continue
 		}

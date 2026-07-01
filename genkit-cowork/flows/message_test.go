@@ -24,6 +24,7 @@ import (
 
 	"github.com/TheSlowpes/genkit-cowork/genkit-cowork/memory"
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/x/session"
 )
 
 // --- Helpers ---
@@ -70,6 +71,126 @@ func TestHandleMessage_SingleTurnNoTools(t *testing.T) {
 	}
 	if len(output.History) != 2 {
 		t.Errorf("expected 2 messages in history, got %d", len(output.History))
+	}
+}
+
+func TestHandleMessage_SingleTurnNoTools_FileBackedSession(t *testing.T) {
+	ctx := context.Background()
+	g := newGenkitInstance(ctx)
+	store := memory.NewSession(
+		memory.WithTenantID("tenant-1"),
+		memory.WithCustomSessionOperator(memory.NewFileSessionOperator(t.TempDir(), "tenant-1")),
+	)
+
+	mockDefineModel(g, "msg-single-file", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return textResponse("Hello from file-backed session!"), nil
+	})
+
+	flow := NewHandleMessageFlow(g, store,
+		WithCustomAgentConfig(AgentLoopConfig{Model: "test/msg-single-file"}),
+	)
+
+	output, err := flow.Run(ctx, &HandleMessageInput{
+		SessionID: "sess-msg-file",
+		TenantID:  "tenant-1",
+		Origin:    memory.UIMessage,
+		Content:   *ai.NewUserTextMessage("Hi there"),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if output.Response.Text() != "Hello from file-backed session!" {
+		t.Errorf("expected file-backed model response, got %q", output.Response.Text())
+	}
+}
+
+func TestHandleMessage_SingleTurnNoTools_PreexistingEmptyFileBackedSession(t *testing.T) {
+	ctx := context.Background()
+	g := newGenkitInstance(ctx)
+	store := memory.NewSession(
+		memory.WithTenantID("tenant-1"),
+		memory.WithCustomSessionOperator(memory.NewFileSessionOperator(t.TempDir(), "tenant-1")),
+	)
+
+	if err := store.Save(ctx, "sess-empty-file", &session.Data[memory.SessionState]{
+		ID: "sess-empty-file",
+		State: memory.SessionState{
+			TenantID: "tenant-1",
+		},
+	}); err != nil {
+		t.Fatalf("seed empty session: %v", err)
+	}
+
+	mockDefineModel(g, "msg-single-empty-file", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return textResponse("Hello from preexisting file-backed session!"), nil
+	})
+
+	flow := NewHandleMessageFlow(g, store,
+		WithCustomAgentConfig(AgentLoopConfig{Model: "test/msg-single-empty-file"}),
+	)
+
+	output, err := flow.Run(ctx, &HandleMessageInput{
+		SessionID: "sess-empty-file",
+		TenantID:  "tenant-1",
+		Origin:    memory.UIMessage,
+		Content:   *ai.NewUserTextMessage("Hi there"),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if output.Response.Text() != "Hello from preexisting file-backed session!" {
+		t.Errorf("expected file-backed model response, got %q", output.Response.Text())
+	}
+}
+
+func TestHandleMessage_SingleTurnNoTools_SystemPromptNotPersisted(t *testing.T) {
+	ctx := context.Background()
+	g := newGenkitInstance(ctx)
+	store := memory.NewSession(
+		memory.WithTenantID("tenant-1"),
+		memory.WithCustomSessionOperator(memory.NewFileSessionOperator(t.TempDir(), "tenant-1")),
+	)
+
+	mockDefineModel(g, "msg-single-system", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		if len(req.Messages) == 0 || req.Messages[0].Role != ai.RoleSystem {
+			t.Fatalf("expected system prompt as first model request message, got %+v", req.Messages)
+		}
+		return textResponse("Hello with system prompt!"), nil
+	})
+
+	flow := NewHandleMessageFlow(g, store,
+		WithCustomAgentConfig(AgentLoopConfig{
+			Model: "test/msg-single-system",
+			SystemPrompt: func(context.Context, any) (string, error) {
+				return "Be concise.", nil
+			},
+		}),
+	)
+
+	output, err := flow.Run(ctx, &HandleMessageInput{
+		SessionID: "sess-system",
+		TenantID:  "tenant-1",
+		Origin:    memory.UIMessage,
+		Content:   *ai.NewUserTextMessage("Hi there"),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if output.Response.Text() != "Hello with system prompt!" {
+		t.Errorf("expected system-prompt model response, got %q", output.Response.Text())
+	}
+
+	sessData, err := store.ForTenant("tenant-1").Get(ctx, "sess-system")
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if len(sessData.State.Messages) != 2 {
+		t.Fatalf("expected user + model persisted messages, got %d", len(sessData.State.Messages))
+	}
+	for i, msg := range sessData.State.Messages {
+		if msg.Content.Role == ai.RoleSystem {
+			t.Fatalf("message %d: system prompt should not be persisted as conversation history", i)
+		}
 	}
 }
 
@@ -662,6 +783,44 @@ func TestHandleMessage_InterruptAndResume(t *testing.T) {
 	if resumeOutput.Response.Text() != "Deployed successfully." {
 		t.Errorf("phase 2: expected 'Deployed successfully.', got %q", resumeOutput.Response.Text())
 	}
+
+	resumeSessData, err := store.ForTenant("tenant-1").Get(ctx, "sess-msg-int")
+	if err != nil {
+		t.Fatalf("phase 2: failed to load session: %v", err)
+	}
+	if resumeSessData == nil {
+		t.Fatal("phase 2: expected session to exist")
+	}
+	if len(resumeSessData.State.Messages) != 4 {
+		t.Fatalf("phase 2: expected 4 persisted messages, got %d", len(resumeSessData.State.Messages))
+	}
+	resumedToolMsg := resumeSessData.State.Messages[2]
+	if resumedToolMsg.Content.Role != ai.RoleTool {
+		t.Fatalf("phase 2: expected message 2 to be a resumed tool message, got %q", resumedToolMsg.Content.Role)
+	}
+	if resumedToolMsg.Origin != memory.ToolMessage {
+		t.Errorf("phase 2: expected resumed tool origin %q, got %q", memory.ToolMessage, resumedToolMsg.Origin)
+	}
+	if resumedToolMsg.Content.Metadata == nil || resumedToolMsg.Content.Metadata["resumed"] == nil {
+		t.Fatal("phase 2: expected Genkit resumed metadata on persisted tool message")
+	}
+	if resumeSessData.State.Messages[3].Content.Text() != "Deployed successfully." {
+		t.Errorf("phase 2: expected final persisted model response, got %q", resumeSessData.State.Messages[3].Content.Text())
+	}
+	if len(resumeSessData.State.Turns) != 2 {
+		t.Fatalf("phase 2: expected 2 persisted turns, got %d", len(resumeSessData.State.Turns))
+	}
+	lastTurn := resumeSessData.State.Turns[1]
+	if lastTurn.MessageCount != 2 {
+		t.Fatalf("phase 2: expected resumed turn to cover 2 messages, got %d", lastTurn.MessageCount)
+	}
+	window, err := memory.MessagesForTurn(resumeSessData.State, lastTurn)
+	if err != nil {
+		t.Fatalf("phase 2: MessagesForTurn(resumed): %v", err)
+	}
+	if len(window) != 2 || window[0].Content.Role != ai.RoleTool || window[1].Content.Role != ai.RoleModel {
+		t.Fatalf("phase 2: expected resumed turn window [tool, model], got %+v", window)
+	}
 }
 
 // --- Phase 6: Event Bus Integration ---
@@ -755,8 +914,8 @@ func TestHandleMessage_EventBusIntegration(t *testing.T) {
 		AgentStart,
 		TurnStart, MessageStart, MessageEnd,
 		ToolExecutionStart, ToolExecutionEnd,
-		TurnEnd,
 		TurnStart, MessageStart, MessageEnd,
+		TurnEnd,
 		TurnEnd,
 		AgentEnd,
 	}
