@@ -16,7 +16,9 @@
 
 // Package main is a minimal terminal-based chat application that demonstrates
 // how to wire together the genkit-cowork pillars: tools, flows, memory, and
-// the reply-channel abstraction.
+// the reply-channel abstraction. The message and heartbeat flows use Genkit's
+// automatic tool loop, while genkit-cowork adds session persistence, memory
+// indexing, turn records, and reply routing.
 //
 // It registers the TUI itself as a ChannelHandler for memory.UIMessage, so
 // every agent reply is routed through the SendReply flow and printed to
@@ -119,6 +121,7 @@ func main() {
 	tools.NewSearchTenantMemoryTool(g, vectorOperator)
 
 	// 4. Build the agent config shared between the message and heartbeat flows.
+	// MaxTurns is forwarded to Genkit's automatic tool loop as a safety bound.
 	agentCfg := flows.AgentLoopConfig{
 		Model:    model,
 		Tools:    []string{"bash", "read", "edit", "write", "search-session-memory", "search-tenant-memory"},

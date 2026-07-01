@@ -18,12 +18,13 @@ import (
 
     "github.com/TheSlowpes/genkit-cowork/genkit-cowork/flows"
     "github.com/TheSlowpes/genkit-cowork/genkit-cowork/memory"
+    "github.com/firebase/genkit/go/ai"
     "github.com/firebase/genkit/go/genkit"
 )
 
 func main() {
     ctx := context.Background()
-    g, _ := genkit.Init(ctx, genkit.WithDefaultModel("googleai/gemini-2.0-flash"))
+    g := genkit.Init(ctx, genkit.WithDefaultModel("googleai/gemini-2.0-flash"))
     store := memory.NewSession()
 
     // ...
@@ -47,11 +48,11 @@ writeTool := tools.NewWriteTool(g, "/working/dir")
 
 ### 3. Set up message handling
 
-`HandleMessageFlow` is a session-backed chat flow. It loads or creates session state, runs the agent loop, and persists the conversation:
+`HandleMessageFlow` is a session-backed chat flow. It loads or creates session state, runs the Genkit-backed agent loop, and persists every new model/tool message produced by the run:
 
 ```go
 messageFlow := flows.NewHandleMessageFlow(g, store,
-    flows.WithDefaultConfig(flows.AgentLoopConfig{
+    flows.WithCustomAgentConfig(flows.AgentLoopConfig{
         Model:    "googleai/gemini-2.0-flash",
         Tools:    []string{"bash", "read", "edit", "write"},
         MaxTurns: 25,
@@ -66,9 +67,54 @@ output, err := messageFlow.Run(ctx, &flows.HandleMessageInput{
 })
 ```
 
+The agent loop delegates tool execution, interrupt annotation, resume handling,
+and max-turn enforcement to `genkit.Generate`. `MaxTurns` is passed through to
+Genkit; when it is zero, cowork applies a generous bounded default.
+
+#### Interrupt resume
+
+When a tool interrupts, `HandleMessageOutput.FinishReason` is
+`ai.FinishReasonInterrupted` and `Interrupts` contains the interrupted tool
+request parts. The interrupted model message is persisted in session history, so
+a later request can resume without resending user content:
+
+```go
+first, err := messageFlow.Run(ctx, &flows.HandleMessageInput{
+    SessionID: "session-1",
+    TenantID:  "tenant-1",
+    Origin:    memory.UIMessage,
+    Content:   *ai.NewUserTextMessage("Deploy the app"),
+})
+if err != nil {
+    return err
+}
+
+if first.FinishReason == ai.FinishReasonInterrupted {
+    responses := make([]*ai.Part, 0, len(first.Interrupts))
+    for _, interrupt := range first.Interrupts {
+        responses = append(responses, ai.NewToolResponsePart(&ai.ToolResponse{
+            Name:   interrupt.ToolRequest.Name,
+            Ref:    interrupt.ToolRequest.Ref,
+            Output: map[string]any{"approved": true},
+        }))
+    }
+
+    resumed, err := messageFlow.Run(ctx, &flows.HandleMessageInput{
+        SessionID:     "session-1",
+        TenantID:      "tenant-1",
+        ToolResponses: responses,
+    })
+    _ = resumed
+    return err
+}
+```
+
+Use `ToolRestarts` instead of `ToolResponses` when the original tool should be
+re-executed with resume metadata or replacement input.
+
 ### 4. Set up heartbeat monitoring
 
-`Heartbeat` runs the agent loop on a schedule against existing session state, classifying results as `ack`, `alert`, `skipped`, or `error`:
+`Heartbeat` runs the same Genkit-backed agent loop on a schedule against existing session state, classifying results as `ack`, `alert`, `skipped`, or `error`:
 
 ```go
 heartbeat := flows.NewHeartbeat(g, store, flows.HeartbeatConfig{
@@ -161,7 +207,7 @@ flows.Subscribe[flows.ToolExecutionContext](bus, flows.ToolExecutionEnd,
 
 // Pass the bus to flows
 messageFlow := flows.NewHandleMessageFlow(g, store,
-    flows.WithEventBus(bus),
+    flows.WithHandleMessageEventBus(bus),
 )
 heartbeat := flows.NewHeartbeat(g, store, cfg,
     flows.WithHeartbeatEventBus(bus),
@@ -212,7 +258,7 @@ Each pillar can be adopted independently. Use the full framework or pick individ
 
 | Flow | Registration | Purpose |
 |------|-------------|---------|
-| `agentLoop` | `genkit.NewFlow` (internal) | Core model/tool turn loop |
+| `agentLoop` | `genkit.NewFlow` (internal) | Core Genkit-backed model/tool loop |
 | `handleMessage` | `genkit.DefineFlow` | Session-backed chat |
 | `heartbeat` | `genkit.DefineFlow` | Scheduled background monitoring |
 | `sendReply` | `genkit.DefineFlow` | Channel-routed reply delivery |
@@ -375,7 +421,8 @@ When `AllowedSkills` is non-empty, only skills whose names appear in that list a
 ```
 genkit-cowork/
 ├── flows/              # Flow definitions
-│   ├── agent_loop.go         # Core model/tool execution loop
+│   ├── agent_loop.go         # Core Genkit-backed model/tool loop
+│   ├── agent_loop_recorder.go # Event and turn metadata recorder middleware
 │   ├── message.go            # Session-backed message handling
 │   ├── heartbeat.go          # Scheduled heartbeat runner
 │   ├── heartbeat_config.go   # Heartbeat configuration types
