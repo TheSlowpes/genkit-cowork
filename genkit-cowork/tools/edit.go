@@ -178,7 +178,7 @@ func performEdit(ctx context.Context, input EditToolInput, cwd string, options *
 		return EditToolOutput{}, fmt.Errorf("failed to write file: %w", err)
 	}
 
-	contextLines := CONTEXT_LINES
+	contextLines := ContextLines
 
 	diffResult, firstLineChanged := generateDiffString(baseContent, newContent, &contextLines)
 

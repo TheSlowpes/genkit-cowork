@@ -74,8 +74,8 @@ func splitLines(content string) []string {
 // exceeds the byte limit, it returns empty content with FirstLineExceedsLimit
 // set to true.
 func TruncateHead(content string, opts *TruncationOptions) TruncationResult {
-	maxLines := DEFAULT_MAX_LINES
-	maxBytes := DEFAULT_MAX_BYTES
+	maxLines := DefaultMaxLines
+	maxBytes := DefaultMaxBytes
 	if opts != nil {
 		if opts.MaxLines > 0 {
 			maxLines = opts.MaxLines
@@ -188,8 +188,8 @@ func joinLines(lines []string) string {
 // very last line of the original content exceeds the byte limit on its own.
 // In that case LastLinePartial is set to true.
 func TruncateTail(content string, opts *TruncationOptions) TruncationResult {
-	maxLines := DEFAULT_MAX_LINES
-	maxBytes := DEFAULT_MAX_BYTES
+	maxLines := DefaultMaxLines
+	maxBytes := DefaultMaxBytes
 	if opts != nil {
 		if opts.MaxLines > 0 {
 			maxLines = opts.MaxLines

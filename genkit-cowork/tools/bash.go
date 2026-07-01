@@ -181,7 +181,7 @@ func NewBashTool(g *genkit.Genkit, cwd string, opts ...BashToolOption) ai.Tool {
 		"Execute a bash command in the current working directory. Returns stdout and stderr. "+
 			"Output is truncated to last %d lines or %s (whichever is hit first). "+
 			"If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
-		DEFAULT_MAX_LINES, FormatSize(DEFAULT_MAX_BYTES),
+		DefaultMaxLines, FormatSize(DefaultMaxBytes),
 	)
 
 	return genkit.DefineTool(
@@ -267,7 +267,7 @@ func processBashOutput(output string, exitCode int) BashToolOutput {
 		} else {
 			outputText += fmt.Sprintf(
 				"\n\n[Showing lines %d-%d of %d (%s limit).",
-				startLine, endLine, truncation.TotalLines, FormatSize(DEFAULT_MAX_BYTES),
+				startLine, endLine, truncation.TotalLines, FormatSize(DefaultMaxBytes),
 			)
 		}
 

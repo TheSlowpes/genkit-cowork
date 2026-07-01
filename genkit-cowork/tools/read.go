@@ -99,10 +99,10 @@ func NewReadTool(g *genkit.Genkit, cwd string, opts ...ReadToolOption) ai.Tool {
 
 	description := fmt.Sprintf(
 		"Read the contents of a file. Supports text files and images (jpg, png, gif, webp). "+
-			"Images are sent as attachments. For text files, output is truncated to %d lines or %sKB "+
+			"Images are sent as attachments. For text files, output is truncated to %d lines or %s "+
 			"(whichever is hit first). Use offset/limit for large files. When you need the full file, "+
 			"continue with offset until complete.",
-		DEFAULT_MAX_LINES, FormatSize(DEFAULT_MAX_BYTES),
+		DefaultMaxLines, FormatSize(DefaultMaxBytes),
 	)
 
 	return genkit.DefineMultipartTool(
@@ -243,10 +243,10 @@ func handleTextRead(ctx context.Context, absolutePath string, input ReadToolInpu
 	if truncation.FirstLineExceedsLimit {
 		// First line at offset exceeds the byte limit.
 		firstLineSize := FormatSize(len(allLines[startLine]))
-		maxSize := FormatSize(DEFAULT_MAX_BYTES)
+		maxSize := FormatSize(DefaultMaxBytes)
 		outputText = fmt.Sprintf(
 			"[Line %d is %s, exceeds %s limit. Use bash: sed -n '%dp' %s | head -c %d]",
-			startLineDisplay, firstLineSize, maxSize, startLineDisplay, input.Path, DEFAULT_MAX_BYTES,
+			startLineDisplay, firstLineSize, maxSize, startLineDisplay, input.Path, DefaultMaxBytes,
 		)
 	} else if truncation.Truncated {
 		// Truncation occurred — prefix lines with numbers and add continuation notice.
@@ -264,7 +264,7 @@ func handleTextRead(ctx context.Context, absolutePath string, input ReadToolInpu
 		} else {
 			outputText += fmt.Sprintf(
 				"\n\n[Showing lines %d-%d of %d (%s limit). Use offset=%d to continue.]",
-				startLineDisplay, endLineDisplay, totalFileLines, FormatSize(DEFAULT_MAX_BYTES), nextOffset,
+				startLineDisplay, endLineDisplay, totalFileLines, FormatSize(DefaultMaxBytes), nextOffset,
 			)
 		}
 	} else if hasUserLimit && startLine+userLimitedLines < totalFileLines {
