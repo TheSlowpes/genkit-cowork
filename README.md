@@ -8,6 +8,24 @@ go get github.com/TheSlowpes/genkit-cowork
 
 ## Quick Start
 
+### Yzma configuration draft
+
+`genkit-cowork/plugins/yzma` has configuration types for in-process local
+inference. Generation is not implemented yet.
+
+`ModelDefinition.Loading` holds the GGUF path and GPU placement.
+`ModelDefinition.Context` holds token capacity, batch sizes, and CPU threads.
+`ModelDefinition.GenerationDefaults` supplies defaults that requests can override
+with `GenerateContentConfig`. Runtime library settings remain on `Yzma`.
+
+Optional numeric fields use pointers so an explicit zero differs from an omitted
+value. For example, temperature zero requests greedy sampling and GPU layers zero
+keeps layers on the CPU. A nil `StopSequences` inherits defaults; a pointer to an
+empty slice clears them. Configuration resolution is not implemented yet.
+
+See `ExampleModelDefinition` in `genkit-cowork/plugins/yzma/config_test.go` for a
+configuration-only example.
+
 ### 1. Create a Genkit instance and session store
 
 ```go
