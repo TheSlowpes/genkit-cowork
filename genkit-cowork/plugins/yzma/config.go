@@ -18,8 +18,9 @@ package yzma
 
 // ModelDefinition describes a registered local model and its resource settings.
 // Loading and context options are fixed at registration; generation defaults may
-// be overridden by individual requests. These types describe configuration only;
-// applying defaults and executing inference are not implemented yet.
+// be overridden by individual requests. Registration validates and snapshots the
+// configuration; weights load on demand. Context allocation and token generation
+// are not implemented yet.
 type ModelDefinition struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
@@ -38,7 +39,8 @@ type ModelDefinition struct {
 type ModelOptions struct {
 	// GGUFPath is the path to the model's GGUF file.
 	GGUFPath string `json:"ggufPath"`
-	// NGPULayers maps to llama.ModelParams.NGpuLayers. Zero selects CPU-only layers.
+	// NGPULayers maps to llama.ModelParams.NGpuLayers. Zero keeps layers on the
+	// CPU; -1 requests offloading all layers.
 	NGPULayers *int32 `json:"nGPULayers,omitempty"`
 	// DeviceSelection names backend devices to resolve before loading.
 	// An empty list leaves device selection to llama.cpp.
@@ -70,11 +72,10 @@ type ContextOptions struct {
 	BatchThreads *int32 `json:"batchThreads,omitempty"`
 }
 
-// GenerateContentConfig controls one generation request.
-// Nil fields inherit model generation defaults, then provider defaults.
-// Pointers preserve explicit zero values, including greedy temperature and seed 0.
-// Common Genkit field names are repeated rather than embedding
-// ai.GenerationCommonConfig, whose scalar fields cannot distinguish zero from unset.
+// GenerateContentConfig is the per-request configuration a Yzma model accepts
+// through Genkit's ai.WithConfig. Unset fields inherit model defaults, then
+// provider defaults, then Yzma sampler defaults. MaxOutputTokens defaults to 1024.
+// Pointers distinguish explicit zero values from omitted settings.
 type GenerateContentConfig struct {
 	// MaxOutputTokens limits generated tokens, not the combined context size.
 	MaxOutputTokens *int `json:"maxOutputTokens,omitempty"`

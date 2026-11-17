@@ -1,7 +1,28 @@
+// Copyright 2026 Kevin Lopes
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package yzma
 
-import "github.com/hybridgroup/yzma/pkg/llama"
+import (
+	"fmt"
 
+	"github.com/hybridgroup/yzma/pkg/llama"
+)
+
+// SplitMode controls placement of model weights across GPUs.
 type SplitMode string
 
 const (
@@ -11,19 +32,25 @@ const (
 	SplitModeTensor SplitMode = "tensor"
 )
 
-func resolveSplitMode(mode SplitMode) llama.SplitMode {
+// resolveSplitMode preserves the supplied native default for an omitted mode.
+func resolveSplitMode(mode SplitMode, fallback llama.SplitMode) (llama.SplitMode, error) {
 	switch mode {
+	case "":
+		return fallback, nil
+	case SplitModeNone:
+		return llama.SplitModeNone, nil
 	case SplitModeLayer:
-		return llama.SplitModeLayer
+		return llama.SplitModeLayer, nil
 	case SplitModeRow:
-		return llama.SplitModeRow
+		return llama.SplitModeRow, nil
 	case SplitModeTensor:
-		return llama.SplitModeTensor
+		return llama.SplitModeTensor, nil
 	default:
-		return llama.SplitModeNone
+		return 0, fmt.Errorf("invalid split mode: %s", mode)
 	}
 }
 
+// LoadMode controls how llama.cpp reads model weights.
 type LoadMode string
 
 const (
@@ -35,23 +62,29 @@ const (
 	LoadModeDirectIO  LoadMode = "direct-io"  // use direct I/O if available
 )
 
-func resolveLoadMode(mode LoadMode) llama.LoadMode {
+// resolveLoadMode preserves the supplied native default for an omitted mode.
+func resolveLoadMode(mode LoadMode, fallback llama.LoadMode) (llama.LoadMode, error) {
 	switch mode {
+	case "":
+		return fallback, nil
 	case LoadModeAuto:
-		return llama.LoadModeAuto
+		return llama.LoadModeAuto, nil
+	case LoadModeNone:
+		return llama.LoadModeNone, nil
 	case LoadModeMmap:
-		return llama.LoadModeMmap
+		return llama.LoadModeMmap, nil
 	case LoadModeMlock:
-		return llama.LoadModeMlock
+		return llama.LoadModeMlock, nil
 	case LoadModeMmapmLock:
-		return llama.LoadModeMmapMlock
+		return llama.LoadModeMmapMlock, nil
 	case LoadModeDirectIO:
-		return llama.LoadModeDirectIO
+		return llama.LoadModeDirectIO, nil
 	default:
-		return llama.LoadModeNone
+		return 0, fmt.Errorf("invalid load mode: %s", mode)
 	}
 }
 
+// LazyMode controls on-demand reads of tensors, not plugin initialization.
 type LazyMode string
 
 const (
@@ -60,13 +93,18 @@ const (
 	LazyModeOn   LazyMode = "on"   // read the rows of tensors marked by the arch on demand (requires mmap)
 )
 
-func resolveLazyMode(mode LazyMode) llama.LazyMode {
+// resolveLazyMode preserves the supplied native default for an omitted mode.
+func resolveLazyMode(mode LazyMode, fallback llama.LazyMode) (llama.LazyMode, error) {
 	switch mode {
+	case "":
+		return fallback, nil
+	case LazyModeOff:
+		return llama.LazyModeOff, nil
 	case LazyModeAuto:
-		return llama.LazyModeAuto
+		return llama.LazyModeAuto, nil
 	case LazyModeOn:
-		return llama.LazyModeOn
+		return llama.LazyModeOn, nil
 	default:
-		return llama.LazyModeOff
+		return 0, fmt.Errorf("invalid lazy mode: %s", mode)
 	}
 }
