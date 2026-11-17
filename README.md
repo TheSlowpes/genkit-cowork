@@ -6,9 +6,6 @@ A coworking framework for [Firebase Genkit](https://github.com/firebase/genkit) 
 go get github.com/TheSlowpes/genkit-cowork
 ```
 
-For local GGUF model loading without a separate inference server, see the
-[Yzma plugin](genkit-cowork/plugins/yzma/README.md), including standalone installation.
-
 ## Quick Start
 
 ### 1. Create a Genkit instance and session store
@@ -416,6 +413,17 @@ On `Init`, the plugin resolves the skills directory (checking `defaultSkillsDirs
 
 When `AllowedSkills` is non-empty, only skills whose names appear in that list are exposed by `SkillTool` and `ListSkills`.
 
+## Plugins
+
+Plugins can be used independently of the rest of the framework.
+
+| Plugin | Purpose |
+| --- | --- |
+| [Skills](#skills) | Discover and load domain knowledge from `SKILL.md` files |
+| [Yzma](genkit-cowork/plugins/yzma/README.md) | Load local GGUF models in-process without a separate inference server; token generation is not implemented yet |
+
+The Yzma guide covers standalone installation, configuration, preloading, and cleanup.
+
 ## Design Patterns
 
 - **Functional options** — all constructors accept variadic option functions for clean, extensible configuration.
@@ -448,10 +456,11 @@ genkit-cowork/
 │   ├── constants.go          # Output limits
 │   └── memory_retrieval.go   # Tenant/session memory retrieval tools
 ├── plugins/            # Genkit plugins
-│   └── skills/               # Skill discovery and serving
-│       ├── skills.go          # Plugin struct, Init, tool registration
-│       ├── skill_parser.go    # SKILL.md frontmatter parsing
-│       └── skill_scanner.go   # Directory scanning, skill discovery
+│   ├── skills/               # Skill discovery and serving
+│   │   ├── skills.go          # Plugin struct, Init, tool registration
+│   │   ├── skill_parser.go    # SKILL.md frontmatter parsing
+│   │   └── skill_scanner.go   # Directory scanning, skill discovery
+│   └── yzma/                 # Local GGUF model loading and lifecycle management
 ├── media/              # MIME detection and processing
 │   ├── mime.go               # Image MIME detection, image resizing
 │   ├── registry.go           # MIME to DocumentProcessor registry
