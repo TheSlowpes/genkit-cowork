@@ -16,19 +16,32 @@
 
 package yzma
 
+// ModelType selects prompt preparation and the model's Genkit capabilities.
+// It is explicit configuration, not inferred from a filename or model metadata.
+type ModelType string
+
+const (
+	// ModelTypeChat formats conversation messages with a chat template.
+	ModelTypeChat ModelType = "chat"
+	// ModelTypeCompletion tokenizes one user text prompt without chat formatting.
+	ModelTypeCompletion ModelType = "completion"
+)
+
 // ModelDefinition describes a registered local model and its resource settings.
 // Loading and context options are fixed at registration; generation defaults may
 // be overridden by individual requests. Registration validates and snapshots the
-// configuration; weights load on demand. Context allocation and token generation
-// are not implemented yet.
+// configuration; weights load on demand, while each generation allocates its own
+// inference context and sampler.
 type ModelDefinition struct {
 	Name string `json:"name"`
-	Type string `json:"type"`
+	// Type is required and must be ModelTypeChat or ModelTypeCompletion.
+	Type ModelType `json:"type"`
 
 	Loading ModelOptions   `json:"loading"`
 	Context ContextOptions `json:"context,omitempty"`
 
-	// ChatTemplate overrides the model's embedded chat template when non-empty.
+	// ChatTemplate overrides the embedded template for chat models.
+	// Completion registrations must leave this empty.
 	ChatTemplate string `json:"chatTemplate,omitempty"`
 	// GenerationDefaults supplies sampling and output defaults for this model.
 	GenerationDefaults *GenerateContentConfig `json:"generationDefaults,omitempty"`

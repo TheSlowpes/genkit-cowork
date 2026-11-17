@@ -16,10 +16,14 @@
 
 // Package yzma registers local GGUF models with Genkit using in-process llama.cpp
 // bindings. It currently supports configuration validation, lazy weight loading,
-// explicit preloading, and cleanup. Token generation is not implemented yet.
+// explicit preloading, streaming text generation, and cleanup. Generation supports
+// decoder-only models, chat or raw completion, sampling settings, and stop sequences.
+// Tools, media, and constrained structured output are not supported yet.
 //
 // Pass a Yzma instance to genkit.WithPlugins, then call DefineModel for each
 // model. Preload checks loading before the application starts serving requests.
+// ModelDefinition.Type is required: ModelTypeChat uses a chat template, while
+// ModelTypeCompletion accepts a single user text prompt without chat formatting.
 // Close rejects new work and frees weights after active use completes.
 // Native shared libraries and backends remain initialized for the process
 // lifetime; all default-operator plugins must use the same library directory.
@@ -29,5 +33,6 @@
 // Native loading requires llama.cpp libraries compatible with the pinned Yzma
 // version. See https://yzma.ai/getting-started/install/ for installation.
 // The examples/yzma-loading program demonstrates loading and releasing a model
-// without allocating an inference context or generating tokens.
+// and optionally generating text. Its -serve flag keeps the process running for
+// the Genkit Dev UI.
 package yzma

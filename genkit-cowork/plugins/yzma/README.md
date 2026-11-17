@@ -4,10 +4,10 @@ Register local GGUF models with Genkit using
 [Yzma](https://github.com/hybridgroup/yzma)'s in-process llama.cpp bindings.
 No Ollama or vLLM server is required.
 
-Configuration, lazy weight loading, explicit preloading, and cleanup work.
-**Token generation is not implemented yet.** A generation call loads the weights,
-then returns `ErrGenerationNotImplemented`. Inference-context allocation,
-streaming, tool calling, and media processing are not implemented.
+Supports lazy weight loading, explicit preloading, chat, raw text completion,
+streaming, and cleanup for decoder-only models. Each request gets a fresh inference context and
+sampler. Tool calling, media processing, and constrained structured output are
+not supported yet; unsupported requests return errors.
 
 ## Installation
 
@@ -53,6 +53,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 
 	"github.com/TheSlowpes/genkit-cowork/genkit-cowork/plugins/yzma"
@@ -71,7 +72,7 @@ func main() {
 	cpuLayers := int32(0)
 	local.DefineModel(g, yzma.ModelDefinition{
 		Name: "local-chat",
-		Type: "chat",
+		Type: yzma.ModelTypeChat,
 		Loading: yzma.ModelOptions{
 			GGUFPath:   "/path/to/model.gguf",
 			NGPULayers: &cpuLayers,
@@ -82,7 +83,20 @@ func main() {
 		log.Print(err)
 		return
 	}
-	fmt.Println("Model weights loaded.")
+	maxTokens, temperature := 64, 0.0
+	text, err := genkit.GenerateText(ctx, g,
+		ai.WithModelName("yzma/local-chat"),
+		ai.WithPrompt("Say hello."),
+		ai.WithConfig(&yzma.GenerateContentConfig{
+			MaxOutputTokens: &maxTokens,
+			Temperature:     &temperature,
+		}),
+	)
+	if err != nil {
+		log.Print(err)
+		return
+	}
+	fmt.Println(text)
 }
 ```
 
@@ -90,6 +104,45 @@ func main() {
 `Preload` takes the unprefixed registration name. The Genkit model identifier is
 `yzma/local-chat`; lookup helpers are `yzma.Model(g, "local-chat")` and
 `yzma.IsDefinedModel(g, "local-chat")`.
+Preloading is optional: the first generation call loads the model when necessary.
+
+### Chat versus completion
+
+`ModelDefinition.Type` is required. Choose explicitly; the plugin does not infer
+the mode from a model filename or the presence of template metadata.
+
+| Type | Input and formatting | Genkit capabilities |
+| --- | --- | --- |
+| `yzma.ModelTypeChat` | System, user, and assistant messages formatted with a chat template | Multi-turn and system role |
+| `yzma.ModelTypeCompletion` | Exactly one user text message, tokenized directly | Single-turn text completion |
+
+For a base model without a chat template, register it as a completion model:
+
+```go
+local.DefineModel(g, yzma.ModelDefinition{
+	Name: "local-completion",
+	Type: yzma.ModelTypeCompletion,
+	Loading: yzma.ModelOptions{
+		GGUFPath: "/path/to/base-model.gguf",
+	},
+}, nil)
+
+text, err := genkit.GenerateText(ctx, g,
+	ai.WithModelName("yzma/local-completion"),
+	ai.WithPrompt("Once upon a time"),
+)
+```
+
+Completion mode does not read or apply chat templates, add an assistant prefix, or
+interpret chat-special-token spellings in the prompt. The tokenizer still applies
+the model's native special-token policy, such as a required beginning token.
+The response contains the continuation, not an echo of the prompt.
+
+Completion requests reject system messages, assistant messages, and multiple
+messages rather than silently flattening them. `ChatTemplate` must be empty for a
+completion registration. Missing and unknown model types are registration errors.
+Genkit capability metadata comes from the type and cannot be overridden through
+`ModelOptions.Supports`. `Label`, `Stage`, and `Versions` remain customizable.
 
 Concurrent calls for one registered model share a successful load; failed loads
 can be retried. Registration errors panic, while loading errors are returned by
@@ -106,14 +159,15 @@ Yzma's native runtime while the plugin is in use.
 | Configuration | Scope |
 | --- | --- |
 | `Yzma.LibPath` | Native library directory; falls back to `YZMA_LIB` |
+| `ModelDefinition.Type` | Required chat or completion mode |
 | `ModelDefinition.Loading` | GGUF path, GPU placement, and weight-loading modes |
 | `ModelDefinition.Context` | Token capacity, batch sizes, and CPU threads |
 | `ModelDefinition.GenerationDefaults` | Sampling and output defaults |
 | `GenerateContentConfig` | Per-request sampling and output overrides |
 
-Loading options are used now. Context and generation settings have resolvers but
-are not connected to inference yet. `ModelsDir` and `Verbose` are reserved;
-automatic discovery and logging configuration are not implemented.
+Context and generation settings are applied on each request. `ModelsDir` and
+`Verbose` are reserved; automatic discovery and logging configuration are not
+implemented.
 
 Optional numeric fields use pointers so an explicit zero differs from an omitted
 value. Temperature zero requests greedy sampling; GPU layers zero keeps layers
@@ -133,7 +187,50 @@ overrides to fresh Yzma sampler settings. Output defaults to 1024 tokens. See
 overriding the model's temperature without changing its output limit.
 
 Set `Yzma.Operator` to a custom `ModelOperator` to replace native initialization,
-loading, and cleanup for testing or alternate execution environments.
+loading, and cleanup for testing or alternate execution environments. To support
+chat, that operator must also implement `TextGenerationOperator`.
+
+In chat mode, formatting uses the model's embedded template through llama.cpp's supported
+chat-template implementation. Set `ModelDefinition.ChatTemplate` to override it.
+Unsupported templates return an error rather than silently substituting another
+format. System, user, and prior assistant messages retain their roles.
+
+Prompt tokens are evaluated in batches. Prompts that leave no room for output are
+rejected, not truncated. Generation stops at an end-of-generation token, a stop
+sequence, the output token limit, or the remaining context capacity. Stop text is
+removed from both the stream and final response, including sequences spanning
+token boundaries. Stream chunks contain complete UTF-8 text.
+
+Responses include token usage and a `stop` or `length` finish reason. Output token
+usage includes sampled end-of-generation tokens and stripped stop text.
+
+## Chat in the Genkit Dev UI
+
+Install the [Genkit CLI](https://genkit.dev/docs/devtools/) if needed, then run
+these commands from the repository root:
+
+```sh
+export YZMA_LIB=/path/to/libs
+genkit start -- go run ./examples/yzma-loading -model /path/to/model.gguf -serve
+```
+
+Open the Dev UI at the address printed by Genkit. Under **Models**, select
+`yzma/local-chat` and send a message. The example preloads the weights, keeps the
+runtime alive, and streams responses. Press Ctrl+C to stop and free the weights.
+It uses CPU-only placement and a 4096-token context.
+
+For a base model, use `-type completion` and select `yzma/local-completion` under
+Models. Supply a single text prompt; this mode does not support a multi-turn chat:
+
+```sh
+genkit start -- go run ./examples/yzma-loading \
+  -model ~/models/SmolLM2-135M.Q4_K_M.gguf -type completion -serve
+```
+
+If your model's embedded template is unsupported, pass
+`-template NAME` with a llama.cpp-supported template matching the model's trained
+chat format. For example, `chatml` is appropriate only for models trained on
+ChatML. The plugin does not guess a replacement template.
 
 ## Run the example
 
@@ -146,6 +243,21 @@ YZMA_LIB=/path/to/libs go run ./examples/yzma-loading -model /path/to/model.gguf
 The [example](../../../examples/yzma-loading/main.go) handles cancellation and
 cleans up with a separate timeout.
 
+To generate a single response with a 64-token limit, add `-prompt`:
+
+```sh
+YZMA_LIB=/path/to/libs go run ./examples/yzma-loading \
+  -model /path/to/model.gguf -prompt "Say hello."
+```
+
+To continue a raw prompt with a base model:
+
+```sh
+YZMA_LIB=/path/to/libs go run ./examples/yzma-loading \
+  -model ~/models/SmolLM2-135M.Q4_K_M.gguf \
+  -type completion -prompt "Once upon a time"
+```
+
 ## Tests
 
 Run from the repository root. Unit tests use a custom `ModelOperator` and require
@@ -155,12 +267,14 @@ no native installation:
 go test -race ./genkit-cowork/plugins/yzma
 ```
 
-To exercise actual loading with existing native libraries and a local model:
+To exercise actual loading and streaming generation with existing native libraries
+and a local model:
 
 ```sh
 YZMA_LIB=/path/to/libs YZMA_TEST_MODEL=/path/to/model.gguf \
-  go test ./genkit-cowork/plugins/yzma -run TestNativeModelLoading -v
+  go test ./genkit-cowork/plugins/yzma -run 'TestNative(ModelLoading|TextGeneration)' -v
 ```
 
-The native test skips unless both environment variables are set. It does not
-download models or run token generation.
+Native tests skip unless both environment variables are set. They do not download
+models. `YZMA_TEST_TYPE=completion` selects raw completion for a base model; the
+default is chat. `YZMA_TEST_TEMPLATE` optionally overrides the chat template.

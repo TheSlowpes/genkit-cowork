@@ -209,6 +209,7 @@ func TestResolveGenerationConfigValidation(t *testing.T) {
 		"topP":           {TopP: ptr(1.1)},
 		"minP":           {MinP: ptr(-0.1)},
 		"repeat":         {RepeatPenalty: ptr(-1.0)},
+		"zero repeat":    {RepeatPenalty: ptr(0.0)},
 		"NaN":            {Temperature: ptr(math.NaN())},
 		"infinity":       {FrequencyPenalty: ptr(math.Inf(1))},
 		"overflow":       {PresencePenalty: ptr(math.MaxFloat64)},

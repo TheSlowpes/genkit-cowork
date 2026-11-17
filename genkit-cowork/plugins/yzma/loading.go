@@ -30,9 +30,9 @@ import (
 var (
 	// ErrClosed indicates that plugin shutdown has begun.
 	ErrClosed = errors.New("yzma: plugin is closed")
-	// ErrGenerationNotImplemented indicates that weights loaded successfully,
-	// but token generation is not implemented yet.
-	ErrGenerationNotImplemented = errors.New("yzma: token generation is not implemented")
+	// ErrGenerationNotImplemented indicates that a custom ModelOperator does
+	// not implement TextGenerationOperator.
+	ErrGenerationNotImplemented = errors.New("yzma: configured operator does not implement text generation")
 )
 
 // ModelOperator abstracts initialization, weight loading, and cleanup.
@@ -125,7 +125,7 @@ func (defaultModelOperator) FreeModel(ctx context.Context, model llama.Model) er
 
 // generator holds one registration's weights. gate protects the handle and
 // serializes loading, use, and cleanup. It remains held throughout generation
-// so a future inference context cannot outlive the weights it references.
+// so an inference context cannot outlive the weights it references.
 type generator struct {
 	model    ModelDefinition
 	operator ModelOperator

@@ -26,6 +26,7 @@ import (
 	"sync"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/hybridgroup/yzma/pkg/llama"
@@ -38,19 +39,11 @@ const (
 )
 
 var (
-	mediaSupportedModels = []string{}
-	toolsSupportedModels = []string{}
-	roleMapping          = map[ai.Role]string{
+	roleMapping = map[ai.Role]string{
 		ai.RoleUser:   "user",
 		ai.RoleModel:  "assistant",
 		ai.RoleSystem: "system",
 		ai.RoleTool:   "tool",
-	}
-	defaultYzmaSupports = ai.ModelSupports{
-		Multiturn:  true,
-		Media:      false,
-		Tools:      false,
-		SystemRole: true,
 	}
 )
 
@@ -134,7 +127,8 @@ func (y *Yzma) Init(ctx context.Context) []api.Action {
 // DefineModel validates and snapshots configuration, then registers a lazy model.
 // It panics for invalid configuration, duplicate names, or an unavailable plugin.
 // Weights are loaded by Preload or the first generation call, not registration.
-// Generation currently loads weights and returns ErrGenerationNotImplemented.
+// Type is required and determines prompt preparation and supported capabilities.
+// ModelOptions may customize Label, Stage, and Versions, but not Supports.
 func (y *Yzma) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.ModelOptions) ai.Model {
 	y.mu.Lock()
 	defer y.mu.Unlock()
@@ -146,6 +140,15 @@ func (y *Yzma) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.Mod
 	}
 	if strings.TrimSpace(model.Name) == "" {
 		panic("yzma.DefineModel: name must not be empty")
+	}
+	if model.Type != ModelTypeChat && model.Type != ModelTypeCompletion {
+		panic(fmt.Sprintf("yzma.DefineModel: unsupported model type %q; use chat or completion", model.Type))
+	}
+	if model.Type == ModelTypeCompletion && model.ChatTemplate != "" {
+		panic("yzma.DefineModel: completion models must not specify a chat template")
+	}
+	if opts != nil && opts.Supports != nil {
+		panic("yzma.DefineModel: capabilities are determined by model type; leave ModelOptions.Supports unset")
 	}
 	if y.models[model.Name] != nil || IsDefinedModel(g, model.Name) {
 		panic("yzma.DefineModel: model already defined: " + model.Name)
@@ -160,23 +163,17 @@ func (y *Yzma) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.Mod
 		panic("yzma.DefineModel: " + err.Error())
 	}
 
-	var modelOpts ai.ModelOptions
-	if opts != nil {
-		modelOpts = *opts
-	} else {
-		supports := modelSupportsFromStaticLists(model.Name)
-		supports.Tools = model.Type == "chat" && supports.Tools
-		modelOpts = ai.ModelOptions{
-			Label:    model.Name,
-			Supports: supports,
-			Versions: []string{},
-		}
-	}
-
 	meta := &ai.ModelOptions{
-		Label:    provider + " - " + model.Name,
-		Supports: modelOpts.Supports,
-		Versions: []string{},
+		ConfigSchema: core.InferSchemaMap(GenerateContentConfig{}),
+		Label:        provider + " - " + model.Name,
+		Supports:     modelSupports(model.Type),
+	}
+	if opts != nil {
+		if opts.Label != "" {
+			meta.Label = opts.Label
+		}
+		meta.Stage = opts.Stage
+		meta.Versions = slices.Clone(opts.Versions)
 	}
 	gen := &generator{
 		model: cloneModelDefinition(model), operator: y.operator,
@@ -188,11 +185,58 @@ func (y *Yzma) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.Mod
 }
 
 func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
+	messages, err := textMessages(input)
+	if err != nil {
+		return nil, err
+	}
+	if g.model.Type == ModelTypeCompletion && (len(messages) != 1 || messages[0].Role != "user") {
+		return nil, fmt.Errorf("yzma: completion models require exactly one user text message; system messages and history are not supported")
+	}
+	requestConfig, err := decodeGenerationConfig(input.Config)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := resolveGenerationConfig(nil, g.model.GenerationDefaults, requestConfig)
+	if err != nil {
+		return nil, err
+	}
 	if err := g.acquire(ctx); err != nil {
 		return nil, err
 	}
 	defer g.release()
-	return nil, ErrGenerationNotImplemented
+	operator, ok := g.operator.(TextGenerationOperator)
+	if !ok {
+		return nil, ErrGenerationNotImplemented
+	}
+	var onText func(context.Context, string) error
+	if cb != nil {
+		onText = func(ctx context.Context, text string) error {
+			return cb(ctx, &ai.ModelResponseChunk{Content: []*ai.Part{ai.NewTextPart(text)}})
+		}
+	}
+	result, err := operator.GenerateText(ctx, g.loaded, TextGenerationInput{
+		Type: g.model.Type, Messages: messages, ChatTemplate: g.model.ChatTemplate,
+		Context: g.model.Context, Sampler: cfg.Sampler,
+		MaxOutputTokens: cfg.MaxOutputTokens, StopSequences: cfg.StopSequences,
+	}, onText)
+	if err != nil {
+		return nil, fmt.Errorf("generate with model %q: %w", g.model.Name, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	reason := ai.FinishReasonStop
+	if result.Limited {
+		reason = ai.FinishReasonLength
+	}
+	return &ai.ModelResponse{
+		Message: ai.NewModelTextMessage(result.Text), Request: input,
+		FinishReason: reason,
+		Usage: &ai.GenerationUsage{
+			InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
+			TotalTokens: result.InputTokens + result.OutputTokens,
+		},
+	}, nil
 }
 
 // Preload loads a registered model's weights without running generation.
@@ -251,12 +295,12 @@ func (y *Yzma) Close(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-func modelSupportsFromStaticLists(modelName string) *ai.ModelSupports {
+func modelSupports(modelType ModelType) *ai.ModelSupports {
 	return &ai.ModelSupports{
-		Multiturn:  true,
-		SystemRole: true,
-		Tools:      slices.Contains(toolsSupportedModels, modelName),
-		Media:      slices.Contains(mediaSupportedModels, modelName),
+		Multiturn:   modelType == ModelTypeChat,
+		SystemRole:  modelType == ModelTypeChat,
+		Output:      []string{"text"},
+		ContentType: []string{"text/plain"},
 	}
 }
 

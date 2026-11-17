@@ -221,7 +221,10 @@ func resolveGenerationConfig(provider, model, request *GenerateContentConfig) (r
 			if (field.name == "topP" || field.name == "minP") && (value < 0 || value > 1) {
 				return resolvedGenerationConfig{}, fmt.Errorf("%s must be between 0 and 1", field.name)
 			}
-			if (field.name == "temperature" || field.name == "repeatPenalty") && value < 0 {
+			if field.name == "repeatPenalty" && value <= 0 {
+				return resolvedGenerationConfig{}, fmt.Errorf("repeatPenalty must be positive")
+			}
+			if field.name == "temperature" && value < 0 {
 				return resolvedGenerationConfig{}, fmt.Errorf("%s must be non-negative", field.name)
 			}
 			*field.dst = float32(value)
