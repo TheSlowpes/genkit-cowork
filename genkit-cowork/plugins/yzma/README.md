@@ -9,9 +9,10 @@ decoder-only models. Weights load on demand, and each request gets a fresh
 inference context and sampler. Tool calling requires an explicit definition
 for a tool-capable chat model with a tool-aware template.
 Chat and completion also support schema-constrained JSON objects without tools
-or streaming. Vision chat models accept inline JPEG and PNG images.
-Explicitly registered Soprano models synthesize speech from text without
-accepting media input.
+ or streaming. Vision chat models accept inline JPEG and PNG images.
+ Explicitly registered Soprano models synthesize speech from text without
+accepting media input. System One models score typed decisions through Yzma's
+local readouts.
 
 ## Installation
 
@@ -101,9 +102,10 @@ with a tokenizer and decoder tensors, and rejects pooling, non-causal
 attention, and known classifier heads. Projectors, adapters, and unclassified
 GGUFs stay out of the list. On a recognized decoder, a valid default embedded
 template selects chat formatting; no template selects raw continuation. A
-file with only named templates needs an explicit definition. BERT embedding
+file with only named templates needs an explicit definition unless it has a
+recognized [System One readout](#typed-system-one-decisions). BERT embedding
 models follow the separate [embedding rules](#local-text-embeddings).
-SmolVLM discovery also checks for a [compatible projector](#ask-a-vision-model-about-an-image).
+ SmolVLM discovery also checks for a [compatible projector](#ask-a-vision-model-about-an-image).
 
 These are checks for a usable text path, not proof of training intent,
 tool-calling support, native compatibility, or available memory. For example,
@@ -240,7 +242,8 @@ Yzma's native runtime while the plugin is in use.
 | --- | --- |
 | `Yzma.LibPath` | Native library directory; falls back to `YZMA_LIB` |
 | `Yzma.ModelsDir` | Catalog directory; falls back to Yzma's default |
-| `ModelDefinition.Type` | Required chat, completion, or speech mode |
+| `ModelDefinition.Type` | Required chat, completion, speech, or decision mode |
+| `ModelDefinition.Decision` | Decision readout and calibration sidecar path |
 | `ModelDefinition.ToolCalling` | Opt into tool calling for a capable chat model |
 | `ModelDefinition.ChatTemplateName` | Select a named template embedded in the GGUF |
 | `ModelDefinition.Loading` | GGUF path, GPU placement, and weight-loading modes |
@@ -446,6 +449,98 @@ YZMA_TEST_SPEECH_DECODER="$SPEECH_MODELS/mmproj-Soprano-1.1-80M-F16.gguf" \
 The native test uses existing local files. Unit tests and CI do not need the
 model or `libmtmd`. A custom `ModelOperator` must implement `SpeechOperator`
 to register a speech model.
+
+## Typed System One decisions
+
+Use `genkit.GenerateData[T]` with a struct of decision questions. Each top-level
+field has a `json` key and a `jsonschema_description` question. The plugin
+extracts the questions from the output schema and scores them in one local
+`DecideMany` call. It follows the
+[Genkit System One API pattern](https://genkit.dev/docs/go/integrations/system-one/)
+without using the remote plugin or changing the Genkit version.
+
+| Field type | What it returns |
+| --- | --- |
+| `yzma.Choice[T]` | The winning option, probabilities keyed by option, and readout confidence. `T` is a string type with `Criteria() map[T]string`. Options are sent in key order. |
+| `yzma.Score[L]` | The probability-weighted mean level, a probability per level, readout confidence, and the rubric legend. `L` has `Levels() []string` with two to ten levels, lowest first. |
+| `yzma.Noul` | The probability of yes. The probability of no is `1 - Probability`. |
+
+Use one user message as state. Pass plain text with `ai.WithPrompt`, or use
+`ai.WithMessages(ai.NewUserMessage(ai.NewDataPart(rawJSON)))` for a JSON object
+or array encoded as a string. Optional `ai.WithSystem` text prefixes each
+question's instructions rather than becoming part of the state. Nested
+questions, extra turns, attachments, media, tools, text completion, streaming,
+and per-request sampling settings are not supported. Model and native-library
+limits still apply. Confidence is readout-specific and is not interchangeable
+with an option probability. Retune thresholds when changing the model,
+quantization, or calibration.
+
+### Readouts and calibration files
+
+The catalog can recognize these artifacts without loading their weights:
+
+| `Decision.Readout` | How discovery identifies it |
+| --- | --- |
+| `yzma.DecisionReadoutGGUF` | Recognized `<architecture>.decision.type` plus the `tokenizer.chat_template.systemone` template. Calibration is embedded. Supported metadata types follow Yzma v1.33.0's `decide.Open`. |
+| `yzma.DecisionReadoutJevStyle` | `<GGUF stem>.readout.json`, the model's `readout_config.json`. |
+| `yzma.DecisionReadoutJevK5` | `<GGUF stem>.jevk5.json`, the model's `jevk5_config.json`. |
+| `yzma.DecisionReadoutDecider` | `<GGUF stem>.decider.json`, the model's `decider_config.json`. Use the plain layout. |
+
+Match the case of the GGUF filename stem when naming the sidecar. Use the
+calibration file published for that model version, not a file from another
+release. Discovery skips malformed or conflicting readouts. A generic sidecar
+name such as `decider_config.json` is not enough for discovery to identify its
+GGUF. To pair arbitrary paths or override an ambiguous readout, register it
+before resolving the model:
+
+```go
+local.DefineModel(g, yzma.ModelDefinition{
+    Name: "support-decider",
+    Type: yzma.ModelTypeDecision,
+    Loading: yzma.ModelOptions{GGUFPath: "/path/to/model.gguf"},
+    Decision: yzma.DecisionOptions{
+        Readout:    yzma.DecisionReadoutDecider,
+        ConfigPath: "/path/to/decider_config.json",
+    },
+}, nil)
+```
+
+For an embedded readout, use `DecisionReadoutGGUF` without `ConfigPath`.
+Decision models use Yzma's native weight-loading defaults. An explicit
+definition can set `ContextSize`, `PhysicalMaximumBatchSize`, and `Threads`
+through `ModelDefinition.Context`. The decision reader keeps both weights and
+its inference context until `Close` and may reuse a shared state prefix.
+Calls on one reader are serialized. Cancellation stops waits for the model and
+discards a canceled decision, but pinned Yzma cannot interrupt a native decision
+load or score already in progress. `Close` waits for active scoring.
+
+### Run the decision example
+
+Use the public Decider 0.8B Q2_K GGUF (422 MB) and its 341-byte calibration file.
+With the compatible native libraries from [installation](#installation), run
+from the repository root:
+
+```sh
+export YZMA_LIB="$HOME/.local/lib/yzma"
+dir="${TMPDIR:-/tmp}/yzma-decision-models"
+mkdir -p "$dir"
+curl -fL -o "$dir/decider-0.8b.Q2_K.gguf" \
+  https://huggingface.co/mradermacher/decider-0.8b-GGUF/resolve/001df41ddc126176cab96c8aec9ada45008fbe62/decider-0.8b.Q2_K.gguf
+curl -fL -o "$dir/decider-0.8b.Q2_K.decider.json" \
+  https://huggingface.co/Mapika/decider-0.8b/resolve/a0a01d6f8135298f400a8c856b355793012ae971/decider_config.json
+task dev:yzma:decision -- -models-dir "$dir" -model decider-0.8b.q2_k
+```
+
+The [example](../../../examples/yzma-decision/main.go) prints the typed result
+as JSON. For the default ticket, expect `department.choice` to be `billing`,
+`department.probabilities` to include all three options, and `urgent.probability`
+to be above `0.5`.
+
+Use the same files for the opt-in native test:
+
+```sh
+YZMA_TEST_DECISION_MODEL="$dir/decider-0.8b.Q2_K.gguf" task test:yzma:decision:native
+```
 
 ## Run an explicit definition in the Genkit Dev UI
 

@@ -173,6 +173,17 @@ func discoverModels(ctx context.Context, dir string) map[string]ModelDefinition 
 		}
 		id := strings.TrimSuffix(strings.ToLower(filename), ".gguf")
 		model := ModelDefinition{Name: id, Loading: ModelOptions{GGUFPath: file.path}}
+		decision, identified, err := discoverDecision(file)
+		if identified {
+			if err != nil {
+				skip(file.path, err)
+				continue
+			}
+			model.Type = ModelTypeDecision
+			model.Decision = decision
+			catalog[id] = model
+			continue
+		}
 		if spec, ok := discoverEmbedding(file.header.values, tensors); ok {
 			model.embedding = spec
 			catalog[id] = model

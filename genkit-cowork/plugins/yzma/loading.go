@@ -125,9 +125,9 @@ func (defaultModelOperator) FreeModel(ctx context.Context, model llama.Model) er
 	return llama.ModelFree(model)
 }
 
-// generator holds one registration's weights and optional media companion.
-// gate serializes loading, use, and cleanup, so request resources cannot
-// outlive the model, projector, or speech decoder they reference.
+// generator owns one registration's weights and companion, or its decision reader.
+// gate serializes loading, use, and cleanup so request resources cannot outlive
+// the native handles they reference.
 type generator struct {
 	model           ModelDefinition
 	operator        ModelOperator
@@ -138,10 +138,11 @@ type generator struct {
 	loaded          llama.Model
 	speechDecoder   mtmd.Context
 	projector       ProjectorHandle
+	decision        DecisionModel
 	rollbackPending bool // A failed companion load is not usable until cleanup succeeds.
 }
 
-// acquire loads weights and any media companion, then reserves them until release.
+// acquire loads the registration's native resources, then reserves them until release.
 func (g *generator) acquire(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -157,8 +158,7 @@ func (g *generator) acquire(ctx context.Context) error {
 		g.release()
 		return err
 	}
-	if g.rollbackPending || g.loaded == 0 || (g.model.Type == ModelTypeSpeech && g.speechDecoder == 0) ||
-		(g.model.Projector != nil && g.projector == 0) {
+	if g.needsLoad() {
 		if err := g.load(ctx); err != nil {
 			g.release()
 			return fmt.Errorf("load model %q: %w", g.model.Name, err)
@@ -169,6 +169,14 @@ func (g *generator) acquire(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func (g *generator) needsLoad() bool {
+	if g.model.Type == ModelTypeDecision {
+		return g.decision == nil
+	}
+	return g.rollbackPending || g.loaded == 0 || (g.model.Type == ModelTypeSpeech && g.speechDecoder == 0) ||
+		(g.model.Projector != nil && g.projector == 0)
 }
 
 // loadMediaLibrary loads the process-global multimodal bindings on first use. Text
@@ -199,6 +207,9 @@ func (g *generator) load(ctx context.Context) error {
 	defer func() { <-g.loadGate }()
 	if err := g.available(ctx); err != nil {
 		return err
+	}
+	if g.model.Type == ModelTypeDecision {
+		return g.loadDecision(ctx)
 	}
 	if g.rollbackPending {
 		if err := g.freeModel(context.WithoutCancel(ctx)); err != nil {
@@ -269,6 +280,12 @@ func (g *generator) close(ctx context.Context) error {
 }
 
 func (g *generator) freeModel(ctx context.Context) error {
+	if g.decision != nil {
+		if err := g.decision.Close(ctx); err != nil {
+			return err
+		}
+		g.decision = nil
+	}
 	if g.speechDecoder != 0 {
 		if err := g.operator.(SpeechOperator).FreeSpeechDecoder(ctx, g.speechDecoder); err != nil {
 			return err

@@ -27,6 +27,7 @@ tasks:
     env:
       YZMA_TEST_MODEL: ''
       YZMA_TEST_SPEECH_MODEL: ''
+      YZMA_TEST_DECISION_MODEL: ''
     cmds:
       - go test ./...
 
@@ -70,6 +71,7 @@ tasks:
     env:
       YZMA_TEST_MODEL: ''
       YZMA_TEST_SPEECH_MODEL: ''
+      YZMA_TEST_DECISION_MODEL: ''
     cmds:
       - go test -race ./genkit-cowork/plugins/yzma
 
@@ -102,3 +104,15 @@ tasks:
     desc: Ask a local Yzma vision model about an inline image
     cmds:
       - go run ./examples/yzma-vision {{.CLI_ARGS}}
+
+  dev:yzma:decision:
+    desc: Run the Yzma decision example with YZMA_LIB and an installed System One GGUF
+    cmds:
+      - go run ./examples/yzma-decision {{.CLI_ARGS}}
+
+  test:yzma:decision:native:
+    desc: Run the native System One test with YZMA_LIB and YZMA_TEST_DECISION_MODEL
+    cmds:
+      - ': "${YZMA_LIB:?Set YZMA_LIB to the native library directory}"'
+      - ': "${YZMA_TEST_DECISION_MODEL:?Set YZMA_TEST_DECISION_MODEL to a local System One GGUF}"'
+      - go test ./genkit-cowork/plugins/yzma -run '^TestNativeDecision$' -count=1 -v

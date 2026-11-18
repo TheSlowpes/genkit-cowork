@@ -136,10 +136,15 @@ func (y *Yzma) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.Mod
 	if strings.TrimSpace(model.Name) == "" {
 		panic("yzma.DefineModel: name must not be empty")
 	}
-	if model.Type != ModelTypeChat && model.Type != ModelTypeCompletion && model.Type != ModelTypeSpeech {
-		panic(fmt.Sprintf("yzma.DefineModel: unsupported model type %q; use chat, completion, or speech", model.Type))
+	switch model.Type {
+	case ModelTypeChat, ModelTypeCompletion, ModelTypeSpeech, ModelTypeDecision:
+	default:
+		panic(fmt.Sprintf("yzma.DefineModel: unsupported model type %q", model.Type))
 	}
 	if err := validateSpeechDefinition(model, y.operator); err != nil {
+		panic("yzma.DefineModel: " + err.Error())
+	}
+	if err := validateDecisionDefinition(model); err != nil {
 		panic("yzma.DefineModel: " + err.Error())
 	}
 	if model.Type == ModelTypeCompletion && (model.ChatTemplate != "" || model.ChatTemplateName != "" || model.ToolCalling) {
@@ -179,9 +184,11 @@ func (y *Yzma) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.Mod
 
 func (y *Yzma) modelMetadata(model ModelDefinition, opts *ai.ModelOptions) *ai.ModelOptions {
 	meta := &ai.ModelOptions{
-		ConfigSchema: core.InferSchemaMap(GenerateContentConfig{}),
-		Label:        provider + " - " + model.Name,
-		Supports:     modelSupports(model.Type, model.ToolCalling, y.operator),
+		Label:    provider + " - " + model.Name,
+		Supports: modelSupports(model.Type, model.ToolCalling, y.operator),
+	}
+	if model.Type != ModelTypeDecision {
+		meta.ConfigSchema = core.InferSchemaMap(GenerateContentConfig{})
 	}
 	switch {
 	case model.Type == ModelTypeSpeech:
@@ -215,6 +222,9 @@ func (y *Yzma) newGenerator(model ModelDefinition) *generator {
 func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
 	if g.model.Type == ModelTypeSpeech {
 		return g.generateSpeech(ctx, input, cb)
+	}
+	if g.model.Type == ModelTypeDecision {
+		return g.generateDecision(ctx, input, cb)
 	}
 	if g.model.Projector != nil {
 		return g.generateMedia(ctx, input, cb)
@@ -394,6 +404,13 @@ func (y *Yzma) Close(ctx context.Context) error {
 }
 
 func modelSupports(modelType ModelType, toolCalling bool, operator ModelOperator) *ai.ModelSupports {
+	if modelType == ModelTypeDecision {
+		return &ai.ModelSupports{
+			// Genkit counts the optional system message as a turn.
+			Multiturn: true, SystemRole: true, Constrained: ai.ConstrainedSupportNoTools,
+			Output: []string{ai.OutputFormatJSON}, ContentType: []string{"application/json"},
+		}
+	}
 	supports := &ai.ModelSupports{
 		Multiturn:   modelType == ModelTypeChat,
 		SystemRole:  modelType == ModelTypeChat,

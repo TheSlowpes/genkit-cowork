@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 // Discovery reads the GGUF header and tensor directory, never mapping weights.
@@ -185,7 +186,8 @@ func readGGUFHeader(ctx context.Context, path string) (ggufHeader, error) {
 		keep := key == "general.type" || key == "general.architecture" ||
 			key == "tokenizer.ggml.model" || key == "tokenizer.chat_template" ||
 			key == "general.name" || key == "general.basename" ||
-			key == "clip.projector_type" || key == "clip.gen.audio.projector_type"
+			key == "clip.projector_type" || key == "clip.gen.audio.projector_type" ||
+			key == systemOneTemplateKey || strings.HasSuffix(key, ".decision.type")
 		v, err := r.value(keep)
 		if err != nil {
 			return h, fmt.Errorf("read GGUF metadata %q: %w", key, err)

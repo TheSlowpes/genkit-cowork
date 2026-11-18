@@ -27,16 +27,18 @@ const (
 	ModelTypeCompletion ModelType = "completion"
 	// ModelTypeSpeech turns one user text prompt into a complete WAV clip.
 	ModelTypeSpeech ModelType = "speech"
+	// ModelTypeDecision scores typed System One questions about a state.
+	ModelTypeDecision ModelType = "decision"
 )
 
 // ModelDefinition describes a registered local model and its resource settings.
 // Loading and context options are fixed at registration; generation defaults may
 // be overridden by individual requests. Registration validates and snapshots the
-// configuration; weights load on demand, while each generation allocates its own
-// inference context and sampler.
+// configuration. Text inference allocates a context and sampler per request.
+// Decision inference keeps its context with the lazily loaded weights.
 type ModelDefinition struct {
 	Name string `json:"name"`
-	// Type selects chat, completion, or speech and is required.
+	// Type is required.
 	Type ModelType `json:"type"`
 
 	Loading ModelOptions   `json:"loading"`
@@ -48,6 +50,9 @@ type ModelDefinition struct {
 	// SpeechDecoderPath is the companion mmproj GGUF for ModelTypeSpeech.
 	// Leave it empty for other model types.
 	SpeechDecoderPath string `json:"speechDecoderPath,omitempty"`
+
+	// Decision selects the readout for ModelTypeDecision.
+	Decision DecisionOptions `json:"decision,omitempty"`
 
 	// ChatTemplate overrides the embedded template for chat models.
 	// Completion registrations must leave this empty.

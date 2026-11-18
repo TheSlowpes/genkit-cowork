@@ -26,6 +26,8 @@
 // inline JPEG and PNG parts through a compatible projector, without tools or
 // structured output. ModelTypeSpeech turns one text prompt into a WAV clip
 // using a Soprano backbone and matching decoder. It does not accept media input.
+// ModelTypeDecision uses Yzma's local System One readouts with typed Choice,
+// Score, and Noul fields.
 //
 // Pass a Yzma instance to genkit.WithPlugins to discover models in ModelsDir
 // or Yzma's default directory. The catalog is fixed at initialization. Restart
@@ -51,7 +53,8 @@
 // Native loading requires llama.cpp libraries compatible with the pinned Yzma
 // version. See https://yzma.ai/getting-started/install/ for installation.
 // The examples/yzma-loading program demonstrates discovery in the Genkit Dev UI,
-// explicit registration, and cleanup. See examples/yzma-structured for typed
-// output, examples/yzma-vision for an inline image request, and
-// examples/yzma-speech for saving a generated WAV.
+// explicit registration, and cleanup. See examples/yzma-structured for
+// constrained generation, examples/yzma-vision for an inline image request,
+// examples/yzma-speech for saving a WAV, and examples/yzma-decision for local
+// System One decisions.
 package yzma
