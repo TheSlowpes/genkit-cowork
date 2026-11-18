@@ -54,7 +54,7 @@ var nativeRuntime struct {
 	sync.Mutex
 	path        string
 	initialized bool
-	mtmdLoaded  bool
+	mediaLoaded bool
 }
 
 type defaultModelOperator struct{}
@@ -125,9 +125,9 @@ func (defaultModelOperator) FreeModel(ctx context.Context, model llama.Model) er
 	return llama.ModelFree(model)
 }
 
-// generator holds one registration's weights. gate protects the handle and
-// serializes loading, use, and cleanup. It remains held throughout generation
-// so an inference context cannot outlive the weights it references.
+// generator holds one registration's weights and optional media companion.
+// gate serializes loading, use, and cleanup, so request resources cannot
+// outlive the model, projector, or speech decoder they reference.
 type generator struct {
 	model         ModelDefinition
 	operator      ModelOperator
@@ -137,9 +137,10 @@ type generator struct {
 	closed        <-chan struct{}
 	loaded        llama.Model
 	speechDecoder mtmd.Context
+	projector     ProjectorHandle
 }
 
-// acquire loads weights if needed and reserves their use until release.
+// acquire loads weights and any media companion, then reserves them until release.
 func (g *generator) acquire(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -155,7 +156,8 @@ func (g *generator) acquire(ctx context.Context) error {
 		g.release()
 		return err
 	}
-	if g.loaded == 0 || (g.model.Type == ModelTypeSpeech && g.speechDecoder == 0) {
+	if g.loaded == 0 || (g.model.Type == ModelTypeSpeech && g.speechDecoder == 0) ||
+		(g.model.Projector != nil && g.projector == 0) {
 		if err := g.load(ctx); err != nil {
 			g.release()
 			return fmt.Errorf("load model %q: %w", g.model.Name, err)
@@ -168,19 +170,19 @@ func (g *generator) acquire(ctx context.Context) error {
 	return nil
 }
 
-// ensureMTMD loads the process-global multimodal bindings on first use. Text
+// loadMediaLibrary loads the process-global multimodal bindings on first use. Text
 // models do not require the library, and media actions share the loaded bindings.
-func ensureMTMD(ctx context.Context) error {
+func loadMediaLibrary(ctx context.Context) error {
 	nativeRuntime.Lock()
 	defer nativeRuntime.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if !nativeRuntime.mtmdLoaded {
+	if !nativeRuntime.mediaLoaded {
 		if err := mtmd.Load(nativeRuntime.path); err != nil {
 			return fmt.Errorf("load libmtmd: %w", err)
 		}
-		nativeRuntime.mtmdLoaded = true
+		nativeRuntime.mediaLoaded = true
 	}
 	return nil
 }
@@ -207,11 +209,18 @@ func (g *generator) load(ctx context.Context) error {
 		}
 		g.loaded = model
 	}
-	if g.model.Type != ModelTypeSpeech {
-		return nil
-	}
-	if err := g.loadSpeechDecoder(ctx); err != nil {
-		return errors.Join(err, g.freeModel(context.WithoutCancel(ctx)))
+	switch {
+	case g.model.Type == ModelTypeSpeech:
+		if err := g.loadSpeechDecoder(ctx); err != nil {
+			return errors.Join(err, g.freeModel(context.WithoutCancel(ctx)))
+		}
+	case g.model.Projector != nil:
+		if err := g.available(ctx); err != nil {
+			return err
+		}
+		if err := g.loadProjector(ctx); err != nil {
+			return fmt.Errorf("load projector: %w", err)
+		}
 	}
 	return nil
 }
@@ -253,6 +262,12 @@ func (g *generator) freeModel(ctx context.Context) error {
 		}
 		g.speechDecoder = 0
 	}
+	if g.projector != 0 {
+		if err := g.operator.(MediaGenerationOperator).FreeProjector(ctx, g.projector); err != nil {
+			return err
+		}
+		g.projector = 0
+	}
 	if g.loaded == 0 {
 		return nil
 	}
@@ -265,6 +280,7 @@ func (g *generator) freeModel(ctx context.Context) error {
 
 // cloneModelDefinition snapshots caller-owned configuration at registration.
 func cloneModelDefinition(model ModelDefinition) ModelDefinition {
+	model.Projector = cloneValue(model.Projector)
 	model.Loading.NGPULayers = cloneValue(model.Loading.NGPULayers)
 	model.Loading.MainGPU = cloneValue(model.Loading.MainGPU)
 	model.Loading.DeviceSelection = slices.Clone(model.Loading.DeviceSelection)

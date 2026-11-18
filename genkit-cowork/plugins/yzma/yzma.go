@@ -51,7 +51,7 @@ var _ api.DynamicPlugin = (*Yzma)(nil)
 
 // Yzma registers local models backed by Yzma's in-process llama.cpp bindings.
 // Init initializes the runtime and catalogs installed models. Neither discovery
-// nor DefineModel loads weights. Call Close to free loaded models.
+// nor DefineModel loads weights. Call Close to free models and media companions.
 // Configuration fields must not be mutated after Init.
 type Yzma struct {
 	LibPath   string // Path to the llama.cpp library. If empty, the value of the environment variable YZMA_LIB will be used.
@@ -148,6 +148,11 @@ func (y *Yzma) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.Mod
 	if model.ChatTemplate != "" && model.ChatTemplateName != "" {
 		panic("yzma.DefineModel: choose ChatTemplate or ChatTemplateName, not both")
 	}
+	if model.Projector != nil {
+		if err := validateProjectorOptions(model); err != nil {
+			panic("yzma.DefineModel: " + err.Error())
+		}
+	}
 	if opts != nil && opts.Supports != nil {
 		panic("yzma.DefineModel: capabilities are determined by model type; leave ModelOptions.Supports unset")
 	}
@@ -178,11 +183,17 @@ func (y *Yzma) modelMetadata(model ModelDefinition, opts *ai.ModelOptions) *ai.M
 		Label:        provider + " - " + model.Name,
 		Supports:     modelSupports(model.Type, model.ToolCalling, y.operator),
 	}
-	if model.Type == ModelTypeSpeech {
+	switch {
+	case model.Type == ModelTypeSpeech:
 		meta.ConfigSchema = core.InferSchemaMap(SpeechConfig{})
 		meta.Supports = &ai.ModelSupports{
 			Output: []string{ai.OutputFormatMedia}, ContentType: []string{speechMIME},
 		}
+	case model.Projector != nil:
+		_, meta.Supports.Media = y.operator.(MediaGenerationOperator)
+		meta.Supports.Constrained = ai.ConstrainedSupportNone
+		meta.Supports.Output = []string{"text"}
+		meta.Supports.ContentType = []string{"text/plain"}
 	}
 	if opts != nil {
 		if opts.Label != "" {
@@ -204,6 +215,9 @@ func (y *Yzma) newGenerator(model ModelDefinition) *generator {
 func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
 	if g.model.Type == ModelTypeSpeech {
 		return g.generateSpeech(ctx, input, cb)
+	}
+	if g.model.Projector != nil {
+		return g.generateMedia(ctx, input, cb)
 	}
 	constraint, err := prepareConstraint(input)
 	if err != nil {
@@ -305,6 +319,10 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 			}
 		}
 	}
+	return generationResponse(input, result, parts), nil
+}
+
+func generationResponse(input *ai.ModelRequest, result TextGenerationResult, parts []*ai.Part) *ai.ModelResponse {
 	reason := ai.FinishReasonStop
 	if result.Limited {
 		reason = ai.FinishReasonLength
@@ -316,10 +334,10 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 			InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
 			TotalTokens: result.InputTokens + result.OutputTokens,
 		},
-	}, nil
+	}
 }
 
-// Preload loads a registered model's weights without running generation.
+// Preload loads a registered model's weights and any media companion without inference.
 // Concurrent calls share a successful load. A failed load can be retried.
 // name is the unprefixed name supplied to DefineModel or resolved through Model.
 func (y *Yzma) Preload(ctx context.Context, name string) error {
@@ -347,7 +365,7 @@ func (y *Yzma) Preload(ctx context.Context, name string) error {
 	return nil
 }
 
-// Close rejects new work, waits for active model use, and frees loaded weights.
+// Close rejects new work, waits for active use, and frees media companions and weights.
 // If ctx expires or cleanup fails, call Close again to finish releasing resources.
 // The process-wide native runtime stays initialized so other plugin instances
 // can continue using it. Close does not unload shared libraries or backends.

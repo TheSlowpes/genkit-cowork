@@ -184,6 +184,10 @@ func discoverModels(ctx context.Context, dir string) map[string]ModelDefinition 
 			continue
 		}
 		model.Type = typ
+		if err := discoverProjector(filename, files, &model); err != nil {
+			skip(file.path, err)
+			continue
+		}
 		catalog[id] = model
 	}
 	return catalog

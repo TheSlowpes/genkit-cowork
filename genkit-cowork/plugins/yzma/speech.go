@@ -198,7 +198,7 @@ func validSpeechWAV(wav []byte) bool {
 }
 
 func (defaultModelOperator) LoadSpeechDecoder(ctx context.Context, model llama.Model, path string, opts ModelOptions, inference ContextOptions) (mtmd.Context, error) {
-	if err := ensureMTMD(ctx); err != nil {
+	if err := loadMediaLibrary(ctx); err != nil {
 		return 0, err
 	}
 	if _, err := mtmd.HelperGenAudioInputDefault(); err != nil {

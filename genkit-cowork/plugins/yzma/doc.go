@@ -22,9 +22,10 @@
 // Genkit executes the tools; the plugin renders schemas and history and parses
 // calls using Yzma's family parsers. Chat and completion can generate constrained
 // JSON objects through genkit.GenerateData, without tools or streaming. See the
-// package README for the supported schema subset. ModelTypeSpeech turns one
-// text prompt into a complete WAV clip using a Soprano backbone and matching
-// decoder. Speech output does not require media input.
+// package README for the supported schema subset. Vision chat accepts ordered
+// inline JPEG and PNG parts through a compatible projector, without tools or
+// structured output. ModelTypeSpeech turns one text prompt into a WAV clip
+// using a Soprano backbone and matching decoder. It does not accept media input.
 //
 // Pass a Yzma instance to genkit.WithPlugins to discover models in ModelsDir
 // or Yzma's default directory. The catalog is fixed at initialization. Restart
@@ -35,7 +36,7 @@
 // Embedded GGUF templates are rendered with a full Jinja engine, including
 // named templates, BOS/EOS variables, and typed tool arguments and results.
 // Each plugin instance loads at most one model at a time. Close rejects new
-// work and frees weights after active use completes.
+// work and frees projectors, speech decoders, and model weights after active use.
 // Native shared libraries and backends remain initialized for the process
 // lifetime; all default-operator plugins must use the same library directory.
 // Applications must not independently unload the Yzma runtime while using this
@@ -49,5 +50,6 @@
 // version. See https://yzma.ai/getting-started/install/ for installation.
 // The examples/yzma-loading program demonstrates discovery in the Genkit Dev UI,
 // explicit registration, and cleanup. See examples/yzma-structured for typed
-// output and examples/yzma-speech for saving a generated WAV.
+// output, examples/yzma-vision for an inline image request, and
+// examples/yzma-speech for saving a generated WAV.
 package yzma

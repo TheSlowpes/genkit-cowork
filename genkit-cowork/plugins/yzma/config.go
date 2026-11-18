@@ -41,6 +41,9 @@ type ModelDefinition struct {
 
 	Loading ModelOptions   `json:"loading"`
 	Context ContextOptions `json:"context,omitempty"`
+	// Projector enables inline media on a chat model. Set it explicitly
+	// when discovery cannot identify a unique compatible projector.
+	Projector *ProjectorOptions `json:"projector,omitempty"`
 
 	// SpeechDecoderPath is the companion mmproj GGUF for ModelTypeSpeech.
 	// Leave it empty for other model types.
@@ -60,6 +63,12 @@ type ModelDefinition struct {
 
 	// Set only for discovered or explicitly defined embedders.
 	embedding embeddingSpec
+}
+
+// ProjectorOptions identifies a paired GGUF and its enabled input capabilities.
+type ProjectorOptions struct {
+	GGUFPath string `json:"ggufPath"`
+	Images   bool   `json:"images,omitempty"`
 }
 
 // ModelOptions controls weight loading. Changing these options requires reloading

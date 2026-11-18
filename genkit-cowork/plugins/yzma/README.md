@@ -9,8 +9,9 @@ decoder-only models. Weights load on demand, and each request gets a fresh
 inference context and sampler. Tool calling requires an explicit definition
 for a tool-capable chat model with a tool-aware template.
 Chat and completion also support schema-constrained JSON objects without tools
-or streaming. Explicitly registered Soprano models synthesize speech from text
-without accepting media input.
+or streaming. Vision chat models accept inline JPEG and PNG images.
+Explicitly registered Soprano models synthesize speech from text without
+accepting media input.
 
 ## Installation
 
@@ -102,6 +103,7 @@ GGUFs stay out of the list. On a recognized decoder, a valid default embedded
 template selects chat formatting; no template selects raw continuation. A
 file with only named templates needs an explicit definition. BERT embedding
 models follow the separate [embedding rules](#local-text-embeddings).
+SmolVLM discovery also checks for a [compatible projector](#ask-a-vision-model-about-an-image).
 
 These are checks for a usable text path, not proof of training intent,
 tool-calling support, native compatibility, or available memory. For example,
@@ -629,4 +631,54 @@ overflow:
 YZMA_LIB="$HOME/.local/lib/yzma" YZMA_TEST_TYPE=embedding \
   YZMA_TEST_MODEL="$HOME/models/bge-small-en-v1.5-q4_k_m.gguf" \
   task test:yzma:native -- -run '^TestNativeDiscoveredEmbedding$'
+```
+
+## Ask a vision model about an image
+
+Use the public [SmolVLM 256M Instruct GGUF pair](https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF):
+`SmolVLM-256M-Instruct-Q8_0.gguf` (175 MB) and
+`mmproj-SmolVLM-256M-Instruct-Q8_0.gguf` (104 MB). Put both files in
+`$HOME/models`. The library directory in `YZMA_LIB` must contain `mtmd`
+alongside the llama.cpp libraries. From the repository root:
+
+```sh
+export YZMA_LIB="$HOME/.local/lib/yzma"
+task setup
+task dev:yzma:vision -- \
+  -model "$HOME/models/SmolVLM-256M-Instruct-Q8_0.gguf" \
+  -projector "$HOME/models/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf" \
+  -image "$(go env GOMODCACHE)/github.com/hybridgroup/yzma@v1.33.0/images/domestic_llama.jpg"
+```
+
+The program reads the photo and sends it inline between text parts. Expect an
+`Answer:` line naming the animal in the photo, such as `Answer: A llama.`
+Use `-question` to ask a different question.
+
+Discovery recognizes SmolVLM decoders and matches the projector by GGUF model
+name, projector type and projection width. When several compatible projectors
+are installed, `mmproj-<decoder filename>` selects the same quantization.
+Otherwise, discovery requires exactly one compatible projector. If none match
+or the match is ambiguous, register the decoder with `DefineModel` and set
+`Projector: &yzma.ProjectorOptions{GGUFPath: path, Images: true}`. Projectors are
+never standalone Genkit actions. Other vision families require explicit pairing
+and a compatible chat template that accepts string message content. Only the
+SmolVLM pair above is verified here.
+
+- Send `ai.NewMediaPart("image/png", "data:image/png;base64,...")` or the JPEG
+  equivalent in a user message. The plugin does not fetch URLs or open paths.
+- The limits per request are four images, 4 MiB per image, and 8 MiB total
+  before base64 encoding. Width and height must each be at most 2048 pixels.
+  The resulting image and text tokens must also fit the model's context.
+- Vision requests can stream text. Tools, structured output, audio, and video
+  are not supported. The model and projector load lazily and stay resident
+  until `Close`, which frees the projector before its model. Use a fresh cleanup
+  context if the request or application context has been canceled.
+
+The native test sends two colored images in both orders through Genkit and
+checks that the model identifies the first image:
+
+```sh
+YZMA_TEST_MODEL="$HOME/models/SmolVLM-256M-Instruct-Q8_0.gguf" \
+YZMA_TEST_PROJECTOR="$HOME/models/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf" \
+  task test:yzma:native -- -run '^TestNativeVisionGeneration$'
 ```

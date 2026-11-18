@@ -327,13 +327,17 @@ type nativeTokenSession struct {
 	vocab   llama.Vocab
 	sampler llama.Sampler
 	special bool
+	// Media prefill can advance positions differently from the token count.
+	position *llama.Pos
 }
 
 func (s nativeTokenSession) Decode(ctx context.Context, tokens []llama.Token) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	code, err := llama.Decode(s.ctx, llama.BatchGetOne(tokens))
+	batch := llama.BatchGetOne(tokens)
+	batch.Pos = s.position
+	code, err := llama.Decode(s.ctx, batch)
 	runtime.KeepAlive(tokens)
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -343,6 +347,9 @@ func (s nativeTokenSession) Decode(ctx context.Context, tokens []llama.Token) er
 	}
 	if code != 0 {
 		return fmt.Errorf("llama.Decode returned status %d", code)
+	}
+	if s.position != nil {
+		*s.position += llama.Pos(len(tokens))
 	}
 	return nil
 }
@@ -390,8 +397,14 @@ func generateTokens(ctx context.Context, session tokenSession, prompt []llama.To
 			return result, fmt.Errorf("decode prompt: %w", err)
 		}
 	}
+	return sampleTokens(ctx, session, len(prompt), capacity-len(prompt), input, onText)
+}
+
+// sampleTokens starts from logits left by a successful text or media prefill.
+func sampleTokens(ctx context.Context, session tokenSession, inputTokens, remaining int, input TextGenerationInput, onText func(context.Context, string) error) (TextGenerationResult, error) {
+	result := TextGenerationResult{InputTokens: inputTokens}
 	output := textOutput{stops: input.StopSequences, onText: onText}
-	limit := min(input.MaxOutputTokens, capacity-len(prompt))
+	limit := min(input.MaxOutputTokens, remaining)
 	for range limit {
 		if err := ctx.Err(); err != nil {
 			return result, err

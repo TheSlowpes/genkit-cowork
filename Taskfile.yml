@@ -97,3 +97,8 @@ tasks:
       - ': "${YZMA_TEST_SPEECH_MODEL:?Set YZMA_TEST_SPEECH_MODEL to the Soprano backbone GGUF}"'
       - ': "${YZMA_TEST_SPEECH_DECODER:?Set YZMA_TEST_SPEECH_DECODER to the Soprano mmproj GGUF}"'
       - go test ./genkit-cowork/plugins/yzma -run '^TestNativeSpeech$' -v -count=1
+
+  dev:yzma:vision:
+    desc: Ask a local Yzma vision model about an inline image
+    cmds:
+      - go run ./examples/yzma-vision {{.CLI_ARGS}}
