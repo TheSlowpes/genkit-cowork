@@ -6,6 +6,12 @@ A coworking framework for [Firebase Genkit](https://github.com/firebase/genkit) 
 go get github.com/TheSlowpes/genkit-cowork
 ```
 
+## Development
+
+Install [Task](https://taskfile.dev/installation/) and the Go version in
+`go.mod`. Run `task --list` to see the available commands and `task ci` to
+run the same checks as GitHub Actions.
+
 ## Quick Start
 
 ### 1. Create a Genkit instance and session store

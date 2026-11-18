@@ -265,7 +265,7 @@ these commands from the repository root:
 
 ```sh
 export YZMA_LIB=/path/to/libs
-genkit start -- go run ./examples/yzma-loading -model /path/to/model.gguf -serve
+task dev:yzma:ui -- -model /path/to/model.gguf
 ```
 
 Open the Dev UI at the address printed by Genkit. Under **Models**, select
@@ -277,8 +277,7 @@ For a base model, use `-type completion` and select `yzma/local-completion` unde
 Models. Supply a single text prompt; this mode does not support a multi-turn chat:
 
 ```sh
-genkit start -- go run ./examples/yzma-loading \
-  -model ~/models/SmolLM2-135M.Q4_K_M.gguf -type completion -serve
+task dev:yzma:ui -- -model ~/models/SmolLM2-135M.Q4_K_M.gguf -type completion
 ```
 
 The example uses embedded Jinja templates automatically, including the template
@@ -289,8 +288,7 @@ format; the plugin does not guess a replacement.
 To test tools with your Gemma 4 model:
 
 ```sh
-genkit start -- go run ./examples/yzma-loading \
-  -model ~/models/gemma-4-E4B-it-Q4_0.gguf -tools -serve
+task dev:yzma:ui -- -model ~/models/gemma-4-E4B-it-Q4_0.gguf -tools
 ```
 
 Select **Flows → localChat**, and use `{"prompt":"Use add to calculate 2 + 3."}`.
@@ -303,7 +301,7 @@ whether an `auto` request chooses the tool.
 From the repository root, load and release a model on the CPU without inference:
 
 ```sh
-YZMA_LIB=/path/to/libs go run ./examples/yzma-loading -model /path/to/model.gguf
+YZMA_LIB=/path/to/libs task dev:yzma -- -model /path/to/model.gguf
 ```
 
 The [example](../../../examples/yzma-loading/main.go) handles cancellation and
@@ -313,14 +311,14 @@ To generate a single response with a 256-token limit, add `-prompt`.
 `-max-tokens` changes the per-call limit:
 
 ```sh
-YZMA_LIB=/path/to/libs go run ./examples/yzma-loading \
+YZMA_LIB=/path/to/libs task dev:yzma -- \
   -model /path/to/model.gguf -prompt "Say hello."
 ```
 
 To continue a raw prompt with a base model:
 
 ```sh
-YZMA_LIB=/path/to/libs go run ./examples/yzma-loading \
+YZMA_LIB=/path/to/libs task dev:yzma -- \
   -model ~/models/SmolLM2-135M.Q4_K_M.gguf \
   -type completion -prompt "Once upon a time"
 ```
@@ -331,24 +329,24 @@ Run from the repository root. Unit tests use a custom `ModelOperator` and requir
 no native installation:
 
 ```sh
-go test -race ./genkit-cowork/plugins/yzma
+task test:yzma:race
 ```
 
-To exercise actual loading and streaming generation with existing native libraries
-and a local model:
+To exercise loading, streaming generation, and the embedded template with
+existing native libraries and a local model:
 
 ```sh
-YZMA_LIB=/path/to/libs YZMA_TEST_MODEL=/path/to/model.gguf \
-  go test ./genkit-cowork/plugins/yzma -run 'TestNative(ModelLoading|TextGeneration)' -v
+YZMA_LIB=/path/to/libs YZMA_TEST_MODEL=/path/to/model.gguf task test:yzma:native
 ```
 
-Native tests skip unless both environment variables are set. They do not download
-models. `YZMA_TEST_TYPE=completion` selects raw completion for a base model; the
-default is chat. `YZMA_TEST_TEMPLATE` optionally overrides the chat template.
+The native task requires both paths and does not download models. `YZMA_TEST_TYPE=completion`
+selects raw completion for a base model; the default is chat. `YZMA_TEST_TEMPLATE`
+optionally overrides the chat template. The embedded template test skips models
+without an embedded chat template.
 
-To test the actual embedded Gemma 4 template without allocating model weights:
+To test the embedded template without allocating model weights:
 
 ```sh
 YZMA_LIB=/path/to/libs YZMA_TEST_MODEL=~/models/gemma-4-E4B-it-Q4_0.gguf \
-  go test ./genkit-cowork/plugins/yzma -run '^TestNativeEmbeddedTemplate$' -v
+  task test:yzma:native -- -run '^TestNativeEmbeddedTemplate$'
 ```

@@ -1,6 +1,8 @@
 .genkit
 .opencode
-docs/
 skills/
-./docs/
 ./skills/
+docs/
+!/docs/
+/docs/*
+!/docs/agents/

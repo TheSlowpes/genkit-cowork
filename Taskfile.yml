@@ -1,0 +1,79 @@
+version: '3'
+
+tasks:
+  setup:
+    desc: Download Go module dependencies
+    cmds:
+      - go mod download
+
+  fmt:
+    desc: Format Go source
+    cmds:
+      - go fmt ./...
+
+  check:
+    desc: Check Go formatting and run go vet
+    cmds:
+      - |
+        unformatted=$(gofmt -l examples genkit-cowork) || exit 1
+        if [ -n "$unformatted" ]; then
+          printf 'Run task fmt. Unformatted files:\n%s\n' "$unformatted" >&2
+          exit 1
+        fi
+      - go vet ./...
+
+  test:
+    desc: Run the Go unit tests without native Yzma assets
+    env:
+      YZMA_TEST_MODEL: ''
+    cmds:
+      - go test ./...
+
+  build:
+    desc: Compile all Go packages and examples
+    cmds:
+      - go build ./...
+
+  ci:
+    desc: Run the same setup, checks, tests, and build as Linux CI
+    cmds:
+      - task: setup
+      - task: check
+      - task: test
+      - task: build
+
+  dev:
+    desc: Run the terminal chat example with GEMINI_API_KEY and optional READ_ONLY
+    cmds:
+      - ': "${GEMINI_API_KEY:?Set GEMINI_API_KEY before running task dev}"'
+      - go run ./examples/tui-chat
+
+  dev:pgvector:
+    desc: Run the pgvector demo against a disposable database with PGVECTOR_DSN
+    cmds:
+      - ': "${PGVECTOR_DSN:?Set PGVECTOR_DSN to a disposable demo database}"'
+      - go run ./examples/pgvector
+
+  dev:yzma:
+    desc: Run the Yzma example with YZMA_LIB and model flags after --
+    cmds:
+      - go run ./examples/yzma-loading {{.CLI_ARGS}}
+
+  dev:yzma:ui:
+    desc: Run the Yzma example in Genkit Dev UI with YZMA_LIB and model flags after --
+    cmds:
+      - genkit start -- go run ./examples/yzma-loading -serve {{.CLI_ARGS}}
+
+  test:yzma:race:
+    desc: Run Yzma unit tests with the Go race detector
+    env:
+      YZMA_TEST_MODEL: ''
+    cmds:
+      - go test -race ./genkit-cowork/plugins/yzma
+
+  test:yzma:native:
+    desc: Run native Yzma tests with YZMA_LIB and YZMA_TEST_MODEL. Pass -run after -- to narrow the selection
+    cmds:
+      - ': "${YZMA_LIB:?Set YZMA_LIB to the native library directory}"'
+      - ': "${YZMA_TEST_MODEL:?Set YZMA_TEST_MODEL to a local GGUF model}"'
+      - go test ./genkit-cowork/plugins/yzma -run '^TestNative' -v {{.CLI_ARGS}}
