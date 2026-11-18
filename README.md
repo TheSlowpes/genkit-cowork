@@ -426,9 +426,9 @@ Plugins can be used independently of the rest of the framework.
 | Plugin | Purpose |
 | --- | --- |
 | [Skills](#skills) | Discover and load domain knowledge from `SKILL.md` files |
-| [Yzma](genkit-cowork/plugins/yzma/README.md) | Discover and run local GGUFs in-process with streaming chat, raw completion, explicit tool calling, or constrained JSON output |
+| [Yzma](genkit-cowork/plugins/yzma/README.md) | Run local GGUFs in-process for streaming chat, raw completion, tool calling, constrained JSON output, or speech synthesis |
 
-The Yzma guide includes Dev UI discovery and typed output examples, plus instructions for explicit registration, preloading, and cleanup.
+The Yzma guide includes Dev UI discovery, typed output, and [local speech synthesis](genkit-cowork/plugins/yzma/README.md#speech-output) examples.
 
 The [Yzma embedding example](genkit-cowork/plugins/yzma/README.md#run-the-embedding-example) embeds text locally through Genkit.
 

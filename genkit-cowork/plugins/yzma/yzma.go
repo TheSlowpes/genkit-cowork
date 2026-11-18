@@ -136,8 +136,11 @@ func (y *Yzma) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.Mod
 	if strings.TrimSpace(model.Name) == "" {
 		panic("yzma.DefineModel: name must not be empty")
 	}
-	if model.Type != ModelTypeChat && model.Type != ModelTypeCompletion {
-		panic(fmt.Sprintf("yzma.DefineModel: unsupported model type %q; use chat or completion", model.Type))
+	if model.Type != ModelTypeChat && model.Type != ModelTypeCompletion && model.Type != ModelTypeSpeech {
+		panic(fmt.Sprintf("yzma.DefineModel: unsupported model type %q; use chat, completion, or speech", model.Type))
+	}
+	if err := validateSpeechDefinition(model, y.operator); err != nil {
+		panic("yzma.DefineModel: " + err.Error())
 	}
 	if model.Type == ModelTypeCompletion && (model.ChatTemplate != "" || model.ChatTemplateName != "" || model.ToolCalling) {
 		panic("yzma.DefineModel: completion models cannot use chat templates or tools")
@@ -175,6 +178,12 @@ func (y *Yzma) modelMetadata(model ModelDefinition, opts *ai.ModelOptions) *ai.M
 		Label:        provider + " - " + model.Name,
 		Supports:     modelSupports(model.Type, model.ToolCalling, y.operator),
 	}
+	if model.Type == ModelTypeSpeech {
+		meta.ConfigSchema = core.InferSchemaMap(SpeechConfig{})
+		meta.Supports = &ai.ModelSupports{
+			Output: []string{ai.OutputFormatMedia}, ContentType: []string{speechMIME},
+		}
+	}
 	if opts != nil {
 		if opts.Label != "" {
 			meta.Label = opts.Label
@@ -193,6 +202,9 @@ func (y *Yzma) newGenerator(model ModelDefinition) *generator {
 }
 
 func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
+	if g.model.Type == ModelTypeSpeech {
+		return g.generateSpeech(ctx, input, cb)
+	}
 	constraint, err := prepareConstraint(input)
 	if err != nil {
 		return nil, err

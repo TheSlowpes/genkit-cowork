@@ -9,7 +9,8 @@ decoder-only models. Weights load on demand, and each request gets a fresh
 inference context and sampler. Tool calling requires an explicit definition
 for a tool-capable chat model with a tool-aware template.
 Chat and completion also support schema-constrained JSON objects without tools
-or streaming. Media processing is not supported.
+or streaming. Explicitly registered Soprano models synthesize speech from text
+without accepting media input.
 
 ## Installation
 
@@ -179,7 +180,7 @@ model, first resolve it with `yzma.Model` or a Genkit model lookup. Both
 resolve names without loading weights.
 Preloading is optional: the first generation call loads the model when necessary.
 
-### Chat versus completion
+### Choose a model type
 
 `ModelDefinition.Type` is required for manual definitions. Choose the
 formatting that matches the model.
@@ -188,6 +189,7 @@ formatting that matches the model.
 | --- | --- | --- |
 | `yzma.ModelTypeChat` | System, user, and assistant messages formatted with a chat template | Multi-turn and system role |
 | `yzma.ModelTypeCompletion` | Exactly one user text message, tokenized directly | Single-turn text completion |
+| `yzma.ModelTypeSpeech` | Exactly one user text message | Complete WAV output, no media input |
 
 For a base model without a chat template, register it as a completion model:
 
@@ -236,13 +238,15 @@ Yzma's native runtime while the plugin is in use.
 | --- | --- |
 | `Yzma.LibPath` | Native library directory; falls back to `YZMA_LIB` |
 | `Yzma.ModelsDir` | Catalog directory; falls back to Yzma's default |
-| `ModelDefinition.Type` | Required chat or completion mode |
+| `ModelDefinition.Type` | Required chat, completion, or speech mode |
 | `ModelDefinition.ToolCalling` | Opt into tool calling for a capable chat model |
 | `ModelDefinition.ChatTemplateName` | Select a named template embedded in the GGUF |
 | `ModelDefinition.Loading` | GGUF path, GPU placement, and weight-loading modes |
 | `ModelDefinition.Context` | Token capacity, batch sizes, and CPU threads |
 | `ModelDefinition.GenerationDefaults` | Sampling and output defaults |
 | `GenerateContentConfig` | Per-request sampling and output overrides |
+| `ModelDefinition.SpeechDecoderPath` | Required companion mmproj GGUF for speech |
+| `SpeechConfig` | Per-request voice for speech |
 
 Context and generation settings are applied on each request. `Verbose` is
 reserved for future native logging configuration.
@@ -382,6 +386,64 @@ YZMA_LIB="$HOME/.local/lib/yzma" task dev:yzma:structured -- \
 Expected output: `Decoded Go value: {Code:YZMA}`. The prompt asks for plain text,
 but the schema permits only a JSON object with the `code` value `"YZMA"`.
 The example uses the CPU and does not download model files.
+
+## Speech output
+
+Register a Soprano backbone with `Type: yzma.ModelTypeSpeech` and set
+`SpeechDecoderPath` to its matching `mmproj` GGUF. The companion holds the decoder
+that converts model output to audio. Speech pairs require explicit registration;
+text discovery does not select the decoder. The backbone and decoder load
+together on first use or `Preload`. Both stay resident until `Close`. Speech
+uses Yzma v1.33.0's in-process `libmtmd` audio generation helpers, verified on
+llama.cpp `b12359`. No `llama-tts` executable or media input is needed.
+
+Call `genkit.Generate` with one user message of plain English text. Soprano uses
+its fixed voice when `SpeechConfig.Voice` is omitted or set to `"default"`. Any
+other name returns an error, as do audio input, tools, and streaming. The prompt
+must fit in 1024 UTF-8 bytes. If generation reaches its 512-frame limit or runs
+out of context before the end of speech, the plugin returns an error instead of
+partial audio.
+
+The response has one `audio/wav` media part and a `stop` finish reason.
+`res.Media()` returns `data:audio/wav;base64,<payload>`. Remove that prefix and
+base64-decode the payload to get a mono, little-endian, signed 16-bit PCM WAV at
+32,000 Hz. Do not set a Genkit output formatter; Genkit v1.9 has no built-in
+media formatter, and the registered model already selects the output format.
+
+Run the [speech example](../../../examples/yzma-speech/main.go) with these two
+public files from [ggml-org/Soprano-1.1-80M-GGUF](https://huggingface.co/ggml-org/Soprano-1.1-80M-GGUF):
+
+| Artifact | Download size |
+| --- | ---: |
+| [Soprano-1.1-80M-Q8_0.gguf](https://huggingface.co/ggml-org/Soprano-1.1-80M-GGUF/resolve/main/Soprano-1.1-80M-Q8_0.gguf) | 84.9 MB |
+| [mmproj-Soprano-1.1-80M-F16.gguf](https://huggingface.co/ggml-org/Soprano-1.1-80M-GGUF/resolve/main/mmproj-Soprano-1.1-80M-F16.gguf) | 60.8 MB |
+
+Save both files under `$HOME/models/soprano`. From the repository root, point
+`YZMA_LIB` at your Yzma library installation and run:
+
+```sh
+export YZMA_LIB="$HOME/.local/lib/yzma"
+SPEECH_MODELS="$HOME/models/soprano"
+task dev:yzma:speech -- \
+  -model "$SPEECH_MODELS/Soprano-1.1-80M-Q8_0.gguf" \
+  -decoder "$SPEECH_MODELS/mmproj-Soprano-1.1-80M-F16.gguf" \
+  -voice default -text "Hello from Genkit." -out speech.wav
+ffplay -autoexit -nodisp speech.wav
+```
+
+The example runs on CPU and writes a short clip that says "Hello from Genkit."
+You can also open `speech.wav` in any WAV player. To check the same pair through
+Genkit without writing a file:
+
+```sh
+YZMA_TEST_SPEECH_MODEL="$SPEECH_MODELS/Soprano-1.1-80M-Q8_0.gguf" \
+YZMA_TEST_SPEECH_DECODER="$SPEECH_MODELS/mmproj-Soprano-1.1-80M-F16.gguf" \
+  task test:yzma:speech:native
+```
+
+The native test uses existing local files. Unit tests and CI do not need the
+model or `libmtmd`. A custom `ModelOperator` must implement `SpeechOperator`
+to register a speech model.
 
 ## Run an explicit definition in the Genkit Dev UI
 

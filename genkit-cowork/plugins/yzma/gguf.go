@@ -183,7 +183,8 @@ func readGGUFHeader(ctx context.Context, path string) (ggufHeader, error) {
 			return h, fmt.Errorf("duplicate GGUF metadata key %q", key)
 		}
 		keep := key == "general.type" || key == "general.architecture" ||
-			key == "tokenizer.ggml.model" || key == "tokenizer.chat_template"
+			key == "tokenizer.ggml.model" || key == "tokenizer.chat_template" ||
+			key == "clip.gen.audio.projector_type"
 		v, err := r.value(keep)
 		if err != nil {
 			return h, fmt.Errorf("read GGUF metadata %q: %w", key, err)

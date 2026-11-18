@@ -25,6 +25,7 @@ import (
 	"sync"
 
 	"github.com/hybridgroup/yzma/pkg/llama"
+	"github.com/hybridgroup/yzma/pkg/mtmd"
 )
 
 var (
@@ -53,6 +54,7 @@ var nativeRuntime struct {
 	sync.Mutex
 	path        string
 	initialized bool
+	mtmdLoaded  bool
 }
 
 type defaultModelOperator struct{}
@@ -127,13 +129,14 @@ func (defaultModelOperator) FreeModel(ctx context.Context, model llama.Model) er
 // serializes loading, use, and cleanup. It remains held throughout generation
 // so an inference context cannot outlive the weights it references.
 type generator struct {
-	model    ModelDefinition
-	operator ModelOperator
-	explicit bool // Set only for DefineModel registrations.
-	gate     chan struct{}
-	loadGate chan struct{}
-	closed   <-chan struct{}
-	loaded   llama.Model
+	model         ModelDefinition
+	operator      ModelOperator
+	explicit      bool // Set only for DefineModel registrations.
+	gate          chan struct{}
+	loadGate      chan struct{}
+	closed        <-chan struct{}
+	loaded        llama.Model
+	speechDecoder mtmd.Context
 }
 
 // acquire loads weights if needed and reserves their use until release.
@@ -152,17 +155,11 @@ func (g *generator) acquire(ctx context.Context) error {
 		g.release()
 		return err
 	}
-	if g.loaded == 0 {
-		loaded, err := g.load(ctx)
-		if err != nil {
+	if g.loaded == 0 || (g.model.Type == ModelTypeSpeech && g.speechDecoder == 0) {
+		if err := g.load(ctx); err != nil {
 			g.release()
 			return fmt.Errorf("load model %q: %w", g.model.Name, err)
 		}
-		if loaded == 0 {
-			g.release()
-			return fmt.Errorf("load model %q: operator returned a zero handle", g.model.Name)
-		}
-		g.loaded = loaded
 	}
 	if err := g.available(ctx); err != nil {
 		g.release()
@@ -171,19 +168,52 @@ func (g *generator) acquire(ctx context.Context) error {
 	return nil
 }
 
-func (g *generator) load(ctx context.Context) (llama.Model, error) {
+// ensureMTMD loads the process-global multimodal bindings on first use. Text
+// models do not require the library, and media actions share the loaded bindings.
+func ensureMTMD(ctx context.Context) error {
+	nativeRuntime.Lock()
+	defer nativeRuntime.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !nativeRuntime.mtmdLoaded {
+		if err := mtmd.Load(nativeRuntime.path); err != nil {
+			return fmt.Errorf("load libmtmd: %w", err)
+		}
+		nativeRuntime.mtmdLoaded = true
+	}
+	return nil
+}
+
+func (g *generator) load(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
-		return 0, ctx.Err()
+		return ctx.Err()
 	case <-g.closed:
-		return 0, ErrClosed
+		return ErrClosed
 	case g.loadGate <- struct{}{}:
 	}
 	defer func() { <-g.loadGate }()
 	if err := g.available(ctx); err != nil {
-		return 0, err
+		return err
 	}
-	return g.operator.LoadModel(ctx, g.model.Loading)
+	if g.loaded == 0 {
+		model, err := g.operator.LoadModel(ctx, g.model.Loading)
+		if err != nil {
+			return err
+		}
+		if model == 0 {
+			return fmt.Errorf("operator returned a zero handle")
+		}
+		g.loaded = model
+	}
+	if g.model.Type != ModelTypeSpeech {
+		return nil
+	}
+	if err := g.loadSpeechDecoder(ctx); err != nil {
+		return errors.Join(err, g.freeModel(context.WithoutCancel(ctx)))
+	}
+	return nil
 }
 
 func (g *generator) available(ctx context.Context) error {
@@ -212,6 +242,16 @@ func (g *generator) close(ctx context.Context) error {
 	defer g.release()
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	return g.freeModel(ctx)
+}
+
+func (g *generator) freeModel(ctx context.Context) error {
+	if g.speechDecoder != 0 {
+		if err := g.operator.(SpeechOperator).FreeSpeechDecoder(ctx, g.speechDecoder); err != nil {
+			return err
+		}
+		g.speechDecoder = 0
 	}
 	if g.loaded == 0 {
 		return nil

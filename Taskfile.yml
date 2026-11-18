@@ -26,6 +26,7 @@ tasks:
     desc: Run the Go unit tests without native Yzma assets
     env:
       YZMA_TEST_MODEL: ''
+      YZMA_TEST_SPEECH_MODEL: ''
     cmds:
       - go test ./...
 
@@ -68,6 +69,7 @@ tasks:
     desc: Run Yzma unit tests with the Go race detector
     env:
       YZMA_TEST_MODEL: ''
+      YZMA_TEST_SPEECH_MODEL: ''
     cmds:
       - go test -race ./genkit-cowork/plugins/yzma
 
@@ -82,3 +84,16 @@ tasks:
     desc: Run the Yzma structured output example with YZMA_LIB and a local GGUF
     cmds:
       - go run ./examples/yzma-structured {{.CLI_ARGS}}
+
+  dev:yzma:speech:
+    desc: Save speech from a local Soprano GGUF pair with YZMA_LIB and model flags after --
+    cmds:
+      - go run ./examples/yzma-speech {{.CLI_ARGS}}
+
+  test:yzma:speech:native:
+    desc: Run native speech tests with YZMA_LIB, YZMA_TEST_SPEECH_MODEL, and YZMA_TEST_SPEECH_DECODER
+    cmds:
+      - ': "${YZMA_LIB:?Set YZMA_LIB to the native library directory}"'
+      - ': "${YZMA_TEST_SPEECH_MODEL:?Set YZMA_TEST_SPEECH_MODEL to the Soprano backbone GGUF}"'
+      - ': "${YZMA_TEST_SPEECH_DECODER:?Set YZMA_TEST_SPEECH_DECODER to the Soprano mmproj GGUF}"'
+      - go test ./genkit-cowork/plugins/yzma -run '^TestNativeSpeech$' -v -count=1

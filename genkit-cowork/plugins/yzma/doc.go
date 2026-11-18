@@ -22,7 +22,9 @@
 // Genkit executes the tools; the plugin renders schemas and history and parses
 // calls using Yzma's family parsers. Chat and completion can generate constrained
 // JSON objects through genkit.GenerateData, without tools or streaming. See the
-// package README for the supported schema subset. Media input is unsupported.
+// package README for the supported schema subset. ModelTypeSpeech turns one
+// text prompt into a complete WAV clip using a Soprano backbone and matching
+// decoder. Speech output does not require media input.
 //
 // Pass a Yzma instance to genkit.WithPlugins to discover models in ModelsDir
 // or Yzma's default directory. The catalog is fixed at initialization. Restart
@@ -46,5 +48,6 @@
 // Native loading requires llama.cpp libraries compatible with the pinned Yzma
 // version. See https://yzma.ai/getting-started/install/ for installation.
 // The examples/yzma-loading program demonstrates discovery in the Genkit Dev UI,
-// explicit registration, and cleanup. See examples/yzma-structured for typed output.
+// explicit registration, and cleanup. See examples/yzma-structured for typed
+// output and examples/yzma-speech for saving a generated WAV.
 package yzma

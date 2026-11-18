@@ -25,6 +25,8 @@ const (
 	ModelTypeChat ModelType = "chat"
 	// ModelTypeCompletion tokenizes one user text prompt without chat formatting.
 	ModelTypeCompletion ModelType = "completion"
+	// ModelTypeSpeech turns one user text prompt into a complete WAV clip.
+	ModelTypeSpeech ModelType = "speech"
 )
 
 // ModelDefinition describes a registered local model and its resource settings.
@@ -34,11 +36,15 @@ const (
 // inference context and sampler.
 type ModelDefinition struct {
 	Name string `json:"name"`
-	// Type is required and must be ModelTypeChat or ModelTypeCompletion.
+	// Type selects chat, completion, or speech and is required.
 	Type ModelType `json:"type"`
 
 	Loading ModelOptions   `json:"loading"`
 	Context ContextOptions `json:"context,omitempty"`
+
+	// SpeechDecoderPath is the companion mmproj GGUF for ModelTypeSpeech.
+	// Leave it empty for other model types.
+	SpeechDecoderPath string `json:"speechDecoderPath,omitempty"`
 
 	// ChatTemplate overrides the embedded template for chat models.
 	// Completion registrations must leave this empty.
@@ -49,7 +55,7 @@ type ModelDefinition struct {
 	// ToolCalling enables the tool adapter for a chat model trained to use tools.
 	// The plugin does not infer this capability from filenames or model families.
 	ToolCalling bool `json:"toolCalling,omitempty"`
-	// GenerationDefaults supplies sampling and output defaults for this model.
+	// GenerationDefaults supplies sampling and output defaults for text models.
 	GenerationDefaults *GenerateContentConfig `json:"generationDefaults,omitempty"`
 
 	// Set only for discovered or explicitly defined embedders.
