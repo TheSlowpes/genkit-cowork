@@ -20,7 +20,9 @@
 // decoder-only models, chat or raw completion, sampling settings, and stop sequences.
 // Chat models can opt into tool calling through ModelDefinition.ToolCalling.
 // Genkit executes the tools; the plugin renders schemas and history and parses
-// calls using Yzma's family parsers. Media and constrained output are unsupported.
+// calls using Yzma's family parsers. Chat and completion can generate constrained
+// JSON objects through genkit.GenerateData, without tools or streaming. See the
+// package README for the supported schema subset. Media input is unsupported.
 //
 // Pass a Yzma instance to genkit.WithPlugins, then call DefineModel for each
 // model. Preload checks loading before the application starts serving requests.
@@ -38,5 +40,5 @@
 // version. See https://yzma.ai/getting-started/install/ for installation.
 // The examples/yzma-loading program demonstrates loading and releasing a model
 // and optionally generating text. Its -serve flag keeps the process running for
-// the Genkit Dev UI.
+// the Genkit Dev UI. See examples/yzma-structured for typed output.
 package yzma

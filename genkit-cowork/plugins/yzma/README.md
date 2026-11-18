@@ -7,8 +7,8 @@ No Ollama or vLLM server is required.
 Supports lazy weight loading, explicit preloading, chat, raw text completion,
 streaming, and cleanup for decoder-only models. Each request gets a fresh inference context and
 sampler. Tool calling is available for chat models with a tool-aware template.
-Media processing and constrained structured output are not supported yet;
-unsupported requests return errors.
+Chat and completion also support schema-constrained JSON objects without tools.
+Media processing is not supported.
 
 ## Installation
 
@@ -258,6 +258,55 @@ flatten nested objects; those fail schema validation rather than being executed
 with changed argument structure. Use a parser/model format that preserves the
 required structure for tools with nested arguments.
 
+## Constrained structured output
+
+Use `genkit.GenerateData[T]` with a JSON-tagged Go struct. The plugin derives
+a llama.cpp grammar from the Genkit schema, applies it before token selection,
+and validates the raw output against the schema before Genkit decodes it into
+`T`. A prompt can still explain what the fields mean: Genkit does not add
+schema instructions in native constrained mode. A schema constrains shape and
+allowed values, not whether the model's answer is factually correct.
+
+The supported JSON Schema subset is:
+
+| Schema type | Supported keywords and rules |
+| --- | --- |
+| `object` | `properties`, `required`, `additionalProperties: false`. The root must be a closed object. Nested objects are also closed. The grammar writes properties in sorted order. |
+| `array` | `items` with a single schema from this subset. |
+| `string` | An optional `enum` of distinct strings. Ordinary strings use literal UTF-8 and standard short JSON escapes. |
+| `integer`, `number` | No extra keywords. To fit Genkit v1.9's float64 intermediate representation, the grammar allows up to 15 digits before the decimal point and up to two exponent digits. |
+| `boolean`, `null` | No extra keywords. |
+
+Every schema node must have one `type`. `title` and `description` are accepted
+as annotations. The plugin rejects any other keyword, including references,
+compositions, string patterns, size bounds, and numeric bounds. Schemas are
+limited to 64 KiB, 256 nodes, and 24 levels.
+
+Do not pass tools, tool history, streaming callbacks, or stop sequences to a
+constrained request. This includes tools supplied with `ToolChoiceNone`.
+Token or context exhaustion returns an error, even if a closing brace was
+already emitted. Increase the limit to allow the end-of-generation token.
+Genkit v1.9 can remove the schema and constraint flag when tools are supplied;
+the plugin rejects the remaining JSON request instead of using prompt-only
+generation. Leave the default JSON formatter in place when using
+`GenerateData[T]`. A formatter that discards all structured output settings
+before Genkit calls the model cannot be distinguished from a plain text request.
+Custom `ModelOperator` implementations must also implement
+`ConstrainedTextGenerationOperator` to advertise and run this feature.
+
+To run the [structured output example](../../../examples/yzma-structured/main.go),
+install the native libraries described above and use the base
+`SmolLM2-135M.Q4_K_M.gguf` in completion mode. From the repository root:
+
+```sh
+YZMA_LIB="$HOME/.local/lib/yzma" task dev:yzma:structured -- \
+  -model "$HOME/models/SmolLM2-135M.Q4_K_M.gguf"
+```
+
+Expected output: `Decoded Go value: {Code:YZMA}`. The prompt asks for plain text,
+but the schema permits only a JSON object with the `code` value `"YZMA"`.
+The example uses the CPU and does not download model files.
+
 ## Chat in the Genkit Dev UI
 
 Install the [Genkit CLI](https://genkit.dev/docs/devtools/) if needed, then run
@@ -343,6 +392,13 @@ The native task requires both paths and does not download models. `YZMA_TEST_TYP
 selects raw completion for a base model; the default is chat. `YZMA_TEST_TEMPLATE`
 optionally overrides the chat template. The embedded template test skips models
 without an embedded chat template.
+
+To verify constrained generation with the base SmolLM2 model:
+
+```sh
+YZMA_LIB="$HOME/.local/lib/yzma" YZMA_TEST_MODEL="$HOME/models/SmolLM2-135M.Q4_K_M.gguf" \
+  task test:yzma:native -- -run '^TestNativeStructuredOutput$'
+```
 
 To test the embedded template without allocating model weights:
 

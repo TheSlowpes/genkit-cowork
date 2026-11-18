@@ -169,7 +169,7 @@ func (y *Yzma) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.Mod
 	meta := &ai.ModelOptions{
 		ConfigSchema: core.InferSchemaMap(GenerateContentConfig{}),
 		Label:        provider + " - " + model.Name,
-		Supports:     modelSupports(model.Type, model.ToolCalling),
+		Supports:     modelSupports(model.Type, model.ToolCalling, y.operator),
 	}
 	if opts != nil {
 		if opts.Label != "" {
@@ -188,7 +188,28 @@ func (y *Yzma) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.Mod
 }
 
 func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
-	messages, err := generationMessages(input, g.model.ToolCalling)
+	constraint, err := prepareConstraint(input)
+	if err != nil {
+		return nil, err
+	}
+	messageInput, toolCalling := input, g.model.ToolCalling
+	var constrainedOperator ConstrainedTextGenerationOperator
+	if constraint != nil {
+		if cb != nil {
+			return nil, fmt.Errorf("yzma: constrained output does not support streaming")
+		}
+		var ok bool
+		constrainedOperator, ok = g.operator.(ConstrainedTextGenerationOperator)
+		if !ok {
+			return nil, fmt.Errorf("yzma: the model operator does not support constrained output")
+		}
+		// A constrained turn uses plain text messages even on a tool-capable
+		// registration. This rejects tool history and skips tool formatting.
+		textInput := *input
+		textInput.Output = nil
+		messageInput, toolCalling = &textInput, false
+	}
+	messages, err := generationMessages(messageInput, toolCalling)
 	if err != nil {
 		return nil, err
 	}
@@ -202,6 +223,9 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 	cfg, err := resolveGenerationConfig(nil, g.model.GenerationDefaults, requestConfig)
 	if err != nil {
 		return nil, err
+	}
+	if constraint != nil && len(cfg.StopSequences) > 0 {
+		return nil, fmt.Errorf("yzma: constrained output does not support stop sequences")
 	}
 	tools, err := convertTools(input.Tools)
 	if err != nil {
@@ -219,25 +243,41 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 		return nil, ErrGenerationNotImplemented
 	}
 	var onText func(context.Context, string) error
-	if cb != nil && !g.model.ToolCalling {
+	if cb != nil && !toolCalling {
 		onText = func(ctx context.Context, text string) error {
 			return cb(ctx, &ai.ModelResponseChunk{Content: []*ai.Part{ai.NewTextPart(text)}})
 		}
 	}
-	result, err := operator.GenerateText(ctx, g.loaded, TextGenerationInput{
+	generation := TextGenerationInput{
 		Type: g.model.Type, Messages: messages, ChatTemplate: g.model.ChatTemplate,
-		ChatTemplateName: g.model.ChatTemplateName, ToolCalling: g.model.ToolCalling, Tools: tools,
+		ChatTemplateName: g.model.ChatTemplateName, ToolCalling: toolCalling, Tools: tools,
 		Context: g.model.Context, Sampler: cfg.Sampler,
 		MaxOutputTokens: cfg.MaxOutputTokens, StopSequences: cfg.StopSequences,
-	}, onText)
+	}
+	var result TextGenerationResult
+	if constraint != nil {
+		result, err = constrainedOperator.GenerateConstrainedText(ctx, g.loaded, generation, constraint.grammar)
+	} else {
+		result, err = operator.GenerateText(ctx, g.loaded, generation, onText)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("generate with model %q: %w", g.model.Name, err)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if constraint != nil {
+		if err := constraint.validate(result); err != nil {
+			return nil, err
+		}
+		// Genkit v1.9 extracts Markdown fences even from inside a JSON
+		// string. Escape the backticks without changing the decoded value.
+		if strings.Contains(result.Text, "```") {
+			result.Text = strings.ReplaceAll(result.Text, "`", `\u0060`)
+		}
+	}
 	parts := []*ai.Part{ai.NewTextPart(result.Text)}
-	if g.model.ToolCalling {
+	if toolCalling {
 		parts, err = parsedToolParts(result, input.Tools, input.ToolChoice)
 		if err != nil {
 			return nil, err
@@ -318,8 +358,8 @@ func (y *Yzma) Close(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-func modelSupports(modelType ModelType, toolCalling bool) *ai.ModelSupports {
-	return &ai.ModelSupports{
+func modelSupports(modelType ModelType, toolCalling bool, operator ModelOperator) *ai.ModelSupports {
+	supports := &ai.ModelSupports{
 		Multiturn:   modelType == ModelTypeChat,
 		SystemRole:  modelType == ModelTypeChat,
 		Tools:       modelType == ModelTypeChat && toolCalling,
@@ -327,6 +367,12 @@ func modelSupports(modelType ModelType, toolCalling bool) *ai.ModelSupports {
 		Output:      []string{"text"},
 		ContentType: []string{"text/plain"},
 	}
+	if _, ok := operator.(ConstrainedTextGenerationOperator); ok {
+		supports.Constrained = ai.ConstrainedSupportNoTools
+		supports.Output = append(supports.Output, ai.OutputFormatJSON)
+		supports.ContentType = append(supports.ContentType, "application/json")
+	}
+	return supports
 }
 
 func convertTools(tools []*ai.ToolDefinition) ([]message.ToolDefinition, error) {

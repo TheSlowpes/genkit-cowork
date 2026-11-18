@@ -42,6 +42,15 @@ type TextGenerationOperator interface {
 	GenerateText(ctx context.Context, model llama.Model, input TextGenerationInput, onText func(context.Context, string) error) (TextGenerationResult, error)
 }
 
+// ConstrainedTextGenerationOperator extends text generation with GBNF decoding.
+// Apply grammar starting at the "root" rule to every sampled output token,
+// never to the prompt tokens. Report token or context exhaustion as Limited.
+// As with GenerateText, the call owns its inference resources.
+type ConstrainedTextGenerationOperator interface {
+	TextGenerationOperator
+	GenerateConstrainedText(ctx context.Context, model llama.Model, input TextGenerationInput, grammar string) (TextGenerationResult, error)
+}
+
 // TextGenerationInput contains validated messages and resolved settings.
 // Chat messages retain roles, typed calls, IDs, and tool results through Yzma's
 // Message interface. Completion accepts exactly one user message.
@@ -143,6 +152,17 @@ func decodeGenerationConfig(value any) (*GenerateContentConfig, error) {
 }
 
 func (defaultModelOperator) GenerateText(ctx context.Context, model llama.Model, input TextGenerationInput, onText func(context.Context, string) error) (result TextGenerationResult, err error) {
+	return generateNativeText(ctx, model, input, "", onText)
+}
+
+func (defaultModelOperator) GenerateConstrainedText(ctx context.Context, model llama.Model, input TextGenerationInput, grammar string) (TextGenerationResult, error) {
+	if grammar == "" {
+		return TextGenerationResult{}, fmt.Errorf("missing output grammar")
+	}
+	return generateNativeText(ctx, model, input, grammar, nil)
+}
+
+func generateNativeText(ctx context.Context, model llama.Model, input TextGenerationInput, grammar string, onText func(context.Context, string) error) (result TextGenerationResult, err error) {
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
@@ -183,6 +203,19 @@ func (defaultModelOperator) GenerateText(ctx context.Context, model llama.Model,
 	defer llama.SamplerFree(sampler)
 	for _, token := range tokens {
 		llama.SamplerAccept(sampler, token)
+	}
+	if grammar != "" {
+		filter := llama.SamplerInitGrammar(vocab, grammar, "root")
+		if filter == 0 {
+			return result, fmt.Errorf("allocate output grammar sampler")
+		}
+		// Move the existing stages behind the grammar. It must filter the
+		// full vocabulary before top-k, top-p or token selection.
+		stages := llama.SamplerChainN(sampler)
+		llama.SamplerChainAdd(sampler, filter)
+		for range stages {
+			llama.SamplerChainAdd(sampler, llama.SamplerChainRemove(sampler, 0))
+		}
 	}
 	if input.ToolCalling {
 		input.StopSequences = append(append([]string(nil), input.StopSequences...),

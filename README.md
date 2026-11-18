@@ -426,7 +426,7 @@ Plugins can be used independently of the rest of the framework.
 | Plugin | Purpose |
 | --- | --- |
 | [Skills](#skills) | Discover and load domain knowledge from `SKILL.md` files |
-| [Yzma](genkit-cowork/plugins/yzma/README.md) | Run local GGUF models in-process with chat, tool calling, streaming, or raw completion |
+| [Yzma](genkit-cowork/plugins/yzma/README.md) | Run local GGUF models in-process with chat, tool calling, streaming, raw completion, or constrained JSON output |
 
 The Yzma guide covers standalone installation, configuration, preloading, and cleanup.
 

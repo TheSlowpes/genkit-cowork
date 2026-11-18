@@ -153,7 +153,7 @@ func TestModelTypeValidationAndCapabilities(t *testing.T) {
 				}
 			}()
 			plugin.DefineModel(g, def, nil)
-			supports := modelSupports(kind, false)
+			supports := modelSupports(kind, false, defaultModelOperator{})
 			if supports.Multiturn != (kind == ModelTypeChat) || supports.SystemRole != (kind == ModelTypeChat) ||
 				supports.Tools || supports.Media {
 				t.Errorf("incorrect capabilities for %s: %+v", kind, supports)

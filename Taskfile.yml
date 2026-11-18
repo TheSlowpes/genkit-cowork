@@ -77,3 +77,8 @@ tasks:
       - ': "${YZMA_LIB:?Set YZMA_LIB to the native library directory}"'
       - ': "${YZMA_TEST_MODEL:?Set YZMA_TEST_MODEL to a local GGUF model}"'
       - go test ./genkit-cowork/plugins/yzma -run '^TestNative' -v {{.CLI_ARGS}}
+
+  dev:yzma:structured:
+    desc: Run the Yzma structured output example with YZMA_LIB and a local GGUF
+    cmds:
+      - go run ./examples/yzma-structured {{.CLI_ARGS}}
