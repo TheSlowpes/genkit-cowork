@@ -651,8 +651,9 @@ task dev:yzma:vision -- \
 ```
 
 The program reads the photo and sends it inline between text parts. Expect an
-`Answer:` line naming the animal in the photo, such as `Answer: A llama.`
-Use `-question` to ask a different question.
+`Answer:` line describing the animal. In the tested run, the model described a
+woolly animal standing in a grassy area. It guessed alpaca or yak, although the
+source photo is labeled as a llama. Use `-question` to ask a different question.
 
 Discovery recognizes SmolVLM decoders and matches the projector by GGUF model
 name, projector type and projection width. When several compatible projectors
