@@ -144,8 +144,11 @@ func (y *Yzma) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.Mod
 	if model.Type != ModelTypeChat && model.Type != ModelTypeCompletion {
 		panic(fmt.Sprintf("yzma.DefineModel: unsupported model type %q; use chat or completion", model.Type))
 	}
-	if model.Type == ModelTypeCompletion && model.ChatTemplate != "" {
-		panic("yzma.DefineModel: completion models must not specify a chat template")
+	if model.Type == ModelTypeCompletion && (model.ChatTemplate != "" || model.ChatTemplateName != "" || model.ToolCalling) {
+		panic("yzma.DefineModel: completion models cannot use chat templates or tools")
+	}
+	if model.ChatTemplate != "" && model.ChatTemplateName != "" {
+		panic("yzma.DefineModel: choose ChatTemplate or ChatTemplateName, not both")
 	}
 	if opts != nil && opts.Supports != nil {
 		panic("yzma.DefineModel: capabilities are determined by model type; leave ModelOptions.Supports unset")
@@ -166,7 +169,7 @@ func (y *Yzma) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.Mod
 	meta := &ai.ModelOptions{
 		ConfigSchema: core.InferSchemaMap(GenerateContentConfig{}),
 		Label:        provider + " - " + model.Name,
-		Supports:     modelSupports(model.Type),
+		Supports:     modelSupports(model.Type, model.ToolCalling),
 	}
 	if opts != nil {
 		if opts.Label != "" {
@@ -185,11 +188,11 @@ func (y *Yzma) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.Mod
 }
 
 func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
-	messages, err := textMessages(input)
+	messages, err := generationMessages(input, g.model.ToolCalling)
 	if err != nil {
 		return nil, err
 	}
-	if g.model.Type == ModelTypeCompletion && (len(messages) != 1 || messages[0].Role != "user") {
+	if g.model.Type == ModelTypeCompletion && (len(messages) != 1 || messages[0].GetRole() != "user") {
 		return nil, fmt.Errorf("yzma: completion models require exactly one user text message; system messages and history are not supported")
 	}
 	requestConfig, err := decodeGenerationConfig(input.Config)
@@ -200,6 +203,13 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 	if err != nil {
 		return nil, err
 	}
+	tools, err := convertTools(input.Tools)
+	if err != nil {
+		return nil, err
+	}
+	if input.ToolChoice == ai.ToolChoiceNone {
+		tools = nil
+	}
 	if err := g.acquire(ctx); err != nil {
 		return nil, err
 	}
@@ -209,13 +219,14 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 		return nil, ErrGenerationNotImplemented
 	}
 	var onText func(context.Context, string) error
-	if cb != nil {
+	if cb != nil && !g.model.ToolCalling {
 		onText = func(ctx context.Context, text string) error {
 			return cb(ctx, &ai.ModelResponseChunk{Content: []*ai.Part{ai.NewTextPart(text)}})
 		}
 	}
 	result, err := operator.GenerateText(ctx, g.loaded, TextGenerationInput{
 		Type: g.model.Type, Messages: messages, ChatTemplate: g.model.ChatTemplate,
+		ChatTemplateName: g.model.ChatTemplateName, ToolCalling: g.model.ToolCalling, Tools: tools,
 		Context: g.model.Context, Sampler: cfg.Sampler,
 		MaxOutputTokens: cfg.MaxOutputTokens, StopSequences: cfg.StopSequences,
 	}, onText)
@@ -225,12 +236,24 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	parts := []*ai.Part{ai.NewTextPart(result.Text)}
+	if g.model.ToolCalling {
+		parts, err = parsedToolParts(result, input.Tools, input.ToolChoice)
+		if err != nil {
+			return nil, err
+		}
+		if cb != nil {
+			if err := cb(ctx, &ai.ModelResponseChunk{Content: parts}); err != nil {
+				return nil, err
+			}
+		}
+	}
 	reason := ai.FinishReasonStop
 	if result.Limited {
 		reason = ai.FinishReasonLength
 	}
 	return &ai.ModelResponse{
-		Message: ai.NewModelTextMessage(result.Text), Request: input,
+		Message: ai.NewModelMessage(parts...), Request: input,
 		FinishReason: reason,
 		Usage: &ai.GenerationUsage{
 			InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
@@ -295,10 +318,12 @@ func (y *Yzma) Close(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-func modelSupports(modelType ModelType) *ai.ModelSupports {
+func modelSupports(modelType ModelType, toolCalling bool) *ai.ModelSupports {
 	return &ai.ModelSupports{
 		Multiturn:   modelType == ModelTypeChat,
 		SystemRole:  modelType == ModelTypeChat,
+		Tools:       modelType == ModelTypeChat && toolCalling,
+		ToolChoice:  modelType == ModelTypeChat && toolCalling,
 		Output:      []string{"text"},
 		ContentType: []string{"text/plain"},
 	}
@@ -306,15 +331,34 @@ func modelSupports(modelType ModelType) *ai.ModelSupports {
 
 func convertTools(tools []*ai.ToolDefinition) ([]message.ToolDefinition, error) {
 	yzmaTools := make([]message.ToolDefinition, len(tools))
-	for _, tool := range tools {
-		yzmaTools = append(yzmaTools, message.ToolDefinition{
+	seen := make(map[string]bool, len(tools))
+	for i, tool := range tools {
+		if tool == nil || strings.TrimSpace(tool.Name) == "" || strings.ContainsRune(tool.Name, '\x00') {
+			return nil, fmt.Errorf("yzma: tools require non-empty names without NUL bytes")
+		}
+		if seen[tool.Name] {
+			return nil, fmt.Errorf("yzma: duplicate tool %q", tool.Name)
+		}
+		seen[tool.Name] = true
+		schema := tool.InputSchema
+		if schema == nil {
+			schema = map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}
+		}
+		parameters, err := toolTemplateSchema(schema, schema, 0)
+		if err != nil {
+			return nil, fmt.Errorf("tool %q: %w", tool.Name, err)
+		}
+		if parameters["type"] != "object" {
+			return nil, fmt.Errorf("tool %q: tool inputs must use an object schema", tool.Name)
+		}
+		yzmaTools[i] = message.ToolDefinition{
 			Type: "function",
 			Function: message.ToolFunctionDefinition{
 				Name:        tool.Name,
 				Description: tool.Description,
-				Parameters:  tool.InputSchema,
+				Parameters:  parameters,
 			},
-		})
+		}
 	}
 	return yzmaTools, nil
 }

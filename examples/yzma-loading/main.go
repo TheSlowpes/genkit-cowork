@@ -30,6 +30,10 @@
 // Alternatively, pass -prompt "Hello" to generate a single response and exit.
 // For a base model, pass -type completion. It registers yzma/local-completion
 // and treats one user message as a raw prompt without requiring a chat template.
+// For a tool-capable chat model, -tools registers an add tool and the localChat
+// flow. Select that flow in the Dev UI to exercise the complete tool loop.
+// Embedded Jinja templates are loaded automatically; -template-name selects a
+// named embedded template when required.
 // Successful execution prints that the model loaded and frees its weights before
 // exiting. Missing files and load failures produce a non-zero exit status.
 package main
@@ -51,9 +55,11 @@ import (
 )
 
 type options struct {
-	lib, path, template, prompt string
-	modelType                   yzma.ModelType
-	serve                       bool
+	lib, path, template, templateName, prompt string
+	modelType                                 yzma.ModelType
+	serve                                     bool
+	tools                                     bool
+	maxTokens                                 int
 }
 
 func main() {
@@ -63,6 +69,9 @@ func main() {
 	flag.StringVar(&opts.prompt, "prompt", "", "Generate one text response before exiting")
 	flag.BoolVar(&opts.serve, "serve", false, "Keep running for the Genkit Dev UI")
 	flag.StringVar(&opts.template, "template", "", "Override the chat model's embedded template")
+	flag.StringVar(&opts.templateName, "template-name", "", "Select a named template embedded in the GGUF")
+	flag.BoolVar(&opts.tools, "tools", false, "Enable tool calling and register the add demo tool")
+	flag.IntVar(&opts.maxTokens, "max-tokens", 256, "Maximum output tokens per model call")
 	modelType := flag.String("type", string(yzma.ModelTypeChat), "Model type: chat or completion")
 	flag.Parse()
 	opts.modelType = yzma.ModelType(*modelType)
@@ -81,8 +90,14 @@ func run(ctx context.Context, opts options) (err error) {
 	if opts.modelType != yzma.ModelTypeChat && opts.modelType != yzma.ModelTypeCompletion {
 		return fmt.Errorf("invalid -type %q; use chat or completion", opts.modelType)
 	}
-	if opts.modelType == yzma.ModelTypeCompletion && opts.template != "" {
-		return fmt.Errorf("-template is only valid for -type chat")
+	if opts.modelType == yzma.ModelTypeCompletion && (opts.template != "" || opts.templateName != "" || opts.tools) {
+		return fmt.Errorf("templates and tools are only valid for -type chat")
+	}
+	if opts.template != "" && opts.templateName != "" {
+		return fmt.Errorf("choose -template or -template-name, not both")
+	}
+	if opts.maxTokens <= 0 {
+		return fmt.Errorf("-max-tokens must be positive")
 	}
 	plugin := &yzma.Yzma{LibPath: opts.lib}
 	g := genkit.Init(ctx, genkit.WithPlugins(plugin))
@@ -96,24 +111,54 @@ func run(ctx context.Context, opts options) (err error) {
 	name := "local-" + string(opts.modelType)
 	modelName := "yzma/" + name
 	plugin.DefineModel(g, yzma.ModelDefinition{
-		Name:         name,
-		Type:         opts.modelType,
-		ChatTemplate: opts.template,
-		Context:      yzma.ContextOptions{ContextSize: &contextSize},
+		Name:             name,
+		Type:             opts.modelType,
+		ChatTemplate:     opts.template,
+		ChatTemplateName: opts.templateName,
+		ToolCalling:      opts.tools,
+		Context:          yzma.ContextOptions{ContextSize: &contextSize},
 		Loading: yzma.ModelOptions{
 			GGUFPath: opts.path, NGPULayers: &cpuLayers,
 		},
 	}, nil)
+	var tools []ai.ToolRef
+	if opts.tools {
+		type addInput struct {
+			A int `json:"a"`
+			B int `json:"b"`
+		}
+		tools = append(tools, genkit.DefineTool(g, "add", "Add two integers",
+			func(ctx *ai.ToolContext, input addInput) (int, error) {
+				if err := ctx.Err(); err != nil {
+					return 0, err
+				}
+				return input.A + input.B, nil
+			},
+		))
+	}
+	generate := func(ctx context.Context, prompt string) (string, error) {
+		temperature := 0.0
+		options := []ai.GenerateOption{
+			ai.WithModelName(modelName), ai.WithPrompt(prompt),
+			ai.WithConfig(&yzma.GenerateContentConfig{MaxOutputTokens: &opts.maxTokens, Temperature: &temperature}),
+		}
+		if len(tools) > 0 {
+			options = append(options, ai.WithTools(tools...))
+		}
+		return genkit.GenerateText(ctx, g, options...)
+	}
+	type chatInput struct {
+		Prompt string `json:"prompt"`
+	}
+	genkit.DefineFlow(g, "localChat", func(ctx context.Context, input chatInput) (string, error) {
+		return generate(ctx, input.Prompt)
+	})
 	if err := plugin.Preload(ctx, name); err != nil {
 		return err
 	}
 	fmt.Printf("Local model loaded as %s.\n", modelName)
 	if opts.prompt != "" {
-		maxTokens, temperature := 64, 0.0
-		text, err := genkit.GenerateText(ctx, g,
-			ai.WithModelName(modelName), ai.WithPrompt(opts.prompt),
-			ai.WithConfig(&yzma.GenerateContentConfig{MaxOutputTokens: &maxTokens, Temperature: &temperature}),
-		)
+		text, err := generate(ctx, opts.prompt)
 		if err != nil {
 			return err
 		}
@@ -121,6 +166,9 @@ func run(ctx context.Context, opts options) (err error) {
 	}
 	if opts.serve {
 		fmt.Printf("Ready for the Genkit Dev UI. Select %s under Models.\n", modelName)
+		if opts.tools {
+			fmt.Println("Use the localChat flow to test Genkit executing the add tool.")
+		}
 		<-ctx.Done()
 	}
 	return nil

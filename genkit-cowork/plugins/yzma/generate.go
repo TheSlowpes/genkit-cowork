@@ -37,24 +37,31 @@ import (
 // calls for one registration; different registrations may run concurrently.
 // If onText is non-nil, emit valid UTF-8 text without stop sequences and propagate
 // callback errors. The final result must still contain the entire response.
+// The Genkit adapter buffers tool-enabled output and parses its raw tool syntax.
 type TextGenerationOperator interface {
 	GenerateText(ctx context.Context, model llama.Model, input TextGenerationInput, onText func(context.Context, string) error) (TextGenerationResult, error)
 }
 
 // TextGenerationInput contains validated messages and resolved settings.
-// Chat messages retain system, user, and assistant roles. Completion accepts
-// exactly one user message. Type selects formatting; Sampler is request-local.
+// Chat messages retain roles, typed calls, IDs, and tool results through Yzma's
+// Message interface. Completion accepts exactly one user message.
+// Type selects formatting; Sampler is request-local.
 type TextGenerationInput struct {
-	Type            ModelType
-	Messages        []message.Chat
-	ChatTemplate    string
-	Context         ContextOptions
-	Sampler         llama.SamplerParams
-	MaxOutputTokens int
-	StopSequences   []string
+	Type               ModelType
+	Messages           []message.Message
+	ChatTemplate       string
+	ChatTemplateName   string
+	ToolCalling        bool
+	Tools              []message.ToolDefinition
+	Context            ContextOptions
+	Sampler            llama.SamplerParams
+	MaxOutputTokens    int
+	StopSequences      []string
+	bosToken, eosToken string
 }
 
-// TextGenerationResult contains generated text and native token counts.
+// TextGenerationResult contains raw model text and native token counts.
+// For tool-enabled models, the Genkit adapter parses and removes tool syntax.
 // OutputTokens includes sampled end-of-generation tokens and stripped stop text.
 // Limited reports exhaustion of the output limit or remaining context capacity.
 type TextGenerationResult struct {
@@ -70,7 +77,7 @@ func textMessages(input *ai.ModelRequest) ([]message.Chat, error) {
 		return nil, fmt.Errorf("yzma: at least one message is required")
 	}
 	if len(input.Tools) > 0 || (input.ToolChoice != "" && input.ToolChoice != ai.ToolChoiceNone && input.ToolChoice != ai.ToolChoiceAuto) {
-		return nil, fmt.Errorf("yzma: tool calling is not supported yet")
+		return nil, fmt.Errorf("yzma: tool calling requires the tool-aware chat adapter")
 	}
 	if len(input.Docs) > 0 {
 		return nil, fmt.Errorf("yzma: native document grounding is not supported")
@@ -142,8 +149,11 @@ func (defaultModelOperator) GenerateText(ctx context.Context, model llama.Model,
 	if llama.ModelHasEncoder(model) || !llama.ModelHasDecoder(model) {
 		return result, fmt.Errorf("only decoder-only text models are supported")
 	}
+	vocab := llama.ModelGetVocab(model)
+	input.bosToken = tokenSpelling(vocab, llama.VocabBOS(vocab))
+	input.eosToken = tokenSpelling(vocab, llama.VocabEOS(vocab))
 	prompt, parseSpecial, err := prepareTextPrompt(input,
-		func() string { return llama.ModelChatTemplate(model, "") }, llama.ChatApplyTemplate)
+		func() string { return embeddedChatTemplate(model, input.ChatTemplateName, len(input.Tools) > 0) }, llama.ChatApplyTemplate)
 	if err != nil {
 		return result, err
 	}
@@ -160,8 +170,8 @@ func (defaultModelOperator) GenerateText(ctx context.Context, model llama.Model,
 		llama.SetAbortCallback(lctx, nil)
 		err = errors.Join(err, llama.Free(lctx))
 	}()
-	vocab := llama.ModelGetVocab(model)
-	tokens := llama.Tokenize(vocab, prompt, true, parseSpecial)
+	addSpecial := !parseSpecial || input.bosToken == "" || !strings.HasPrefix(prompt, input.bosToken)
+	tokens := llama.Tokenize(vocab, prompt, addSpecial, parseSpecial)
 	capacity, batchSize := int(llama.NCtxSeq(lctx)), int(llama.NBatch(lctx))
 	if len(tokens) == 0 || len(tokens) >= capacity {
 		return result, fmt.Errorf("prompt has %d tokens; context capacity is %d and must leave room for output", len(tokens), capacity)
@@ -174,7 +184,12 @@ func (defaultModelOperator) GenerateText(ctx context.Context, model llama.Model,
 	for _, token := range tokens {
 		llama.SamplerAccept(sampler, token)
 	}
-	session := nativeTokenSession{ctx: lctx, vocab: vocab, sampler: sampler}
+	if input.ToolCalling {
+		input.StopSequences = append(append([]string(nil), input.StopSequences...),
+			message.StopMarkers(vocab, message.FormatAuto)...)
+		input.StopSequences = append(input.StopSequences, "<|tool_response>", "<|tool_response_start|>")
+	}
+	session := nativeTokenSession{ctx: lctx, vocab: vocab, sampler: sampler, special: input.ToolCalling}
 	return generateTokens(ctx, session, tokens, batchSize, capacity, input, onText)
 }
 
@@ -183,24 +198,45 @@ func (defaultModelOperator) GenerateText(ctx context.Context, model llama.Model,
 func prepareTextPrompt(input TextGenerationInput, modelTemplate func() string, apply func(string, []llama.ChatMessage, bool, []byte) int32) (string, bool, error) {
 	switch input.Type {
 	case ModelTypeCompletion:
-		if input.ChatTemplate != "" {
+		if input.ChatTemplate != "" || input.ChatTemplateName != "" || input.ToolCalling || len(input.Tools) > 0 {
 			return "", false, fmt.Errorf("completion models must not specify a chat template")
 		}
-		if len(input.Messages) != 1 || input.Messages[0].Role != "user" {
+		if len(input.Messages) != 1 || input.Messages[0].GetRole() != "user" {
 			return "", false, fmt.Errorf("completion models require exactly one user text message")
 		}
-		return input.Messages[0].Content, false, nil
+		content, ok := input.Messages[0].GetContent()["content"].(string)
+		if !ok {
+			return "", false, fmt.Errorf("completion requires a text prompt")
+		}
+		return content, false, nil
 	case ModelTypeChat:
 		template := input.ChatTemplate
 		if template == "" {
 			template = modelTemplate()
 		}
+		if template == "" && input.ChatTemplateName != "" {
+			return "", false, fmt.Errorf("embedded chat template %q was not found", input.ChatTemplateName)
+		}
 		if template == "" || strings.ContainsRune(template, '\x00') {
 			return "", false, fmt.Errorf("no valid chat template; set ModelDefinition.ChatTemplate explicitly")
 		}
+		if source, ok := builtinChatTemplate(template); ok {
+			template = source
+		}
+		if strings.Contains(template, "{{") || strings.Contains(template, "{%") {
+			prompt, err := renderJinjaPrompt(template, input)
+			return prompt, true, err
+		}
+		if input.ToolCalling {
+			return "", false, fmt.Errorf("tool calling requires a Jinja template that formats tools and tool history")
+		}
 		chat := make([]llama.ChatMessage, len(input.Messages))
 		for i, msg := range input.Messages {
-			chat[i] = llama.NewChatMessage(msg.Role, msg.Content)
+			content, ok := msg.GetContent()["content"].(string)
+			if !ok {
+				return "", false, fmt.Errorf("native chat formatting requires text content")
+			}
+			chat[i] = llama.NewChatMessage(msg.GetRole(), content)
 		}
 		prompt, err := renderChatPrompt(template, chat, apply)
 		runtime.KeepAlive(chat)
@@ -257,6 +293,7 @@ type nativeTokenSession struct {
 	ctx     llama.Context
 	vocab   llama.Vocab
 	sampler llama.Sampler
+	special bool
 }
 
 func (s nativeTokenSession) Decode(ctx context.Context, tokens []llama.Token) error {
@@ -294,10 +331,10 @@ func (s nativeTokenSession) IsEnd(token llama.Token) bool {
 
 func (s nativeTokenSession) Piece(token llama.Token) (string, error) {
 	buf := make([]byte, 256)
-	n := llama.TokenToPiece(s.vocab, token, buf, 0, false)
+	n := llama.TokenToPiece(s.vocab, token, buf, 0, s.special)
 	if n < 0 {
 		buf = make([]byte, -int64(n))
-		n = llama.TokenToPiece(s.vocab, token, buf, 0, false)
+		n = llama.TokenToPiece(s.vocab, token, buf, 0, s.special)
 	}
 	if n < 0 || int(n) > len(buf) {
 		return "", fmt.Errorf("unable to decode token %d", token)

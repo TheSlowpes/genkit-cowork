@@ -6,8 +6,9 @@ No Ollama or vLLM server is required.
 
 Supports lazy weight loading, explicit preloading, chat, raw text completion,
 streaming, and cleanup for decoder-only models. Each request gets a fresh inference context and
-sampler. Tool calling, media processing, and constrained structured output are
-not supported yet; unsupported requests return errors.
+sampler. Tool calling is available for chat models with a tool-aware template.
+Media processing and constrained structured output are not supported yet;
+unsupported requests return errors.
 
 ## Installation
 
@@ -160,6 +161,8 @@ Yzma's native runtime while the plugin is in use.
 | --- | --- |
 | `Yzma.LibPath` | Native library directory; falls back to `YZMA_LIB` |
 | `ModelDefinition.Type` | Required chat or completion mode |
+| `ModelDefinition.ToolCalling` | Opt into tool calling for a capable chat model |
+| `ModelDefinition.ChatTemplateName` | Select a named template embedded in the GGUF |
 | `ModelDefinition.Loading` | GGUF path, GPU placement, and weight-loading modes |
 | `ModelDefinition.Context` | Token capacity, batch sizes, and CPU threads |
 | `ModelDefinition.GenerationDefaults` | Sampling and output defaults |
@@ -190,10 +193,19 @@ Set `Yzma.Operator` to a custom `ModelOperator` to replace native initialization
 loading, and cleanup for testing or alternate execution environments. To support
 chat, that operator must also implement `TextGenerationOperator`.
 
-In chat mode, formatting uses the model's embedded template through llama.cpp's supported
-chat-template implementation. Set `ModelDefinition.ChatTemplate` to override it.
-Unsupported templates return an error rather than silently substituting another
-format. System, user, and prior assistant messages retain their roles.
+In chat mode, formatting reads the model's embedded template through llama.cpp,
+with a GGUF metadata fallback. Full Jinja templates use the same Go Jinja engine
+as Yzma's template package, with BOS/EOS variables and typed tool context supplied
+by the plugin. This supports embedded templates that the native
+`llama.ChatApplyTemplate` formatter cannot render, including Gemma 4's canonical
+template. System, user, and prior assistant messages retain their roles.
+
+Set `ModelDefinition.ChatTemplate` to an explicit Jinja source or a Yzma built-in
+template name. `ChatTemplateName` selects a named embedded template instead.
+With tools offered, an embedded `tool_use` template is preferred when available;
+otherwise the default embedded template is used. Missing explicit names and
+templates that ignore offered tool definitions return errors, not silent fallbacks.
+Completion mode does not read templates.
 
 Prompt tokens are evaluated in batches. Prompts that leave no room for output are
 rejected, not truncated. Generation stops at an end-of-generation token, a stop
@@ -203,6 +215,48 @@ token boundaries. Stream chunks contain complete UTF-8 text.
 
 Responses include token usage and a `stop` or `length` finish reason. Output token
 usage includes sampled end-of-generation tokens and stripped stop text.
+
+## Tool calling
+
+Enable `ToolCalling` only for a chat model trained to follow tool schemas, with a
+template that formats tool definitions and tool results:
+
+```go
+local.DefineModel(g, yzma.ModelDefinition{
+	Name: "local-chat",
+	Type: yzma.ModelTypeChat,
+	ToolCalling: true,
+	Loading: yzma.ModelOptions{GGUFPath: "/path/to/tool-capable-model.gguf"},
+}, nil)
+```
+
+Pass registered Genkit tools through `ai.WithTools(...)`. Genkit performs the
+execution loop; the plugin never directly runs a model-requested function.
+`auto`, `required`, and `none` tool choices are supported.
+
+The adapter uses `message.ParseToolCalls` for Yzma's supported output grammars and
+`message.StripMarkup` to preserve accompanying text without tool syntax. Calls
+receive unique IDs, which are retained with typed arguments and tool results in
+subsequent template renders.
+
+Tool-enabled turns are buffered until parsing completes. Streaming callbacks
+receive complete text/tool parts, not raw tool-call syntax. Ordinary chat without
+`ToolCalling` continues streaming text incrementally.
+Tool inputs must use JSON object schemas. Local schema references are expanded
+for rendering; recursive schemas are rejected rather than silently omitted.
+
+Before returning executable calls, the adapter checks offered tool names,
+structural completeness, and input schemas. Truncated calls, unknown tools,
+invalid arguments, and ambiguous argument types return errors. It does not
+execute Yzma's repaired/truncated JSON calls.
+
+Yzma's parser exposes arguments as strings, so their types are restored from the
+offered schema rather than guessed. String values such as `"0123"` stay strings.
+Unions without a single unambiguous type are not supported. Parsed integers at or
+beyond the float64 exact-integer boundary are rejected. Some Gemma parser forms
+flatten nested objects; those fail schema validation rather than being executed
+with changed argument structure. Use a parser/model format that preserves the
+required structure for tools with nested arguments.
 
 ## Chat in the Genkit Dev UI
 
@@ -227,10 +281,22 @@ genkit start -- go run ./examples/yzma-loading \
   -model ~/models/SmolLM2-135M.Q4_K_M.gguf -type completion -serve
 ```
 
-If your model's embedded template is unsupported, pass
-`-template NAME` with a llama.cpp-supported template matching the model's trained
-chat format. For example, `chatml` is appropriate only for models trained on
-ChatML. The plugin does not guess a replacement template.
+The example uses embedded Jinja templates automatically, including the template
+in `gemma-4-E4B-it-Q4_0.gguf`. `-template-name NAME` selects a named GGUF template.
+`-template NAME` can select a Yzma built-in override matching the model's trained
+format; the plugin does not guess a replacement.
+
+To test tools with your Gemma 4 model:
+
+```sh
+genkit start -- go run ./examples/yzma-loading \
+  -model ~/models/gemma-4-E4B-it-Q4_0.gguf -tools -serve
+```
+
+Select **Flows → localChat**, and use `{"prompt":"Use add to calculate 2 + 3."}`.
+The trace shows Genkit executing the registered `add` tool and sending its result
+back to the model. The model's instruction-following quality still determines
+whether an `auto` request chooses the tool.
 
 ## Run the example
 
@@ -243,7 +309,8 @@ YZMA_LIB=/path/to/libs go run ./examples/yzma-loading -model /path/to/model.gguf
 The [example](../../../examples/yzma-loading/main.go) handles cancellation and
 cleans up with a separate timeout.
 
-To generate a single response with a 64-token limit, add `-prompt`:
+To generate a single response with a 256-token limit, add `-prompt`.
+`-max-tokens` changes the per-call limit:
 
 ```sh
 YZMA_LIB=/path/to/libs go run ./examples/yzma-loading \
@@ -278,3 +345,10 @@ YZMA_LIB=/path/to/libs YZMA_TEST_MODEL=/path/to/model.gguf \
 Native tests skip unless both environment variables are set. They do not download
 models. `YZMA_TEST_TYPE=completion` selects raw completion for a base model; the
 default is chat. `YZMA_TEST_TEMPLATE` optionally overrides the chat template.
+
+To test the actual embedded Gemma 4 template without allocating model weights:
+
+```sh
+YZMA_LIB=/path/to/libs YZMA_TEST_MODEL=~/models/gemma-4-E4B-it-Q4_0.gguf \
+  go test ./genkit-cowork/plugins/yzma -run '^TestNativeEmbeddedTemplate$' -v
+```

@@ -18,12 +18,16 @@
 // bindings. It currently supports configuration validation, lazy weight loading,
 // explicit preloading, streaming text generation, and cleanup. Generation supports
 // decoder-only models, chat or raw completion, sampling settings, and stop sequences.
-// Tools, media, and constrained structured output are not supported yet.
+// Chat models can opt into tool calling through ModelDefinition.ToolCalling.
+// Genkit executes the tools; the plugin renders schemas and history and parses
+// calls using Yzma's family parsers. Media and constrained output are unsupported.
 //
 // Pass a Yzma instance to genkit.WithPlugins, then call DefineModel for each
 // model. Preload checks loading before the application starts serving requests.
 // ModelDefinition.Type is required: ModelTypeChat uses a chat template, while
 // ModelTypeCompletion accepts a single user text prompt without chat formatting.
+// Embedded GGUF templates are rendered with a full Jinja engine, including
+// named templates, BOS/EOS variables, and typed tool arguments and results.
 // Close rejects new work and frees weights after active use completes.
 // Native shared libraries and backends remain initialized for the process
 // lifetime; all default-operator plugins must use the same library directory.

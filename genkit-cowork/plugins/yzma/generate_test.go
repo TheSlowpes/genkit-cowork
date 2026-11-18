@@ -43,11 +43,11 @@ func (o *testTextOperator) GenerateText(ctx context.Context, model llama.Model, 
 }
 
 func TestGenerateWithGenkit(t *testing.T) {
-	wantMessages := []message.Chat{
-		{Role: "system", Content: "Be concise."},
-		{Role: "user", Content: "Hello"},
-		{Role: "assistant", Content: "Hi!"},
-		{Role: "user", Content: "Explain Go."},
+	wantMessages := []message.Message{
+		message.Chat{Role: "system", Content: "Be concise."},
+		message.Chat{Role: "user", Content: "Hello"},
+		message.Chat{Role: "assistant", Content: "Hi!"},
+		message.Chat{Role: "user", Content: "Explain Go."},
 	}
 	op := &testTextOperator{
 		testModelOperator: &testModelOperator{

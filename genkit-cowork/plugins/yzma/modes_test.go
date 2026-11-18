@@ -31,7 +31,7 @@ func TestPrepareCompletionPrompt(t *testing.T) {
 	const raw = "Once upon a time\n<|im_start|>literal text "
 	input := TextGenerationInput{
 		Type:     ModelTypeCompletion,
-		Messages: []message.Chat{{Role: "user", Content: raw}},
+		Messages: []message.Message{message.Chat{Role: "user", Content: raw}},
 	}
 	got, parseSpecial, err := prepareTextPrompt(input, func() string {
 		t.Fatal("completion must not read chat-template metadata")
@@ -51,7 +51,7 @@ func TestPrepareChatPrompt(t *testing.T) {
 			readMetadata := false
 			input := TextGenerationInput{
 				Type: ModelTypeChat, ChatTemplate: override,
-				Messages: []message.Chat{{Role: "user", Content: "Hello"}},
+				Messages: []message.Message{message.Chat{Role: "user", Content: "Hello"}},
 			}
 			got, parseSpecial, err := prepareTextPrompt(input, func() string {
 				readMetadata = true
@@ -88,7 +88,7 @@ func TestCompletionThroughGenkit(t *testing.T) {
 		generate: func(ctx context.Context, model llama.Model, input TextGenerationInput, onText func(context.Context, string) error) (TextGenerationResult, error) {
 			calls++
 			if input.Type != ModelTypeCompletion || input.ChatTemplate != "" ||
-				len(input.Messages) != 1 || input.Messages[0].Content != raw {
+				len(input.Messages) != 1 || input.Messages[0].GetContent()["content"] != raw {
 				t.Errorf("completion input changed: %+v", input)
 			}
 			if onText != nil {
@@ -153,7 +153,7 @@ func TestModelTypeValidationAndCapabilities(t *testing.T) {
 				}
 			}()
 			plugin.DefineModel(g, def, nil)
-			supports := modelSupports(kind)
+			supports := modelSupports(kind, false)
 			if supports.Multiturn != (kind == ModelTypeChat) || supports.SystemRole != (kind == ModelTypeChat) ||
 				supports.Tools || supports.Media {
 				t.Errorf("incorrect capabilities for %s: %+v", kind, supports)
@@ -166,6 +166,9 @@ func TestModelTypeValidationAndCapabilities(t *testing.T) {
 		opts *ai.ModelOptions
 	}{
 		{"completion template", ModelDefinition{Name: "bad-template", Type: ModelTypeCompletion, ChatTemplate: "chatml"}, nil},
+		{"completion tools", ModelDefinition{Name: "bad-tools", Type: ModelTypeCompletion, ToolCalling: true}, nil},
+		{"completion named template", ModelDefinition{Name: "bad-name", Type: ModelTypeCompletion, ChatTemplateName: "tool_use"}, nil},
+		{"conflicting templates", ModelDefinition{Name: "both", Type: ModelTypeChat, ChatTemplate: "chatml", ChatTemplateName: "tool_use"}, nil},
 		{"capability override", ModelDefinition{Name: "bad-caps", Type: ModelTypeCompletion}, &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

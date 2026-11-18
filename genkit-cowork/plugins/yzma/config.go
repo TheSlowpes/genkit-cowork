@@ -43,6 +43,12 @@ type ModelDefinition struct {
 	// ChatTemplate overrides the embedded template for chat models.
 	// Completion registrations must leave this empty.
 	ChatTemplate string `json:"chatTemplate,omitempty"`
+	// ChatTemplateName selects a named GGUF template, such as "tool_use".
+	// Leave empty to use the default template. It cannot accompany ChatTemplate.
+	ChatTemplateName string `json:"chatTemplateName,omitempty"`
+	// ToolCalling enables the tool adapter for a chat model trained to use tools.
+	// The plugin does not infer this capability from filenames or model families.
+	ToolCalling bool `json:"toolCalling,omitempty"`
 	// GenerationDefaults supplies sampling and output defaults for this model.
 	GenerationDefaults *GenerateContentConfig `json:"generationDefaults,omitempty"`
 }
