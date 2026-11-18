@@ -430,6 +430,8 @@ Plugins can be used independently of the rest of the framework.
 
 The Yzma guide includes Dev UI discovery and typed output examples, plus instructions for explicit registration, preloading, and cleanup.
 
+The [Yzma embedding example](genkit-cowork/plugins/yzma/README.md#run-the-embedding-example) embeds text locally through Genkit.
+
 ## Design Patterns
 
 - **Functional options** — all constructors accept variadic option functions for clean, extensible configuration.

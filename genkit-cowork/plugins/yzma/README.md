@@ -94,12 +94,13 @@ split model keeps its `-00001-of-NNNNN` suffix in the ID; only the first shard
 can be selected and its matching sibling files must be present.
 
 Discovery reads the GGUF header and tensor directory without loading weights.
-It currently recognizes `llama` and `gemma4` GGUFs marked `general.type=model`
+For generation, it recognizes `llama` and `gemma4` GGUFs marked `general.type=model`
 with a tokenizer and decoder tensors, and rejects pooling, non-causal
 attention, and known classifier heads. Projectors, adapters, and unclassified
 GGUFs stay out of the list. On a recognized decoder, a valid default embedded
 template selects chat formatting; no template selects raw continuation. A
-file with only named templates needs an explicit definition.
+file with only named templates needs an explicit definition. BERT embedding
+models follow the separate [embedding rules](#local-text-embeddings).
 
 These are checks for a usable text path, not proof of training intent,
 tool-calling support, native compatibility, or available memory. For example,
@@ -486,4 +487,84 @@ To test the embedded template without allocating model weights:
 ```sh
 YZMA_LIB=/path/to/libs YZMA_TEST_MODEL=~/models/gemma-4-E4B-it-Q4_0.gguf \
   task test:yzma:native -- -run '^TestNativeEmbeddedTemplate$'
+```
+
+## Local text embeddings
+
+Use `genkit.Embed` with a `yzma/<filename-stem>` embedder name. Discovery
+lists a GGUF as an embedder when its header identifies a non-causal `bert`
+encoder with a BERT tokenizer, embedding dimensions, encoder tensors, and
+CLS or mean pooling. It does not list ranking, unpooled, or unclassified
+files as embedders. Listing and lookup read no weights. Use
+`genkit.LookupEmbedder` with the qualified name to resolve an embedder
+before calling `Preload` with the unprefixed name, if preloading is needed.
+
+An embed request returns one vector per input document in input order.
+Text parts in a document are joined without separators. The embedder rejects
+empty documents, non-text parts, and per-request options. It does not add
+a query or passage prefix; add any prefix your model expects to the text.
+The tokenizer applies the GGUF's special-token policy.
+
+Discovered models use the pooling declared by their GGUF. CLS pooling uses
+the first token's representation, while mean pooling averages the sequence's
+token representations. The plugin L2-normalizes each vector and rejects
+non-finite or zero-norm output. The vector length is fixed for the model, is
+advertised in the embedder descriptor, and must match the native output size.
+There is no dimension override per request.
+
+Each document must fit the trained context, configured context, logical
+batch, and physical microbatch limits. A pooled encoder must see the
+whole document at once. An over-limit document fails the whole request;
+the plugin does not truncate it or return partial results. The default
+embedding context uses the GGUF's trained sequence length, subject to
+the native batch limits. The tested BGE file supports up to 512 tokens
+including special tokens.
+
+To override a catalog name, or to register a BERT GGUF with
+insufficient role metadata, call `DefineEmbedder` before the first lookup:
+
+```go
+local.DefineEmbedder(g, yzma.EmbeddingDefinition{
+    Name:       "local-bge",
+    Loading:    yzma.ModelOptions{GGUFPath: "/path/to/bge-small-en-v1.5-q4_k_m.gguf"},
+    Pooling:    llama.PoolingTypeCLS,
+    Dimensions: 384,
+})
+```
+
+`llama` is `github.com/hybridgroup/yzma/pkg/llama`. Choose the pooling
+and output dimensions the model was trained for. An explicit definition can
+also set `Context` and loading options. Embedders share the plugin's load
+limit and `Close` lifecycle with generation models. A custom `ModelOperator`
+must also implement `TextEmbeddingOperator` to run embedding requests.
+
+### Run the embedding example
+
+Install the native libraries described above. Use
+[`CompendiumLabs/bge-small-en-v1.5-gguf`'s `bge-small-en-v1.5-q4_k_m.gguf`](https://huggingface.co/CompendiumLabs/bge-small-en-v1.5-gguf/blob/main/bge-small-en-v1.5-q4_k_m.gguf)
+(24,808,576 bytes, SHA-256 `363a0a4855dff6c653e06efe3209157debcf7f74e52d0d7c71e2747cd523043e`).
+Place it in `$HOME/models` under that filename. From the repository root:
+
+```sh
+YZMA_LIB="$HOME/.local/lib/yzma" go run ./examples/yzma-embeddings \
+  -models-dir "$HOME/models"
+```
+
+The [example](../../../examples/yzma-embeddings/main.go) does not download
+files. After any native log messages, expect:
+
+```text
+Embedding count: 2
+Vector 1: 384 dimensions
+Vector 2: 384 dimensions
+```
+
+Run the opt-in native test with the same fixture. It compares ordered batch
+results to individual encodes, checks the vector norms, and rejects context
+overflow:
+
+```sh
+YZMA_LIB="$HOME/.local/lib/yzma" YZMA_TEST_TYPE=embedding \
+  YZMA_TEST_MODEL="$HOME/models/bge-small-en-v1.5-q4_k_m.gguf" \
+  task test:yzma:native -- -run '^TestNativeDiscoveredEmbedding$'
 ```

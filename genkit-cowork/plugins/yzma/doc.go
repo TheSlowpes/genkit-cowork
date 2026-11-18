@@ -39,6 +39,10 @@
 // Applications must not independently unload the Yzma runtime while using this
 // plugin.
 //
+// Local text embedders use genkit.Embed with discovered BERT GGUFs or
+// DefineEmbedder for explicit configuration. Each document produces one
+// L2-normalized vector with the model's fixed output dimensions.
+//
 // Native loading requires llama.cpp libraries compatible with the pinned Yzma
 // version. See https://yzma.ai/getting-started/install/ for installation.
 // The examples/yzma-loading program demonstrates discovery in the Genkit Dev UI,

@@ -58,13 +58,13 @@ func (y *Yzma) ListActions(ctx context.Context) []api.ActionDesc {
 	return actions
 }
 
-// ResolveAction constructs a model for Genkit to register. The plugin retains
+// ResolveAction constructs a model or embedder for Genkit to register. The plugin retains
 // the generator that owns the weights until Close, even across registry scopes.
 func (y *Yzma) ResolveAction(atype api.ActionType, name string) api.Action {
 	y.mu.Lock()
 	defer y.mu.Unlock()
 	model, ok := y.catalog[name]
-	if !ok || y.closed || atype != api.ActionTypeModel {
+	if !ok || y.closed || atype != model.actionType() {
 		return nil
 	}
 	gen := y.models[name]
@@ -75,10 +75,21 @@ func (y *Yzma) ResolveAction(atype api.ActionType, name string) api.Action {
 		gen = y.newGenerator(model)
 		y.models[name] = gen
 	}
-	return y.newDiscoveredAction(model, gen.generate)
+	return y.newDiscoveredAction(model, gen)
 }
 
-func (y *Yzma) newDiscoveredAction(model ModelDefinition, generate ai.ModelFunc) api.Action {
+func (y *Yzma) newDiscoveredAction(model ModelDefinition, gen *generator) api.Action {
+	if model.actionType() == api.ActionTypeEmbedder {
+		var embed ai.EmbedderFunc
+		if gen != nil {
+			embed = gen.embed
+		}
+		return ai.NewEmbedder(api.NewName(provider, model.Name), model.embedding.options(model.Name), embed).(api.Action)
+	}
+	var generate ai.ModelFunc
+	if gen != nil {
+		generate = gen.generate
+	}
 	// Genkit's ai.Model interface only exposes Generate and Register, but
 	// ai.NewModel returns a concrete action, as used by Genkit's own plugins.
 	return ai.NewModel(api.NewName(provider, model.Name), y.modelMetadata(model, nil), generate).(api.Action)
@@ -160,16 +171,20 @@ func discoverModels(ctx context.Context, dir string) map[string]ModelDefinition 
 			skip(file.path, err)
 			continue
 		}
+		id := strings.TrimSuffix(strings.ToLower(filename), ".gguf")
+		model := ModelDefinition{Name: id, Loading: ModelOptions{GGUFPath: file.path}}
+		if spec, ok := discoverEmbedding(file.header.values, tensors); ok {
+			model.embedding = spec
+			catalog[id] = model
+			continue
+		}
 		typ, err := classifyTextModel(file.header.values, tensors)
 		if err != nil {
 			skip(file.path, err)
 			continue
 		}
-		id := strings.TrimSuffix(strings.ToLower(filename), ".gguf")
-		catalog[id] = ModelDefinition{
-			Name: id, Type: typ,
-			Loading: ModelOptions{GGUFPath: file.path},
-		}
+		model.Type = typ
+		catalog[id] = model
 	}
 	return catalog
 }
@@ -228,7 +243,7 @@ func classifyTextModel(values map[string]ggufValue, tensors map[string]bool) (Mo
 	if typ == "mmproj" || arch == "clip" || hasProjector {
 		return "", errors.New("multimodal projector")
 	}
-	unclassified := errors.New("unclassified GGUF; register it with DefineModel to choose its role")
+	unclassified := errors.New("unclassified GGUF; use DefineModel or DefineEmbedder to choose its role")
 	// Start with decoder architectures exercised by the text path. A template
 	// alone cannot distinguish a decoder from an embedder, projector or adapter.
 	if typ != "model" || (arch != "llama" && arch != "gemma4") {

@@ -51,6 +51,9 @@ type ModelDefinition struct {
 	ToolCalling bool `json:"toolCalling,omitempty"`
 	// GenerationDefaults supplies sampling and output defaults for this model.
 	GenerationDefaults *GenerateContentConfig `json:"generationDefaults,omitempty"`
+
+	// Set only for discovered or explicitly defined embedders.
+	embedding embeddingSpec
 }
 
 // ModelOptions controls weight loading. Changing these options requires reloading
