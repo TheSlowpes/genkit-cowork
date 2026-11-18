@@ -129,7 +129,9 @@ func (defaultModelOperator) FreeModel(ctx context.Context, model llama.Model) er
 type generator struct {
 	model    ModelDefinition
 	operator ModelOperator
+	explicit bool // Set only for DefineModel registrations.
 	gate     chan struct{}
+	loadGate chan struct{}
 	closed   <-chan struct{}
 	loaded   llama.Model
 }
@@ -151,7 +153,7 @@ func (g *generator) acquire(ctx context.Context) error {
 		return err
 	}
 	if g.loaded == 0 {
-		loaded, err := g.operator.LoadModel(ctx, g.model.Loading)
+		loaded, err := g.load(ctx)
 		if err != nil {
 			g.release()
 			return fmt.Errorf("load model %q: %w", g.model.Name, err)
@@ -167,6 +169,21 @@ func (g *generator) acquire(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func (g *generator) load(ctx context.Context) (llama.Model, error) {
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case <-g.closed:
+		return 0, ErrClosed
+	case g.loadGate <- struct{}{}:
+	}
+	defer func() { <-g.loadGate }()
+	if err := g.available(ctx); err != nil {
+		return 0, err
+	}
+	return g.operator.LoadModel(ctx, g.model.Loading)
 }
 
 func (g *generator) available(ctx context.Context) error {

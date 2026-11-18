@@ -15,7 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package yzma registers local GGUF models with Genkit using in-process llama.cpp
-// bindings. It currently supports configuration validation, lazy weight loading,
+// bindings. It supports metadata-only model discovery, lazy weight loading,
 // explicit preloading, streaming text generation, and cleanup. Generation supports
 // decoder-only models, chat or raw completion, sampling settings, and stop sequences.
 // Chat models can opt into tool calling through ModelDefinition.ToolCalling.
@@ -24,13 +24,16 @@
 // JSON objects through genkit.GenerateData, without tools or streaming. See the
 // package README for the supported schema subset. Media input is unsupported.
 //
-// Pass a Yzma instance to genkit.WithPlugins, then call DefineModel for each
-// model. Preload checks loading before the application starts serving requests.
-// ModelDefinition.Type is required: ModelTypeChat uses a chat template, while
-// ModelTypeCompletion accepts a single user text prompt without chat formatting.
+// Pass a Yzma instance to genkit.WithPlugins to discover models in ModelsDir
+// or Yzma's default directory. The catalog is fixed at initialization. Restart
+// to pick up file changes. Use DefineModel for overrides or unclassified files.
+// Preload checks loading before the application starts serving requests.
+// Manual definitions require ModelDefinition.Type. ModelTypeChat uses a chat
+// template, while ModelTypeCompletion accepts one user prompt without formatting.
 // Embedded GGUF templates are rendered with a full Jinja engine, including
 // named templates, BOS/EOS variables, and typed tool arguments and results.
-// Close rejects new work and frees weights after active use completes.
+// Each plugin instance loads at most one model at a time. Close rejects new
+// work and frees weights after active use completes.
 // Native shared libraries and backends remain initialized for the process
 // lifetime; all default-operator plugins must use the same library directory.
 // Applications must not independently unload the Yzma runtime while using this
@@ -38,7 +41,6 @@
 //
 // Native loading requires llama.cpp libraries compatible with the pinned Yzma
 // version. See https://yzma.ai/getting-started/install/ for installation.
-// The examples/yzma-loading program demonstrates loading and releasing a model
-// and optionally generating text. Its -serve flag keeps the process running for
-// the Genkit Dev UI. See examples/yzma-structured for typed output.
+// The examples/yzma-loading program demonstrates discovery in the Genkit Dev UI,
+// explicit registration, and cleanup. See examples/yzma-structured for typed output.
 package yzma

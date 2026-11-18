@@ -14,15 +14,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Command yzma-loading demonstrates Genkit registration, explicit preloading,
-// text generation, and cleanup for a local GGUF model. It uses CPU-only weight
-// placement to avoid requiring a GPU.
+// Command yzma-loading demonstrates browsing and running installed GGUF models
+// with the Genkit Dev UI, or explicitly configuring and preloading one model.
 //
-// Install the native libraries compatible with the pinned Yzma release, then run:
+// Install the native libraries compatible with the pinned Yzma release. To use
+// discovery, put a compatible GGUF in ~/models or pass -models-dir:
 //
-//	YZMA_LIB=/path/to/libs go run ./examples/yzma-loading -model /path/to/model.gguf
+//	YZMA_LIB=/path/to/libs task dev:yzma:ui -- -models-dir "$HOME/models"
 //
-// To chat with the model in the Genkit Dev UI, keep the example alive with -serve:
+// In Models, select yzma/smollm2-135m.q4_k_m and try "Once upon a time" with
+// maxOutputTokens set to 16. The first run loads weights; browsing does not.
+//
+// To configure a model explicitly, pass -model. This mode uses CPU placement:
 //
 //	genkit start -- go run ./examples/yzma-loading -model /path/to/model.gguf -serve
 //
@@ -55,16 +58,17 @@ import (
 )
 
 type options struct {
-	lib, path, template, templateName, prompt string
-	modelType                                 yzma.ModelType
-	serve                                     bool
-	tools                                     bool
-	maxTokens                                 int
+	lib, modelsDir, path, template, templateName, prompt string
+	modelType                                            yzma.ModelType
+	serve                                                bool
+	tools                                                bool
+	maxTokens                                            int
 }
 
 func main() {
 	var opts options
 	flag.StringVar(&opts.path, "model", "", "Path to a local GGUF model")
+	flag.StringVar(&opts.modelsDir, "models-dir", "", "Catalog directory; defaults to Yzma's models directory")
 	flag.StringVar(&opts.lib, "lib", os.Getenv("YZMA_LIB"), "Directory containing llama.cpp shared libraries")
 	flag.StringVar(&opts.prompt, "prompt", "", "Generate one text response before exiting")
 	flag.BoolVar(&opts.serve, "serve", false, "Keep running for the Genkit Dev UI")
@@ -84,8 +88,14 @@ func main() {
 }
 
 func run(ctx context.Context, opts options) (err error) {
-	if opts.lib == "" || opts.path == "" {
-		return fmt.Errorf("set YZMA_LIB or -lib, and provide -model")
+	if opts.lib == "" {
+		return fmt.Errorf("set YZMA_LIB or -lib")
+	}
+	if opts.path == "" && !opts.serve {
+		return fmt.Errorf("provide -model for explicit registration or -serve for discovery")
+	}
+	if opts.path == "" && (opts.tools || opts.template != "" || opts.templateName != "" || opts.prompt != "") {
+		return fmt.Errorf("-model is required with -tools, -template, -template-name or -prompt")
 	}
 	if opts.modelType != yzma.ModelTypeChat && opts.modelType != yzma.ModelTypeCompletion {
 		return fmt.Errorf("invalid -type %q; use chat or completion", opts.modelType)
@@ -99,13 +109,18 @@ func run(ctx context.Context, opts options) (err error) {
 	if opts.maxTokens <= 0 {
 		return fmt.Errorf("-max-tokens must be positive")
 	}
-	plugin := &yzma.Yzma{LibPath: opts.lib}
+	plugin := &yzma.Yzma{LibPath: opts.lib, ModelsDir: opts.modelsDir}
 	g := genkit.Init(ctx, genkit.WithPlugins(plugin))
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
 		err = errors.Join(err, plugin.Close(cleanup))
 	}()
+	if opts.path == "" {
+		fmt.Println("Ready for the Genkit Dev UI. Select an installed yzma/ model under Models.")
+		<-ctx.Done()
+		return nil
+	}
 	cpuLayers := int32(0)
 	contextSize := uint32(4096)
 	name := "local-" + string(opts.modelType)

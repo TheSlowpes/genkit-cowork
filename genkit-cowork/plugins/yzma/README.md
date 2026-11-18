@@ -4,11 +4,12 @@ Register local GGUF models with Genkit using
 [Yzma](https://github.com/hybridgroup/yzma)'s in-process llama.cpp bindings.
 No Ollama or vLLM server is required.
 
-Supports lazy weight loading, explicit preloading, chat, raw text completion,
-streaming, and cleanup for decoder-only models. Each request gets a fresh inference context and
-sampler. Tool calling is available for chat models with a tool-aware template.
-Chat and completion also support schema-constrained JSON objects without tools.
-Media processing is not supported.
+Supports metadata-only discovery, chat, raw text completion, and streaming for
+decoder-only models. Weights load on demand, and each request gets a fresh
+inference context and sampler. Tool calling requires an explicit definition
+for a tool-capable chat model with a tool-aware template.
+Chat and completion also support schema-constrained JSON objects without tools
+or streaming. Media processing is not supported.
 
 ## Installation
 
@@ -44,7 +45,76 @@ It is a package in the root Go module, not a separately versioned module.
 
 ## Use with Genkit
 
-Import only the plugin and Genkit. No other cowork components need registration:
+Pass `&yzma.Yzma{}` to `genkit.WithPlugins`. Genkit can then list installed
+models in the Dev UI and resolve them by name, even before it has listed them.
+Use `ModelsDir` to point at a different catalog. No other cowork components
+need registration.
+
+### Discover local models in the Dev UI
+
+Install the [Genkit CLI](https://genkit.dev/docs/devtools/) and the compatible
+native libraries described above. Put a local `SmolLM2-135M.Q4_K_M.gguf` in
+`$HOME/models`. Use the base model, not the `Instruct` variant. The tested
+105 MB artifact is
+[`QuantFactory/SmolLM2-135M-GGUF`](https://huggingface.co/QuantFactory/SmolLM2-135M-GGUF/blob/main/SmolLM2-135M.Q4_K_M.gguf).
+
+From the repository root:
+
+```sh
+export YZMA_LIB="$HOME/.local/lib/yzma"
+task dev:yzma:ui -- -models-dir "$HOME/models"
+```
+
+1. Open the URL printed by Genkit. Under **Models**, select
+   `yzma/smollm2-135m.q4_k_m`.
+2. Send one user message, `Once upon a time`. Set `maxOutputTokens` to `16`
+   in the model config to keep the run short. Expect streamed continuation
+   text and a final response, not an echo of the prompt.
+3. Press Ctrl+C to stop the example and free the weights.
+
+No `DefineModel` or preload call is involved. If you already have
+`gemma-4-E4B-it-Q4_0.gguf` with its canonical embedded chat template, select
+`yzma/gemma-4-e4b-it-q4_0` for text chat. A projector is not required for
+text; discovery does not enable media or tools for this model.
+
+### What discovery includes
+
+The plugin scans the top level of `ModelsDir`, or Yzma's default
+`$HOME/models` if `ModelsDir` is empty. A missing default is an empty catalog.
+A missing explicitly configured directory, a directory that cannot be read,
+and skipped GGUFs produce warnings with the path and reason. The plugin never
+downloads a file. Restart the app to refresh the catalog after moving, adding,
+or replacing files. Avoid changing files in a running catalog.
+
+IDs are `yzma/` plus the lowercased filename without `.gguf`. Use distinct
+names for different quantizations. Names must start with an ASCII letter or
+digit and otherwise contain only ASCII letters, digits, dots, hyphens, and
+underscores. Discovery skips every file in an ID collision. A conventional
+split model keeps its `-00001-of-NNNNN` suffix in the ID; only the first shard
+can be selected and its matching sibling files must be present.
+
+Discovery reads the GGUF header and tensor directory without loading weights.
+It currently recognizes `llama` and `gemma4` GGUFs marked `general.type=model`
+with a tokenizer and decoder tensors, and rejects pooling, non-causal
+attention, and known classifier heads. Projectors, adapters, and unclassified
+GGUFs stay out of the list. On a recognized decoder, a valid default embedded
+template selects chat formatting; no template selects raw continuation. A
+file with only named templates needs an explicit definition.
+
+These are checks for a usable text path, not proof of training intent,
+tool-calling support, native compatibility, or available memory. For example,
+the tested SmolLM2 file has a `llama` decoder, tied token embeddings, and no
+chat template; the absence of that template does not prove that a decoder is
+a base model. The Gemma file identifies `gemma4` and has the canonical default
+template. Generate once to verify a local artifact; use `DefineModel` to
+specify how to run a file discovery did not classify.
+
+### Explicit registration
+
+Call `DefineModel` during setup when you want your own name, settings, or role.
+To override a discovered name, define it before the first lookup or generation
+with that name. Listing alone does not reserve it. Genkit caches resolved
+actions and rejects replacing an already registered name.
 
 ```go
 package main
@@ -102,15 +172,16 @@ func main() {
 ```
 
 `DefineModel` validates and snapshots configuration without loading weights.
-`Preload` takes the unprefixed registration name. The Genkit model identifier is
-`yzma/local-chat`; lookup helpers are `yzma.Model(g, "local-chat")` and
-`yzma.IsDefinedModel(g, "local-chat")`.
+`Preload` takes the unprefixed registration name. To preload a discovered
+model, first resolve it with `yzma.Model` or a Genkit model lookup. Both
+`yzma.Model(g, "local-chat")` and `yzma.IsDefinedModel(g, "local-chat")`
+resolve names without loading weights.
 Preloading is optional: the first generation call loads the model when necessary.
 
 ### Chat versus completion
 
-`ModelDefinition.Type` is required. Choose explicitly; the plugin does not infer
-the mode from a model filename or the presence of template metadata.
+`ModelDefinition.Type` is required for manual definitions. Choose the
+formatting that matches the model.
 
 | Type | Input and formatting | Genkit capabilities |
 | --- | --- | --- |
@@ -147,7 +218,10 @@ Genkit capability metadata comes from the type and cannot be overridden through
 
 Concurrent calls for one registered model share a successful load; failed loads
 can be retried. Registration errors panic, while loading errors are returned by
-`Preload` or generation.
+`Preload` or generation. Each plugin instance allows one load at a time across
+manual and discovered models. Loaded weights stay resident until `Close`.
+Different quantizations or aliases can hold separate copies of weights; the
+load limit does not cap resident memory.
 
 Call `Close(ctx)` to reject new work, wait for active model use, and free weights.
 If cleanup times out or fails, call `Close` again. Shared native libraries and
@@ -160,6 +234,7 @@ Yzma's native runtime while the plugin is in use.
 | Configuration | Scope |
 | --- | --- |
 | `Yzma.LibPath` | Native library directory; falls back to `YZMA_LIB` |
+| `Yzma.ModelsDir` | Catalog directory; falls back to Yzma's default |
 | `ModelDefinition.Type` | Required chat or completion mode |
 | `ModelDefinition.ToolCalling` | Opt into tool calling for a capable chat model |
 | `ModelDefinition.ChatTemplateName` | Select a named template embedded in the GGUF |
@@ -168,9 +243,8 @@ Yzma's native runtime while the plugin is in use.
 | `ModelDefinition.GenerationDefaults` | Sampling and output defaults |
 | `GenerateContentConfig` | Per-request sampling and output overrides |
 
-Context and generation settings are applied on each request. `ModelsDir` and
-`Verbose` are reserved; automatic discovery and logging configuration are not
-implemented.
+Context and generation settings are applied on each request. `Verbose` is
+reserved for future native logging configuration.
 
 Optional numeric fields use pointers so an explicit zero differs from an omitted
 value. Temperature zero requests greedy sampling; GPU layers zero keeps layers
@@ -266,6 +340,7 @@ and validates the raw output against the schema before Genkit decodes it into
 `T`. A prompt can still explain what the fields mean: Genkit does not add
 schema instructions in native constrained mode. A schema constrains shape and
 allowed values, not whether the model's answer is factually correct.
+You can use a discovered model name or an explicit definition.
 
 The supported JSON Schema subset is:
 
@@ -307,7 +382,7 @@ Expected output: `Decoded Go value: {Code:YZMA}`. The prompt asks for plain text
 but the schema permits only a JSON object with the `code` value `"YZMA"`.
 The example uses the CPU and does not download model files.
 
-## Chat in the Genkit Dev UI
+## Run an explicit definition in the Genkit Dev UI
 
 Install the [Genkit CLI](https://genkit.dev/docs/devtools/) if needed, then run
 these commands from the repository root:
@@ -391,7 +466,13 @@ YZMA_LIB=/path/to/libs YZMA_TEST_MODEL=/path/to/model.gguf task test:yzma:native
 The native task requires both paths and does not download models. `YZMA_TEST_TYPE=completion`
 selects raw completion for a base model; the default is chat. `YZMA_TEST_TEMPLATE`
 optionally overrides the chat template. The embedded template test skips models
-without an embedded chat template.
+without an embedded chat template. The discovery test uses the file without
+overrides. To run that test on its own against the example's base model:
+
+```sh
+YZMA_LIB=/path/to/libs YZMA_TEST_MODEL=~/models/SmolLM2-135M.Q4_K_M.gguf \
+  task test:yzma:native -- -run '^TestNativeDiscoveredTextGeneration$'
+```
 
 To verify constrained generation with the base SmolLM2 model:
 

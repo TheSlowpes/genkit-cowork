@@ -47,15 +47,15 @@ var (
 	}
 )
 
-var _ api.Plugin = (*Yzma)(nil)
+var _ api.DynamicPlugin = (*Yzma)(nil)
 
 // Yzma registers local models backed by Yzma's in-process llama.cpp bindings.
-// Init initializes the runtime; DefineModel registers models without loading
-// weights. Call Close to free loaded models before discarding the plugin.
+// Init initializes the runtime and catalogs installed models. Neither discovery
+// nor DefineModel loads weights. Call Close to free loaded models.
 // Configuration fields must not be mutated after Init.
 type Yzma struct {
 	LibPath   string // Path to the llama.cpp library. If empty, the value of the environment variable YZMA_LIB will be used.
-	ModelsDir string // Reserved for future GGUF discovery; models must be defined explicitly.
+	ModelsDir string // Directory of installed GGUFs. Empty uses Yzma's default.
 	Verbose   bool   // Reserved for future native logging configuration.
 	// Operator overrides native initialization and model I/O. Nil uses llama.cpp.
 	Operator ModelOperator
@@ -66,27 +66,19 @@ type Yzma struct {
 	done     chan struct{} // Closed once to reject new model work during shutdown.
 	models   map[string]*generator
 	operator ModelOperator
-
-	// The capabilities cache has its own lock: the discovery goroutines write
-	// to it whil DefineModel reads it holding mu, so sharing one lock would
-	// mean dropping and retaking mu mid-function.
-	capMu           sync.Mutex
-	capabilitesCach map[string]modelCapabilitiesCacheEntry
+	catalog  map[string]ModelDefinition
+	loadGate chan struct{} // Shared by manual and discovered models.
 }
 
-// IsDefinedModel reports whether a model is registered with Genkit.
+// IsDefinedModel reports whether Genkit can resolve a model. It does not load weights.
 func IsDefinedModel(g *genkit.Genkit, name string) bool {
 	return genkit.LookupModel(g, api.NewName(provider, name)) != nil
 }
 
 // Model returns the [ai.Model] with the given name.
-// It returns nil if the model was not configured.
+// It resolves catalog entries on demand and returns nil for unknown names.
 func Model(g *genkit.Genkit, name string) ai.Model {
 	return genkit.LookupModel(g, api.NewName(provider, name))
-}
-
-// modelCapabilitiesCacheEntry is one model's detected capabilities.
-type modelCapabilitiesCacheEntry struct {
 }
 
 // Name returns the Genkit provider name.
@@ -120,6 +112,8 @@ func (y *Yzma) Init(ctx context.Context) []api.Action {
 	y.operator = operator
 	y.models = make(map[string]*generator)
 	y.done = make(chan struct{})
+	y.loadGate = make(chan struct{}, 1)
+	y.catalog = discoverModels(ctx, y.ModelsDir)
 	y.initted = true
 	return []api.Action{}
 }
@@ -127,6 +121,7 @@ func (y *Yzma) Init(ctx context.Context) []api.Action {
 // DefineModel validates and snapshots configuration, then registers a lazy model.
 // It panics for invalid configuration, duplicate names, or an unavailable plugin.
 // Weights are loaded by Preload or the first generation call, not registration.
+// Define overrides before any lookup or generation resolves the discovered name.
 // Type is required and determines prompt preparation and supported capabilities.
 // ModelOptions may customize Label, Stage, and Versions, but not Supports.
 func (y *Yzma) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.ModelOptions) ai.Model {
@@ -153,7 +148,7 @@ func (y *Yzma) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.Mod
 	if opts != nil && opts.Supports != nil {
 		panic("yzma.DefineModel: capabilities are determined by model type; leave ModelOptions.Supports unset")
 	}
-	if y.models[model.Name] != nil || IsDefinedModel(g, model.Name) {
+	if y.models[model.Name] != nil {
 		panic("yzma.DefineModel: model already defined: " + model.Name)
 	}
 	if _, err := applyModelOptions(model.Loading, llama.ModelParams{}); err != nil {
@@ -166,6 +161,15 @@ func (y *Yzma) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.Mod
 		panic("yzma.DefineModel: " + err.Error())
 	}
 
+	gen := y.newGenerator(cloneModelDefinition(model))
+	gen.explicit = true
+	// Genkit checks the registry for duplicates here without dynamic resolution.
+	registered := genkit.DefineModel(g, api.NewName(provider, model.Name), y.modelMetadata(model, opts), gen.generate)
+	y.models[model.Name] = gen
+	return registered
+}
+
+func (y *Yzma) modelMetadata(model ModelDefinition, opts *ai.ModelOptions) *ai.ModelOptions {
 	meta := &ai.ModelOptions{
 		ConfigSchema: core.InferSchemaMap(GenerateContentConfig{}),
 		Label:        provider + " - " + model.Name,
@@ -178,13 +182,14 @@ func (y *Yzma) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.Mod
 		meta.Stage = opts.Stage
 		meta.Versions = slices.Clone(opts.Versions)
 	}
-	gen := &generator{
-		model: cloneModelDefinition(model), operator: y.operator,
-		gate: make(chan struct{}, 1), closed: y.done,
+	return meta
+}
+
+func (y *Yzma) newGenerator(model ModelDefinition) *generator {
+	return &generator{
+		model: model, operator: y.operator, closed: y.done,
+		gate: make(chan struct{}, 1), loadGate: y.loadGate,
 	}
-	registered := genkit.DefineModel(g, api.NewName(provider, model.Name), meta, gen.generate)
-	y.models[model.Name] = gen
-	return registered
 }
 
 func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
@@ -304,7 +309,7 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 
 // Preload loads a registered model's weights without running generation.
 // Concurrent calls share a successful load. A failed load can be retried.
-// name is the unprefixed name supplied to DefineModel.
+// name is the unprefixed name supplied to DefineModel or resolved through Model.
 func (y *Yzma) Preload(ctx context.Context, name string) error {
 	if err := ctx.Err(); err != nil {
 		return err

@@ -17,7 +17,7 @@
 package yzma
 
 // ModelType selects prompt preparation and the model's Genkit capabilities.
-// It is explicit configuration, not inferred from a filename or model metadata.
+// Manual definitions select it explicitly. Discovery selects it from GGUF metadata.
 type ModelType string
 
 const (
