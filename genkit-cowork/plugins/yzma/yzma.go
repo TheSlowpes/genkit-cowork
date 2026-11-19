@@ -201,6 +201,11 @@ func (y *Yzma) modelMetadata(model ModelDefinition, opts *ai.ModelOptions) *ai.M
 		meta.Supports.Constrained = ai.ConstrainedSupportNone
 		meta.Supports.Output = []string{"text"}
 		meta.Supports.ContentType = []string{"text/plain"}
+		if _, ok := y.operator.(ConstrainedMediaGenerationOperator); ok && model.Projector.Images {
+			meta.Supports.Constrained = ai.ConstrainedSupportNoTools
+			meta.Supports.Output = append(meta.Supports.Output, ai.OutputFormatJSON)
+			meta.Supports.ContentType = append(meta.Supports.ContentType, "application/json")
+		}
 	}
 	if opts != nil {
 		if opts.Label != "" {
@@ -308,13 +313,9 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 		return nil, err
 	}
 	if constraint != nil {
-		if err := constraint.validate(result); err != nil {
+		result.Text, err = constraint.outputText(result)
+		if err != nil {
 			return nil, err
-		}
-		// Genkit v1.9 extracts Markdown fences even from inside a JSON
-		// string. Escape the backticks without changing the decoded value.
-		if strings.Contains(result.Text, "```") {
-			result.Text = strings.ReplaceAll(result.Text, "`", `\u0060`)
 		}
 	}
 	parts := []*ai.Part{ai.NewTextPart(result.Text)}

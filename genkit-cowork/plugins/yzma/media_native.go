@@ -78,7 +78,18 @@ func (defaultModelOperator) FreeProjector(ctx context.Context, projector Project
 const smolVLMTemplate = `<|im_start|>{% for message in messages %}{{ message['role'] | capitalize }}: {{ message['content'] }}<end_of_utterance>
 {% endfor %}Assistant:`
 
-func (defaultModelOperator) GenerateMedia(ctx context.Context, model llama.Model, projector ProjectorHandle, input MediaGenerationInput, onText func(context.Context, string) error) (result TextGenerationResult, err error) {
+func (defaultModelOperator) GenerateMedia(ctx context.Context, model llama.Model, projector ProjectorHandle, input MediaGenerationInput, onText func(context.Context, string) error) (TextGenerationResult, error) {
+	return generateNativeMedia(ctx, model, projector, input, "", onText)
+}
+
+func (defaultModelOperator) GenerateConstrainedMedia(ctx context.Context, model llama.Model, projector ProjectorHandle, input MediaGenerationInput, grammar string) (TextGenerationResult, error) {
+	if grammar == "" {
+		return TextGenerationResult{}, fmt.Errorf("missing output grammar")
+	}
+	return generateNativeMedia(ctx, model, projector, input, grammar, nil)
+}
+
+func generateNativeMedia(ctx context.Context, model llama.Model, projector ProjectorHandle, input MediaGenerationInput, grammar string, onText func(context.Context, string) error) (result TextGenerationResult, err error) {
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
@@ -123,6 +134,11 @@ func (defaultModelOperator) GenerateMedia(ctx context.Context, model llama.Model
 	inputTokens, remaining, err := prefillMedia(ctx, lctx, mctx, sampler, prompt, payloads, addSpecial, &position)
 	if err != nil {
 		return result, err
+	}
+	if grammar != "" {
+		if err := addOutputGrammar(sampler, vocab, grammar); err != nil {
+			return result, err
+		}
 	}
 	session := nativeTokenSession{ctx: lctx, vocab: vocab, sampler: sampler, position: &position}
 	return sampleTokens(ctx, session, inputTokens, remaining, input.TextGenerationInput, onText)

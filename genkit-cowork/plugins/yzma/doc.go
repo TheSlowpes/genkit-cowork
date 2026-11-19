@@ -23,8 +23,10 @@
 // calls using Yzma's family parsers. Chat and completion can generate constrained
 // JSON objects through genkit.GenerateData, without tools or streaming. See the
 // package README for the supported schema subset. Vision chat accepts ordered
-// inline JPEG and PNG parts through a compatible projector, without tools or
-// structured output. ModelTypeSpeech turns one text prompt into a WAV clip
+// inline JPEG and PNG parts through a compatible projector. It supports
+// constrained JSON without tools. GenerateBoundingBox returns a validated,
+// typed box for an image and instruction and does not execute actions.
+// ModelTypeSpeech turns one text prompt into a WAV clip
 // using a Soprano backbone and matching decoder. It does not accept media input.
 // ModelTypeDecision uses Yzma's local System One readouts with typed Choice,
 // Score, and Noul fields.
@@ -54,7 +56,7 @@
 // version. See https://yzma.ai/getting-started/install/ for installation.
 // The examples/yzma-loading program demonstrates discovery in the Genkit Dev UI,
 // explicit registration, and cleanup. See examples/yzma-structured for
-// constrained generation, examples/yzma-vision for an inline image request,
+// constrained generation, examples/yzma-vision for inline images and bounding boxes,
 // examples/yzma-speech for saving a WAV, and examples/yzma-decision for local
 // System One decisions.
 package yzma

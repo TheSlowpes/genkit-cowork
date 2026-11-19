@@ -302,8 +302,8 @@ func TestVisionRejectsStructuredOutputBeforeLoad(t *testing.T) {
 		output ai.ModelOutputConfig
 		want   string
 	}{
-		{"JSON", ai.ModelOutputConfig{Format: ai.OutputFormatJSON}, "only unconstrained text output"},
-		{"schema", ai.ModelOutputConfig{Schema: schema}, "only unconstrained text output"},
+		{"JSON", ai.ModelOutputConfig{Format: ai.OutputFormatJSON}, "requires native constraints and a schema"},
+		{"schema", ai.ModelOutputConfig{Schema: schema}, "requires native constraints and a schema"},
 		{"constrained JSON", ai.ModelOutputConfig{Format: ai.OutputFormatJSON, Constrained: true, Schema: schema}, "does not support native constrained output"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

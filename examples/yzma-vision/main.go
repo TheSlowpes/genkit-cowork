@@ -15,7 +15,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The yzma-vision program reads a JPEG or PNG and sends it between text parts
-// in a Genkit request. It runs locally, without a model server or media fetches.
+// in a Genkit request. With -box it prints a grammar-constrained bounding box
+// instead of a text answer. It runs locally, without a model server or media
+// fetches, and never acts on a prediction.
 // See the Yzma plugin README for the model/projector files, exact command,
 // and an example response.
 package main
@@ -23,6 +25,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -43,7 +46,8 @@ func main() {
 	model := flag.String("model", "", "Path to the decoder GGUF")
 	projector := flag.String("projector", "", "Path to the matching projector GGUF")
 	image := flag.String("image", "", "Path to a JPEG or PNG")
-	question := flag.String("question", "What animal is in this image?", "Question about the image")
+	question := flag.String("question", "", "Question or bounding box instruction")
+	box := flag.Bool("box", false, "Return a bounding box as JSON")
 	flag.Parse()
 	if *model == "" || *projector == "" || *image == "" {
 		flag.Usage()
@@ -51,7 +55,14 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	if err := run(ctx, *model, *projector, *image, *question); err != nil {
+	if *question == "" {
+		if *box {
+			*question = "Locate the main subject in the image."
+		} else {
+			*question = "What animal is in this image?"
+		}
+	}
+	if err := run(ctx, *model, *projector, *image, *question, *box); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -77,7 +88,7 @@ func readImage(path string) (*ai.Part, error) {
 	return ai.NewMediaPart(mime, "data:"+mime+";base64,"+base64.StdEncoding.EncodeToString(data)), nil
 }
 
-func run(ctx context.Context, modelPath, projectorPath, imagePath, question string) (err error) {
+func run(ctx context.Context, modelPath, projectorPath, imagePath, question string, predictBox bool) (err error) {
 	image, err := readImage(imagePath)
 	if err != nil {
 		return err
@@ -90,17 +101,29 @@ func run(ctx context.Context, modelPath, projectorPath, imagePath, question stri
 		err = errors.Join(err, local.Close(closeCtx))
 	}()
 	gpu, threads, contextSize := int32(0), int32(4), uint32(4096)
+	maxTokens, temperature := 48, 0.0
+	if predictBox {
+		maxTokens = 128
+	}
 	model := local.DefineModel(g, yzma.ModelDefinition{
 		Name: "vision", Type: yzma.ModelTypeChat,
 		Loading:   yzma.ModelOptions{GGUFPath: modelPath, NGPULayers: &gpu},
 		Projector: &yzma.ProjectorOptions{GGUFPath: projectorPath, Images: true},
 		Context:   yzma.ContextOptions{ContextSize: &contextSize, Threads: &threads, BatchThreads: &threads},
+		GenerationDefaults: &yzma.GenerateContentConfig{
+			MaxOutputTokens: &maxTokens, Temperature: &temperature,
+		},
 	}, nil)
-	maxTokens, temperature := 48, 0.0
+	if predictBox {
+		box, err := yzma.GenerateBoundingBox(ctx, g, model, image, question)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(box)
+	}
 	result, err := genkit.Generate(ctx, g,
 		ai.WithModel(model),
 		ai.WithMessages(ai.NewUserMessage(ai.NewTextPart("Look at this image: "), image, ai.NewTextPart(" "+question))),
-		ai.WithConfig(&yzma.GenerateContentConfig{MaxOutputTokens: &maxTokens, Temperature: &temperature}),
 	)
 	if err != nil {
 		return err

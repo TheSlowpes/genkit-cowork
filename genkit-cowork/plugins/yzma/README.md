@@ -765,8 +765,10 @@ SmolVLM pair above is verified here.
 - The limits per request are four images, 4 MiB per image, and 8 MiB total
   before base64 encoding. Width and height must each be at most 2048 pixels.
   The resulting image and text tokens must also fit the model's context.
-- Vision requests can stream text. Tools, structured output, audio, and video
-  are not supported. After a successful load, the model and projector stay
+- Vision requests can stream text or use [constrained JSON](#constrained-structured-output)
+  without streaming. Neither mode accepts tools. Constrained media requests
+  accept only images.
+  After a successful load, the model and projector stay
   resident until `Close`, which frees the projector before its model. If
   loading a projector or speech decoder fails or is canceled, the plugin
   rolls back the pair. If cleanup fails, the next load or `Close` retries it
@@ -780,4 +782,53 @@ checks that the model identifies the first image:
 YZMA_TEST_MODEL="$HOME/models/SmolVLM-256M-Instruct-Q8_0.gguf" \
 YZMA_TEST_PROJECTOR="$HOME/models/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf" \
   task test:yzma:native -- -run '^TestNativeVisionGeneration$'
+```
+
+## Predict a bounding box
+
+Call `yzma.GenerateBoundingBox(ctx, g, model, image, instruction)` with a
+Yzma vision model, an inline JPEG or PNG Genkit media part, and an instruction
+such as `"Locate the llama in the image."` The helper uses
+`genkit.GenerateData[yzma.BoundingBox]` with native grammar sampling, then
+checks the box geometry. Custom vision operators must implement
+`ConstrainedMediaGenerationOperator` to advertise and run this path.
+
+The result is one box with `left`, `top`, `right`, and `bottom` integer edges.
+The origin is the top-left corner. X increases rightward and Y downward.
+Coordinates are in thousandths of the image width or height, so `1000` is
+the far edge. Use `(left, top)` for the minimum corner and `(right, bottom)`
+for the maximum corner. For an overlay, multiply each horizontal edge by
+`width / 1000.0` and each vertical edge by `height / 1000.0`.
+
+`GenerateBoundingBox` returns an error for coordinates outside `[0, 1000]`
+or any box where `left >= right` or `top >= bottom`. It never clamps or
+reorders coordinates. A valid box can still be wrong about what is in the
+image. The result is data only; this call supplies no tools or action
+execution.
+
+Use the same SmolVLM 256M Instruct pair and sample photo as the vision example.
+From the repository root:
+
+```sh
+export YZMA_LIB="$HOME/.local/lib/yzma"
+task setup
+VLA_IMAGE="$(go env GOMODCACHE)/github.com/hybridgroup/yzma@v1.33.0/images/domestic_llama.jpg"
+task dev:yzma:vision -- -box \
+  -model "$HOME/models/SmolVLM-256M-Instruct-Q8_0.gguf" \
+  -projector "$HOME/models/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf" \
+  -image "$VLA_IMAGE" -question "Locate the llama in the image."
+```
+
+The tested CPU run prints `{"left":0,"top":0,"right":1000,"bottom":1000}`.
+The small model guessed the whole frame. This pair verifies the data path,
+not precise object localization.
+
+The opt-in native test uses the same pair and image. It checks the typed
+result and verifies that asking for an empty box returns a geometry error:
+
+```sh
+YZMA_TEST_MODEL="$HOME/models/SmolVLM-256M-Instruct-Q8_0.gguf" \
+YZMA_TEST_PROJECTOR="$HOME/models/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf" \
+YZMA_TEST_VLA_IMAGE="$VLA_IMAGE" \
+  task test:yzma:native -- -run '^TestNativeBoundingBox$' -count=1
 ```

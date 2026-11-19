@@ -43,6 +43,15 @@ type MediaGenerationOperator interface {
 	GenerateMedia(ctx context.Context, model llama.Model, projector ProjectorHandle, input MediaGenerationInput, onText func(context.Context, string) error) (TextGenerationResult, error)
 }
 
+// ConstrainedMediaGenerationOperator extends image chat with GBNF decoding.
+// Apply the grammar's "root" rule to output tokens only, not the media prompt.
+// Report token or context exhaustion as Limited and release request resources
+// before returning, as with GenerateMedia.
+type ConstrainedMediaGenerationOperator interface {
+	MediaGenerationOperator
+	GenerateConstrainedMedia(ctx context.Context, model llama.Model, projector ProjectorHandle, input MediaGenerationInput, grammar string) (TextGenerationResult, error)
+}
+
 // MediaGenerationInput contains generation settings and ordered chat messages.
 // TextGenerationInput.Messages is unused. Read the ordered Messages instead.
 type MediaGenerationInput struct {
@@ -108,9 +117,37 @@ func (g *generator) generateMedia(ctx context.Context, input *ai.ModelRequest, c
 	if !ok {
 		return nil, fmt.Errorf("yzma: operator does not support media generation")
 	}
-	messages, err := mediaMessages(ctx, input, *g.model.Projector)
+	constraint, err := prepareConstraint(input)
 	if err != nil {
 		return nil, err
+	}
+	var constrainedOperator ConstrainedMediaGenerationOperator
+	messageInput := input
+	if constraint != nil {
+		if cb != nil {
+			return nil, fmt.Errorf("yzma: constrained output does not support streaming")
+		}
+		constrainedOperator, ok = g.operator.(ConstrainedMediaGenerationOperator)
+		if !ok {
+			return nil, fmt.Errorf("yzma: the model operator does not support constrained media output")
+		}
+		// The output config has been checked above; parse only the messages below.
+		validated := *input
+		validated.Output = nil
+		messageInput = &validated
+	}
+	messages, err := mediaMessages(ctx, messageInput, *g.model.Projector)
+	if err != nil {
+		return nil, err
+	}
+	if constraint != nil {
+		for _, msg := range messages {
+			for _, part := range msg.Parts {
+				if part.MIMEType != "" && !strings.HasPrefix(part.MIMEType, "image/") {
+					return nil, fmt.Errorf("yzma: constrained media output supports only image input")
+				}
+			}
+		}
 	}
 	requestConfig, err := decodeGenerationConfig(input.Config)
 	if err != nil {
@@ -119,6 +156,9 @@ func (g *generator) generateMedia(ctx context.Context, input *ai.ModelRequest, c
 	cfg, err := resolveGenerationConfig(nil, g.model.GenerationDefaults, requestConfig)
 	if err != nil {
 		return nil, err
+	}
+	if constraint != nil && len(cfg.StopSequences) > 0 {
+		return nil, fmt.Errorf("yzma: constrained output does not support stop sequences")
 	}
 	if err := g.acquire(ctx); err != nil {
 		return nil, err
@@ -135,13 +175,24 @@ func (g *generator) generateMedia(ctx context.Context, input *ai.ModelRequest, c
 		ChatTemplateName: g.model.ChatTemplateName, Context: g.model.Context,
 		Sampler: cfg.Sampler, MaxOutputTokens: cfg.MaxOutputTokens, StopSequences: cfg.StopSequences,
 	}
-	result, err := operator.GenerateMedia(ctx, g.loaded, g.projector,
-		MediaGenerationInput{TextGenerationInput: settings, Messages: messages}, onText)
+	generation := MediaGenerationInput{TextGenerationInput: settings, Messages: messages}
+	var result TextGenerationResult
+	if constraint != nil {
+		result, err = constrainedOperator.GenerateConstrainedMedia(ctx, g.loaded, g.projector, generation, constraint.grammar)
+	} else {
+		result, err = operator.GenerateMedia(ctx, g.loaded, g.projector, generation, onText)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("generate with model %q: %w", g.model.Name, err)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if constraint != nil {
+		result.Text, err = constraint.outputText(result)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return generationResponse(input, result, []*ai.Part{ai.NewTextPart(result.Text)}), nil
 }

@@ -112,6 +112,18 @@ func (c *outputConstraint) validate(result TextGenerationResult) error {
 	return nil
 }
 
+func (c *outputConstraint) outputText(result TextGenerationResult) (string, error) {
+	if err := c.validate(result); err != nil {
+		return "", err
+	}
+	// Genkit v1.9 extracts Markdown fences even from inside a JSON string.
+	// Escape the backticks without changing the decoded value.
+	if strings.Contains(result.Text, "```") {
+		return strings.ReplaceAll(result.Text, "`", `\u0060`), nil
+	}
+	return result.Text, nil
+}
+
 const jsonGrammar = `ws ::= [ \t\n\r]?
 jstring ::= "\"" ([^"\\\x00-\x1f] | "\\" ["\\/bfnrt])* "\""
 jinteger ::= "-"? ("0" | [1-9] [0-9]{0,14})

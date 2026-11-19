@@ -205,16 +205,8 @@ func generateNativeText(ctx context.Context, model llama.Model, input TextGenera
 		llama.SamplerAccept(sampler, token)
 	}
 	if grammar != "" {
-		filter := llama.SamplerInitGrammar(vocab, grammar, "root")
-		if filter == 0 {
-			return result, fmt.Errorf("allocate output grammar sampler")
-		}
-		// Move the existing stages behind the grammar. It must filter the
-		// full vocabulary before top-k, top-p or token selection.
-		stages := llama.SamplerChainN(sampler)
-		llama.SamplerChainAdd(sampler, filter)
-		for range stages {
-			llama.SamplerChainAdd(sampler, llama.SamplerChainRemove(sampler, 0))
+		if err := addOutputGrammar(sampler, vocab, grammar); err != nil {
+			return result, err
 		}
 	}
 	if input.ToolCalling {
@@ -224,6 +216,21 @@ func generateNativeText(ctx context.Context, model llama.Model, input TextGenera
 	}
 	session := nativeTokenSession{ctx: lctx, vocab: vocab, sampler: sampler, special: input.ToolCalling}
 	return generateTokens(ctx, session, tokens, batchSize, capacity, input, onText)
+}
+
+// addOutputGrammar runs after the sampler has accepted the prompt. Move the
+// existing stages behind the grammar so it sees the full vocabulary.
+func addOutputGrammar(sampler llama.Sampler, vocab llama.Vocab, grammar string) error {
+	filter := llama.SamplerInitGrammar(vocab, grammar, "root")
+	if filter == 0 {
+		return fmt.Errorf("allocate output grammar sampler")
+	}
+	stages := llama.SamplerChainN(sampler)
+	llama.SamplerChainAdd(sampler, filter)
+	for range stages {
+		llama.SamplerChainAdd(sampler, llama.SamplerChainRemove(sampler, 0))
+	}
+	return nil
 }
 
 // prepareTextPrompt keeps completion text literal. Only chat mode reads model
