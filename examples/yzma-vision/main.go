@@ -144,19 +144,27 @@ func run(ctx context.Context, modelPath, projectorPath, imagePath, question stri
 }
 
 func checkTargets(ctx context.Context, g *genkit.Genkit, model ai.Model) error {
+	var failures []error
 	for _, target := range groundingfixture.Targets() {
-		url, err := target.PNG()
-		if err != nil {
-			return err
+		if err := checkTarget(ctx, g, model, target); err != nil {
+			failures = append(failures, fmt.Errorf("%s target: %w", target.Name, err))
 		}
-		box, err := yzma.GenerateBoundingBox(ctx, g, model, ai.NewMediaPart("image/png", url), groundingfixture.Instruction)
-		if err != nil {
-			return fmt.Errorf("%s target: %w", target.Name, err)
-		}
-		if err := target.Check(box.Left, box.Top, box.Right, box.Bottom); err != nil {
-			return err
-		}
-		fmt.Printf("%s red square: %+v\n", target.Name, *box)
 	}
+	return errors.Join(failures...)
+}
+
+func checkTarget(ctx context.Context, g *genkit.Genkit, model ai.Model, target groundingfixture.Target) error {
+	url, err := target.PNG()
+	if err != nil {
+		return err
+	}
+	box, err := yzma.GenerateBoundingBox(ctx, g, model, ai.NewMediaPart("image/png", url), groundingfixture.Instruction)
+	if err != nil {
+		return err
+	}
+	if err := target.Check(box.Left, box.Top, box.Right, box.Bottom); err != nil {
+		return err
+	}
+	fmt.Printf("%s red square: %+v\n", target.Name, *box)
 	return nil
 }

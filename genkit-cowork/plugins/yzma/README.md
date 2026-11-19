@@ -822,16 +822,17 @@ reorders coordinates. A valid box can still be wrong about what is in the
 image. The result is data only; this call supplies no tools or action
 execution.
 
-For a grounding check, use [Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B),
-whose model card reports RefCOCO grounding results. Use the public
-[Qwen3.5-0.8B-Q4_0.gguf and matching mmproj-F16.gguf](https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/tree/main).
+To reproduce the grounding check below, use the public
+[Qwen3.5-0.8B-Q4_0.gguf and matching mmproj-F16.gguf](https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/tree/6ab461498e2023f6e3c1baea90a8f0fe38ab64d0).
 Together they take about 712 MB. The fixture and test do not download them.
+The [base model card](https://huggingface.co/Qwen/Qwen3.5-0.8B) reports RefCOCO
+results, but this quantized pair did not pass the local check.
 
 `-check-grounding` generates two images with the same red target in different
 positions, plus a blue distractor. It asks the same question for both images
 and requires at least 0.5 intersection-over-union with each target. A whole-frame
-box scores 0.09 and fails. The quantized pair has not been verified on this
-fixture.
+box scores 0.09 and fails. The example checks both images and exits nonzero
+if either misses.
 
 ```sh
 export YZMA_LIB="$HOME/.local/lib"
@@ -846,6 +847,24 @@ The opt-in native test uses the same fixtures and acceptance check:
 ```sh
 task test:yzma:grounding:native
 ```
+
+**Observed CPU result:** With Yzma v1.33.0 and llama.cpp build 12359
+(`b1b770d90`), the decoder and projector loaded and both images encoded.
+The test and example rejected both boxes before overlap scoring because
+neither box had positive width:
+
+| Red square | Expected `(left, top, right, bottom)` | Predicted |
+| --- | --- | --- |
+| Left | `(100, 200, 400, 500)` | `(100, 100, 100, 1000)` |
+| Right | `(600, 200, 900, 500)` | `(160, 100, 160, 1000)` |
+
+Rewording the coordinate instructions and rerunning on 1000 × 1000 versions
+of the same images did not produce two passing boxes. A stock llama.cpp
+multimodal CLI control with a `bbox_2d` grammar returned the exact source-pixel
+edges `[32, 64, 128, 160]` for the left image despite the normalization
+instruction. For the right image, `[192, 64, 592, 192]` missed in normalized
+coordinates and exceeded the source image width if read as pixels. These runs
+confirm image input, not localization under this coordinate contract.
 
 Use `-box -image path.png -question '…'` for your own image. That mode checks
 geometry only because there is no known answer to compare with.
