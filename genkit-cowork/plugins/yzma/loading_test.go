@@ -26,7 +26,9 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/google/go-cmp/cmp"
 	"github.com/hybridgroup/yzma/pkg/llama"
+	"github.com/hybridgroup/yzma/pkg/mtmd"
 )
 
 type testModelOperator struct {
@@ -71,6 +73,92 @@ func testModelDefinition() ModelDefinition {
 	return ModelDefinition{
 		Name: "local-chat", Type: "chat",
 		Loading: ModelOptions{GGUFPath: "chat.gguf"},
+	}
+}
+
+func TestCanceledCompanionLoadRetainsOwnership(t *testing.T) {
+	for _, kind := range []string{"speech", "vision"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var events []string
+			var loads, frees int
+			busy := errors.New("companion cleanup failed")
+			base := &testModelOperator{
+				load: func(context.Context, ModelOptions) (llama.Model, error) {
+					events = append(events, "load model")
+					return 42, nil
+				},
+				free: func(context.Context, llama.Model) error {
+					events = append(events, "free model")
+					return nil
+				},
+			}
+			load := func() {
+				events = append(events, "load companion")
+				loads++
+				if loads == 1 {
+					cancel()
+				}
+			}
+			free := func(ctx context.Context, handle uintptr) error {
+				if ctx.Err() != nil || handle != uintptr(loads) {
+					t.Errorf("free companion: context error = %v, handle = %d, want live context and handle %d", ctx.Err(), handle, loads)
+				}
+				events = append(events, "free companion")
+				frees++
+				if frees <= 2 {
+					return busy
+				}
+				return nil
+			}
+			var def ModelDefinition
+			var op ModelOperator
+			switch kind {
+			case "speech":
+				def = speechDefinition()
+				op = &testSpeechOperator{testModelOperator: base,
+					loadDecoder: func(context.Context, llama.Model, string) (mtmd.Context, error) {
+						load()
+						return mtmd.Context(loads), nil // Cancellation after a successful allocation.
+					},
+					freeDecoder: func(ctx context.Context, handle mtmd.Context) error { return free(ctx, uintptr(handle)) },
+				}
+			case "vision":
+				def = testModelDefinition()
+				def.Projector = &ProjectorOptions{GGUFPath: "projector.gguf", Images: true}
+				op = &testVisionOperator{testModelOperator: base,
+					loadProjector: func(ctx context.Context, _ llama.Model, _ ModelDefinition) (ProjectorHandle, error) {
+						load()
+						return ProjectorHandle(loads), ctx.Err() // Error still transfers the handle.
+					},
+					freeProjector: func(ctx context.Context, handle ProjectorHandle) error { return free(ctx, uintptr(handle)) },
+				}
+			}
+			p, g := initLoadingTest(t, op)
+			p.DefineModel(g, def, nil)
+			if err := p.Preload(ctx, def.Name); !errors.Is(err, context.Canceled) || !errors.Is(err, busy) {
+				t.Fatalf("canceled preload = %v, want cancellation and cleanup error", err)
+			}
+			if err := p.Preload(t.Context(), def.Name); !errors.Is(err, busy) {
+				t.Fatalf("retry with failed cleanup = %v, want cleanup error", err)
+			}
+			if kind == "speech" {
+				if err := p.Preload(t.Context(), def.Name); err != nil {
+					t.Fatalf("retry after cleanup = %v", err)
+				}
+			}
+			if err := p.Close(t.Context()); err != nil {
+				t.Fatalf("Close = %v", err)
+			}
+			want := []string{"load model", "load companion", "free companion", "free companion", "free companion", "free model"}
+			if kind == "speech" {
+				want = append(want, "load model", "load companion", "free companion", "free model")
+			}
+			if diff := cmp.Diff(want, events); diff != "" {
+				t.Errorf("companion lifecycle (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 

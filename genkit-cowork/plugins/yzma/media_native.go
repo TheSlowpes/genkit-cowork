@@ -58,16 +58,11 @@ func (defaultModelOperator) LoadProjector(ctx context.Context, model llama.Model
 	params.SetProgressCallback(func(float32, uintptr) bool { return ctx.Err() == nil })
 	defer params.SetProgressCallback(nil)
 	mctx, err := mtmd.InitFromFile(def.Projector.GGUFPath, model, params)
+	err = errors.Join(err, ctx.Err())
 	if err == nil && def.Projector.Images && !mtmd.SupportVision(mctx) {
 		err = fmt.Errorf("loaded projector does not support image input")
 	}
-	if err = errors.Join(err, ctx.Err()); err != nil {
-		if mctx != 0 {
-			err = errors.Join(err, mtmd.Free(mctx))
-		}
-		return 0, err
-	}
-	return ProjectorHandle(mctx), nil
+	return ProjectorHandle(mctx), err
 }
 
 func (defaultModelOperator) FreeProjector(ctx context.Context, projector ProjectorHandle) error {

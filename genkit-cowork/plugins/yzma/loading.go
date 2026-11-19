@@ -129,15 +129,16 @@ func (defaultModelOperator) FreeModel(ctx context.Context, model llama.Model) er
 // gate serializes loading, use, and cleanup, so request resources cannot
 // outlive the model, projector, or speech decoder they reference.
 type generator struct {
-	model         ModelDefinition
-	operator      ModelOperator
-	explicit      bool // Set only for DefineModel registrations.
-	gate          chan struct{}
-	loadGate      chan struct{}
-	closed        <-chan struct{}
-	loaded        llama.Model
-	speechDecoder mtmd.Context
-	projector     ProjectorHandle
+	model           ModelDefinition
+	operator        ModelOperator
+	explicit        bool // Set only for DefineModel registrations.
+	gate            chan struct{}
+	loadGate        chan struct{}
+	closed          <-chan struct{}
+	loaded          llama.Model
+	speechDecoder   mtmd.Context
+	projector       ProjectorHandle
+	rollbackPending bool // A failed companion load is not usable until cleanup succeeds.
 }
 
 // acquire loads weights and any media companion, then reserves them until release.
@@ -156,7 +157,7 @@ func (g *generator) acquire(ctx context.Context) error {
 		g.release()
 		return err
 	}
-	if g.loaded == 0 || (g.model.Type == ModelTypeSpeech && g.speechDecoder == 0) ||
+	if g.rollbackPending || g.loaded == 0 || (g.model.Type == ModelTypeSpeech && g.speechDecoder == 0) ||
 		(g.model.Projector != nil && g.projector == 0) {
 		if err := g.load(ctx); err != nil {
 			g.release()
@@ -199,6 +200,15 @@ func (g *generator) load(ctx context.Context) error {
 	if err := g.available(ctx); err != nil {
 		return err
 	}
+	if g.rollbackPending {
+		if err := g.freeModel(context.WithoutCancel(ctx)); err != nil {
+			return fmt.Errorf("retry companion load cleanup: %w", err)
+		}
+		g.rollbackPending = false
+		if err := g.available(ctx); err != nil {
+			return err
+		}
+	}
 	if g.loaded == 0 {
 		model, err := g.operator.LoadModel(ctx, g.model.Loading)
 		if err != nil {
@@ -209,20 +219,23 @@ func (g *generator) load(ctx context.Context) error {
 		}
 		g.loaded = model
 	}
+	var err error
 	switch {
 	case g.model.Type == ModelTypeSpeech:
-		if err := g.loadSpeechDecoder(ctx); err != nil {
-			return errors.Join(err, g.freeModel(context.WithoutCancel(ctx)))
-		}
+		err = g.loadSpeechDecoder(ctx)
 	case g.model.Projector != nil:
-		if err := g.available(ctx); err != nil {
-			return err
-		}
-		if err := g.loadProjector(ctx); err != nil {
-			return fmt.Errorf("load projector: %w", err)
+		err = g.loadProjector(ctx)
+	default:
+		return nil
+	}
+	if err = errors.Join(err, g.available(ctx)); err != nil {
+		cleanupErr := g.freeModel(context.WithoutCancel(ctx))
+		g.rollbackPending = cleanupErr != nil
+		if cleanupErr != nil {
+			return errors.Join(err, fmt.Errorf("roll back companion load: %w", cleanupErr))
 		}
 	}
-	return nil
+	return err
 }
 
 func (g *generator) available(ctx context.Context) error {

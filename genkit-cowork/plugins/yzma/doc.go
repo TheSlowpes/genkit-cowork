@@ -37,6 +37,8 @@
 // named templates, BOS/EOS variables, and typed tool arguments and results.
 // Each plugin instance loads at most one model at a time. Close rejects new
 // work and frees projectors, speech decoders, and model weights after active use.
+// A failed companion load frees the companion before its model. If cleanup
+// fails, the next load attempt or Close retries it before proceeding.
 // Native shared libraries and backends remain initialized for the process
 // lifetime; all default-operator plugins must use the same library directory.
 // Applications must not independently unload the Yzma runtime while using this

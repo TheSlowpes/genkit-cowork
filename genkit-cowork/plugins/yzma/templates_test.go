@@ -18,6 +18,7 @@ package yzma
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -101,6 +102,19 @@ func TestNativeEmbeddedTemplate(t *testing.T) {
 	architecture, _ := llama.ModelMetaValStr(model, "general.architecture")
 	if architecture != "gemma4" {
 		return
+	}
+	// Exercise discovery with the real canonical template and no companion.
+	modelPath, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.Symlink(modelPath, filepath.Join(dir, "gemma.gguf")); err != nil {
+		t.Fatal(err)
+	}
+	discovered, ok := discoverModels(t.Context(), dir)["gemma"]
+	if !ok || discovered.Type != ModelTypeChat || discovered.Projector != nil || discovered.ToolCalling {
+		t.Fatalf("discovered Gemma = %+v, present = %v; want text-only chat without tools", discovered, ok)
 	}
 	input.ToolCalling = true
 	input.Tools = []message.ToolDefinition{{Type: "function", Function: message.ToolFunctionDefinition{

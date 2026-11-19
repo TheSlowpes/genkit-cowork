@@ -32,7 +32,8 @@ type ProjectorHandle uintptr
 
 // MediaGenerationOperator optionally extends ModelOperator with media inference.
 // The plugin serializes access to a projector and frees it before its model.
-// LoadProjector must return a nonzero handle on success and clean up on error.
+// LoadProjector must return a nonzero handle on success. A nonzero handle
+// returned with an error transfers ownership for cleanup, not inference.
 // FreeProjector must leave the handle valid on error so Close can retry.
 // GenerateMedia owns its request resources and releases them before returning.
 // Its text callback and result follow the TextGenerationOperator contract.
@@ -81,18 +82,21 @@ func validateProjectorOptions(model ModelDefinition) error {
 }
 
 func (g *generator) loadProjector(ctx context.Context) error {
+	if err := g.available(ctx); err != nil {
+		return err
+	}
 	operator, ok := g.operator.(MediaGenerationOperator)
 	if !ok {
 		return fmt.Errorf("operator does not support media generation")
 	}
-	projector, err := operator.LoadProjector(ctx, g.loaded, g.model)
+	var err error
+	g.projector, err = operator.LoadProjector(ctx, g.loaded, g.model)
 	if err != nil {
-		return err
+		return fmt.Errorf("load projector: %w", err)
 	}
-	if projector == 0 {
-		return fmt.Errorf("operator returned a zero handle")
+	if g.projector == 0 {
+		return fmt.Errorf("load projector: operator returned a zero handle")
 	}
-	g.projector = projector
 	return nil
 }
 

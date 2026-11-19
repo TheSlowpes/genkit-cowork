@@ -215,7 +215,7 @@ func TestVisionGenkitOrderAndLifecycle(t *testing.T) {
 	def := testModelDefinition()
 	def.Projector = &ProjectorOptions{GGUFPath: "manual.gguf", Images: true}
 	model := plugin.DefineModel(g, def, nil)
-	def.Projector.GGUFPath = "changed.gguf" // Registration owns a snapshot.
+	*def.Projector = ProjectorOptions{GGUFPath: "changed.gguf"} // Registration owns a snapshot.
 	prompt := ai.NewUserMessage(ai.NewTextPart("First: "), pngPart(red), ai.NewTextPart(" then "), pngPart(blue), ai.NewTextPart(" Which is red?"))
 	generate := func(ctx context.Context) (*ai.ModelResponse, error) {
 		return genkit.Generate(ctx, g, ai.WithModel(model), ai.WithMessages(prompt))
@@ -280,6 +280,39 @@ func TestVisionRejectsInvalidMediaBeforeLoad(t *testing.T) {
 			_, err := genkit.Generate(t.Context(), g, ai.WithModel(model), ai.WithMessages(ai.NewUserMessage(tc.parts...)))
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("generate error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestVisionRejectsStructuredOutputBeforeLoad(t *testing.T) {
+	p, g := initLoadingTest(t, &testVisionOperator{testModelOperator: &testModelOperator{
+		load: func(context.Context, ModelOptions) (llama.Model, error) {
+			t.Fatal("unsupported output must not load weights")
+			return 0, nil
+		},
+	}})
+	def := testModelDefinition()
+	def.Projector = &ProjectorOptions{GGUFPath: "manual.gguf", Images: true}
+	model := p.DefineModel(g, def, nil)
+	schema := map[string]any{"type": "object"}
+	part := pngPart(solidPNG(t, 2, 2, color.White))
+	for _, tc := range []struct {
+		name   string
+		output ai.ModelOutputConfig
+		want   string
+	}{
+		{"JSON", ai.ModelOutputConfig{Format: ai.OutputFormatJSON}, "only unconstrained text output"},
+		{"schema", ai.ModelOutputConfig{Schema: schema}, "only unconstrained text output"},
+		{"constrained JSON", ai.ModelOutputConfig{Format: ai.OutputFormatJSON, Constrained: true, Schema: schema}, "does not support native constrained output"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := model.Generate(t.Context(), &ai.ModelRequest{
+				Messages: []*ai.Message{ai.NewUserMessage(ai.NewTextPart("What is this?"), part)},
+				Output:   &tc.output,
+			}, nil)
+			if res != nil || err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Generate = (%v, %v), want nil response and %q error", res, err, tc.want)
 			}
 		})
 	}

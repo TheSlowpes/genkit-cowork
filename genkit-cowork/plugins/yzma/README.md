@@ -671,8 +671,11 @@ SmolVLM pair above is verified here.
   before base64 encoding. Width and height must each be at most 2048 pixels.
   The resulting image and text tokens must also fit the model's context.
 - Vision requests can stream text. Tools, structured output, audio, and video
-  are not supported. The model and projector load lazily and stay resident
-  until `Close`, which frees the projector before its model. Use a fresh cleanup
+  are not supported. After a successful load, the model and projector stay
+  resident until `Close`, which frees the projector before its model. If
+  loading a projector or speech decoder fails or is canceled, the plugin
+  rolls back the pair. If cleanup fails, the next load or `Close` retries it
+  before the model can be used. Use a fresh cleanup
   context if the request or application context has been canceled.
 
 The native test sends two colored images in both orders through Genkit and

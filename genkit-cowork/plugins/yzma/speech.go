@@ -48,8 +48,9 @@ type SpeechConfig struct {
 // SpeechOperator extends ModelOperator with buffered speech synthesis.
 // A decoder belongs to the supplied backbone model and is reused until Close.
 // Calls for a single registration are serialized; distinct models may run concurrently.
-// LoadSpeechDecoder must clean up on error and return a nonzero handle on
-// success. FreeSpeechDecoder must leave the handle valid if cleanup fails.
+// LoadSpeechDecoder must return a nonzero handle on success. A nonzero handle
+// returned with an error transfers ownership for cleanup, not inference.
+// FreeSpeechDecoder must leave the handle valid if cleanup fails.
 // GenerateSpeech must free its request resources before returning. It returns
 // a complete canonical RIFF WAV, mono signed 16-bit PCM at 32 kHz.
 type SpeechOperator interface {
@@ -82,15 +83,15 @@ func (g *generator) loadSpeechDecoder(ctx context.Context) error {
 		return err
 	}
 	op := g.operator.(SpeechOperator)
-	decoder, err := op.LoadSpeechDecoder(ctx, g.loaded, g.model.SpeechDecoderPath, g.model.Loading, g.model.Context)
+	var err error
+	g.speechDecoder, err = op.LoadSpeechDecoder(ctx, g.loaded, g.model.SpeechDecoderPath, g.model.Loading, g.model.Context)
 	if err != nil {
 		return fmt.Errorf("load speech decoder: %w", err)
 	}
-	if decoder == 0 {
+	if g.speechDecoder == 0 {
 		return fmt.Errorf("load speech decoder: operator returned a zero handle")
 	}
-	g.speechDecoder = decoder
-	return g.available(ctx)
+	return nil
 }
 
 func (g *generator) generateSpeech(ctx context.Context, input *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
@@ -232,9 +233,6 @@ func (defaultModelOperator) LoadSpeechDecoder(ctx context.Context, model llama.M
 		} else if !caps.AudioGen {
 			err = fmt.Errorf("Soprano GGUF pair does not support speech output")
 		}
-	}
-	if err != nil && decoder != 0 {
-		return 0, errors.Join(err, mtmd.Free(decoder))
 	}
 	return decoder, err
 }

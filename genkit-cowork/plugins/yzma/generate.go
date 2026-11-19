@@ -335,6 +335,12 @@ func (s nativeTokenSession) Decode(ctx context.Context, tokens []llama.Token) er
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// Text prefill uses automatic positions for batches. Media prefill is
+	// handled by mtmd; only its single-token sampling steps set an explicit
+	// position. llama_decode reads one position per token when Pos is nonnil.
+	if s.position != nil && len(tokens) != 1 {
+		return fmt.Errorf("decode at an explicit position requires exactly one token")
+	}
 	batch := llama.BatchGetOne(tokens)
 	batch.Pos = s.position
 	code, err := llama.Decode(s.ctx, batch)
@@ -349,7 +355,7 @@ func (s nativeTokenSession) Decode(ctx context.Context, tokens []llama.Token) er
 		return fmt.Errorf("llama.Decode returned status %d", code)
 	}
 	if s.position != nil {
-		*s.position += llama.Pos(len(tokens))
+		*s.position++
 	}
 	return nil
 }

@@ -326,6 +326,15 @@ func TestGenerateTokens(t *testing.T) {
 	}
 }
 
+func TestNativeTokenSessionRejectsExplicitPositionBatch(t *testing.T) {
+	position := llama.Pos(12)
+	session := nativeTokenSession{position: &position}
+	err := session.Decode(t.Context(), []llama.Token{1, 2})
+	if err == nil || !strings.Contains(err.Error(), "requires exactly one token") {
+		t.Fatalf("Decode = %v, want a single-token requirement before calling llama.cpp", err)
+	}
+}
+
 func TestGenerateTokensErrorsAndCancellation(t *testing.T) {
 	for _, decodeAt := range []int{1, 2} {
 		session := &scriptedTokenSession{
