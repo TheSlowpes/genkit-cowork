@@ -71,6 +71,7 @@ type MediaInputPart struct {
 	MIMEType string
 	Data     []byte
 	image    image.Image
+	pcm16    []byte
 }
 
 const (
@@ -84,8 +85,11 @@ func validateProjectorOptions(model ModelDefinition) error {
 	if strings.TrimSpace(p.GGUFPath) == "" || strings.ContainsRune(p.GGUFPath, '\x00') {
 		return fmt.Errorf("projector ggufPath must be a non-empty path without NUL bytes")
 	}
-	if model.Type != ModelTypeChat || model.ToolCalling || !p.Images {
-		return fmt.Errorf("an image projector requires a chat model without tool calling")
+	if model.Type != ModelTypeChat || model.ToolCalling {
+		return fmt.Errorf("a media projector requires a chat model without tool calling")
+	}
+	if !p.Images && !p.Audio {
+		return fmt.Errorf("a media projector requires an enabled input capability")
 	}
 	return nil
 }
@@ -124,6 +128,9 @@ func (g *generator) generateMedia(ctx context.Context, input *ai.ModelRequest, c
 	var constrainedOperator ConstrainedMediaGenerationOperator
 	messageInput := input
 	if constraint != nil {
+		if !g.model.Projector.Images {
+			return nil, fmt.Errorf("yzma: constrained media output requires an image-capable projector")
+		}
 		if cb != nil {
 			return nil, fmt.Errorf("yzma: constrained output does not support streaming")
 		}
@@ -271,6 +278,10 @@ func decodeMediaPart(part *ai.Part, projector ProjectorOptions, budget int) (Med
 	case "image/jpeg", "image/png":
 		if projector.Images {
 			return decodeImagePart(mime, payload, budget)
+		}
+	case "audio/wav", "audio/x-wav":
+		if projector.Audio {
+			return decodeAudioPart(mime, payload, budget)
 		}
 	}
 	return MediaInputPart{}, fmt.Errorf("unsupported media MIME type %q", mime)

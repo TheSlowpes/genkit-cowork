@@ -45,6 +45,11 @@ func (defaultModelOperator) LoadProjector(ctx context.Context, model llama.Model
 			return 0, err
 		}
 	}
+	if def.Projector.Audio {
+		if err := validateAudioPair(decoder.values, projector); err != nil {
+			return 0, err
+		}
+	}
 	if err := loadMediaLibrary(ctx); err != nil {
 		return 0, err
 	}
@@ -61,6 +66,9 @@ func (defaultModelOperator) LoadProjector(ctx context.Context, model llama.Model
 	err = errors.Join(err, ctx.Err())
 	if err == nil && def.Projector.Images && !mtmd.SupportVision(mctx) {
 		err = fmt.Errorf("loaded projector does not support image input")
+	}
+	if err == nil && def.Projector.Audio {
+		err = validateNativeAudio(mctx)
 	}
 	return ProjectorHandle(mctx), err
 }
@@ -253,6 +261,8 @@ func mediaBitmap(ctx context.Context, part MediaInputPart) (mtmd.Bitmap, error) 
 	switch part.MIMEType {
 	case "image/jpeg", "image/png":
 		return imageBitmap(ctx, part.image)
+	case "audio/wav", "audio/x-wav":
+		return audioBitmap(part.pcm16)
 	default:
 		return 0, fmt.Errorf("cannot create bitmap for media MIME type %q", part.MIMEType)
 	}

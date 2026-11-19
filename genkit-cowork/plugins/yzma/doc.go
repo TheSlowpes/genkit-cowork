@@ -26,6 +26,8 @@
 // inline JPEG and PNG parts through a compatible projector. It supports
 // constrained JSON without tools. GenerateBoundingBox returns a validated,
 // typed box for an image and instruction and does not execute actions.
+// Qwen3-ASR chat accepts ordered inline PCM WAV parts through a compatible
+// projector, without tools or structured output.
 // ModelTypeSpeech turns one text prompt into a WAV clip
 // using a Soprano backbone and matching decoder. It does not accept media input.
 // ModelTypeDecision uses Yzma's local System One readouts with typed Choice,
@@ -57,6 +59,6 @@
 // The examples/yzma-loading program demonstrates discovery in the Genkit Dev UI,
 // explicit registration, and cleanup. See examples/yzma-structured for
 // constrained generation, examples/yzma-vision for inline images and bounding boxes,
-// examples/yzma-speech for saving a WAV, and examples/yzma-decision for local
-// System One decisions.
+// examples/yzma-speech for saving a WAV, examples/yzma-audio for transcription,
+// and examples/yzma-decision for local System One decisions.
 package yzma

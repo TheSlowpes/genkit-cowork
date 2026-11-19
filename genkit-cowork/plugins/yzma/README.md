@@ -832,3 +832,50 @@ YZMA_TEST_PROJECTOR="$HOME/models/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf" \
 YZMA_TEST_VLA_IMAGE="$VLA_IMAGE" \
   task test:yzma:native -- -run '^TestNativeBoundingBox$' -count=1
 ```
+
+## Transcribe an inline WAV
+
+Register Qwen3-ASR with `DefineModel`, using `ModelTypeChat` and
+`Projector: &yzma.ProjectorOptions{GGUFPath: path, Audio: true}`. Audio pairs
+are explicit, not discovered. This path checks for a matching `qwen3a` audio
+encoder and verifies native audio support when loading the pair. It does not
+require vision, video, or speech output.
+
+Send an `ai.NewMediaPart("audio/wav", "data:audio/wav;base64,...")` in a user
+message. `audio/x-wav` is also accepted if the data URL uses that same type.
+The WAV must be RIFF with mono, 16 kHz, signed 16-bit PCM. There is no resampling
+or compressed-audio decoding. Each clip can be at most 1 MiB before base64 and
+30 seconds long. The shared request limits are four media parts and 8 MiB
+before base64. Text and audio keep their order through the chat template, and
+the resulting tokens must fit the model context. HTTP URLs and file paths are
+rejected. Requests can stream text, but cannot use tools or structured output.
+
+Put these public files in `$HOME/models`:
+
+- [Qwen3-ASR-0.6B.Q4_K_S.gguf](https://huggingface.co/mradermacher/Qwen3-ASR-0.6B-GGUF/blob/main/Qwen3-ASR-0.6B.Q4_K_S.gguf)
+  (470,781,408 bytes)
+- [mmproj-Qwen3-ASR-0.6B-Q8_0.gguf](https://huggingface.co/ggml-org/Qwen3-ASR-0.6B-GGUF/blob/main/mmproj-Qwen3-ASR-0.6B-Q8_0.gguf)
+  (214,392,480 bytes)
+
+Use the Yzma-compatible llama.cpp and `mtmd` libraries (tested on CPU with
+llama.cpp b12359). From the repository root, generate the sample with FFmpeg
+built with the `flite` filter, then run the example:
+
+```sh
+export YZMA_LIB="$HOME/.local/lib"
+export GOMAXPROCS=2 GOFLAGS=-p=2
+export YZMA_TEST_AUDIO_MODEL="$HOME/models/Qwen3-ASR-0.6B.Q4_K_S.gguf"
+export YZMA_TEST_AUDIO_PROJECTOR="$HOME/models/mmproj-Qwen3-ASR-0.6B-Q8_0.gguf"
+export YZMA_TEST_AUDIO_WAV="$HOME/models/fox.wav"
+ffmpeg -f lavfi -i "flite=text='The quick brown fox jumps over the lazy dog':voice=slt" \
+  -ar 16000 -ac 1 -c:a pcm_s16le "$YZMA_TEST_AUDIO_WAV"
+task dev:yzma:audio -- -model "$YZMA_TEST_AUDIO_MODEL" \
+  -projector "$YZMA_TEST_AUDIO_PROJECTOR" -audio "$YZMA_TEST_AUDIO_WAV"
+```
+
+The tested run printed `Transcript: The quick brown fox jumps over the lazy dog.`
+The example sets `ChatTemplate` to include Qwen3-ASR's English assistant prefix.
+Use a template that accepts string message content so the plugin can insert
+each clip at its original position.
+Run `task test:yzma:audio:native` with the same exports to check that the
+transcript contains words from the sample without matching the exact sentence.

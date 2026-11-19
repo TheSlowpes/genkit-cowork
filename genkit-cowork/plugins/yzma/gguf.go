@@ -187,6 +187,7 @@ func readGGUFHeader(ctx context.Context, path string) (ggufHeader, error) {
 			key == "tokenizer.ggml.model" || key == "tokenizer.chat_template" ||
 			key == "general.name" || key == "general.basename" ||
 			key == "clip.projector_type" || key == "clip.gen.audio.projector_type" ||
+			key == "clip.audio.projector_type" ||
 			key == systemOneTemplateKey || strings.HasSuffix(key, ".decision.type")
 		v, err := r.value(keep)
 		if err != nil {

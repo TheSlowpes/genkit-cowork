@@ -430,6 +430,7 @@ Plugins can be used independently of the rest of the framework.
 
 The Yzma guide covers Dev UI discovery, constrained JSON, [image prompts](genkit-cowork/plugins/yzma/README.md#ask-a-vision-model-about-an-image), and [bounding box predictions](genkit-cowork/plugins/yzma/README.md#predict-a-bounding-box).
 It also includes examples for [local speech synthesis](genkit-cowork/plugins/yzma/README.md#speech-output) and [typed System One decisions](genkit-cowork/plugins/yzma/README.md#typed-system-one-decisions).
+For speech recognition, see [transcribe an inline WAV](genkit-cowork/plugins/yzma/README.md#transcribe-an-inline-wav).
 
 The [Yzma embedding example](genkit-cowork/plugins/yzma/README.md#run-the-embedding-example) embeds text locally through Genkit.
 

@@ -74,6 +74,8 @@ type ModelDefinition struct {
 type ProjectorOptions struct {
 	GGUFPath string `json:"ggufPath"`
 	Images   bool   `json:"images,omitempty"`
+	// Audio enables inline mono 16 kHz PCM WAV input.
+	Audio bool `json:"audio,omitempty"`
 }
 
 // ModelOptions controls weight loading. Changing these options requires reloading

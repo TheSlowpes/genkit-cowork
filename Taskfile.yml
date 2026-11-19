@@ -28,6 +28,7 @@ tasks:
       YZMA_TEST_MODEL: ''
       YZMA_TEST_SPEECH_MODEL: ''
       YZMA_TEST_DECISION_MODEL: ''
+      YZMA_TEST_AUDIO_MODEL: ''
     cmds:
       - go test ./...
 
@@ -72,6 +73,7 @@ tasks:
       YZMA_TEST_MODEL: ''
       YZMA_TEST_SPEECH_MODEL: ''
       YZMA_TEST_DECISION_MODEL: ''
+      YZMA_TEST_AUDIO_MODEL: ''
     cmds:
       - go test -race ./genkit-cowork/plugins/yzma
 
@@ -116,3 +118,17 @@ tasks:
       - ': "${YZMA_LIB:?Set YZMA_LIB to the native library directory}"'
       - ': "${YZMA_TEST_DECISION_MODEL:?Set YZMA_TEST_DECISION_MODEL to a local System One GGUF}"'
       - go test ./genkit-cowork/plugins/yzma -run '^TestNativeDecision$' -count=1 -v
+
+  dev:yzma:audio:
+    desc: Transcribe an inline WAV with a local Yzma model
+    cmds:
+      - go run ./examples/yzma-audio {{.CLI_ARGS}}
+
+  test:yzma:audio:native:
+    desc: Transcribe a known WAV using the native Qwen3-ASR pair
+    cmds:
+      - ': "${YZMA_LIB:?Set YZMA_LIB to the native library directory}"'
+      - ': "${YZMA_TEST_AUDIO_MODEL:?Set YZMA_TEST_AUDIO_MODEL to the Qwen3-ASR GGUF}"'
+      - ': "${YZMA_TEST_AUDIO_PROJECTOR:?Set YZMA_TEST_AUDIO_PROJECTOR to its qwen3a projector GGUF}"'
+      - ': "${YZMA_TEST_AUDIO_WAV:?Set YZMA_TEST_AUDIO_WAV to the fox.wav sample}"'
+      - go test ./genkit-cowork/plugins/yzma -run '^TestNativeAudioInput$' -v -count=1
