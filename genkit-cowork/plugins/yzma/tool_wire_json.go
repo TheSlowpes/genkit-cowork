@@ -34,16 +34,15 @@ type wireToolCall struct {
 const wireToolName = `[a-zA-Z_][\w./-]*`
 
 var (
-	toolSyntax = regexp.MustCompile(`<\|tool_call(?:_start\|>|>)|</?tool_call>|<function=|<arg_key>|\[TOOL_CALLS\]|(?:\.` +
+	toolSyntax = regexp.MustCompile(`<\|tool_call(?:_start\|>|>)|</?tool_call>|` + qwenTagPattern + `|<arg_key>|\[TOOL_CALLS\]|(?:\.` +
 		wireToolName + `\s*)?<\|message\|>|\{\s*"name"\s*:|call:\s*` + wireToolName + `\s*\{`)
 	lfmPython = regexp.MustCompile(`^\[\s*` + wireToolName + `\s*\(`)
 )
 
-// parseJSONToolCalls consumes JSON directly. Yzma's parser stringifies values,
-// rounds numbers, flattens objects, and may skip malformed calls in a batch.
-// Use its parser only for non-JSON formats, and never mix the two paths.
-func parseJSONToolCalls(raw string) ([]wireToolCall, string, error) {
-	var calls []wireToolCall
+// parseWireToolCalls reads JSON and Qwen envelopes before falling back to the
+// family parsers. Those parsers normalize JSON and can skip malformed calls.
+func parseWireToolCalls(raw string) ([]wireToolCall, string, error) {
+	var calls, qwenCalls []wireToolCall
 	var text strings.Builder
 	nonJSON := false
 	for {
@@ -57,14 +56,54 @@ func parseJSONToolCalls(raw string) ([]wireToolCall, string, error) {
 		var name, closeTag string
 		inline := false
 		switch {
+		case marker == "<function=" || ((marker == "<tool_call>" || marker == "<|tool_call>") &&
+			strings.HasPrefix(rest, "<function=")):
+			wrapped := marker != "<function="
+			if !wrapped {
+				rest = raw[loc[0]:]
+			}
+			parsed, tail, err := parseQwenEnvelope(rest, wrapped)
+			if err != nil {
+				return nil, "", err
+			}
+			qwenCalls = append(qwenCalls, parsed...)
+			raw = tail
+			continue
+		case strings.HasPrefix(marker, "<function") || strings.HasPrefix(marker, "</function") ||
+			strings.HasPrefix(marker, "<parameter") || strings.HasPrefix(marker, "</parameter"):
+			return nil, "", fmt.Errorf("yzma: misplaced Qwen delimiter %s", marker)
 		case marker == "<tool_call>" || marker == "<|tool_call>":
-			if strings.HasPrefix(rest, "<function=") || (marker == "<|tool_call>" && strings.HasPrefix(rest, "call:")) {
+			if marker == "<|tool_call>" && strings.HasPrefix(rest, "call:") {
 				nonJSON = true
 				raw = rest
 				continue
 			}
 			closeTag = "</tool_call>"
-		case marker == "</tool_call>" || strings.HasPrefix(marker, "call:") || marker == "<function=" || marker == "<arg_key>":
+		case strings.HasPrefix(marker, "call:"):
+			nonJSON = true
+			start := loc[1] - 1 // Includes the opening brace matched by toolSyntax.
+			if end, complete := scanToolStructure(raw[start:], true); complete {
+				raw = raw[start+end:]
+			} else {
+				raw = rest // Leave incomplete structure to the family fallback.
+			}
+			continue
+		case marker == "<arg_key>":
+			nonJSON = true
+			// GLM's parser treats everything in an argument value as text.
+			// Skip the value only if its delimiters are on the same line.
+			if _, afterKey, ok := strings.Cut(rest, "</arg_key>"); ok {
+				if value, ok := strings.CutPrefix(afterKey, "<arg_value>"); ok {
+					if _, tail, ok := strings.Cut(value, "</arg_value>"); ok &&
+						!strings.Contains(rest[:len(rest)-len(tail)], "\n") {
+						raw = tail
+						continue
+					}
+				}
+			}
+			raw = rest
+			continue
+		case marker == "</tool_call>":
 			nonJSON = true
 			raw = rest
 			continue
@@ -72,6 +111,9 @@ func parseJSONToolCalls(raw string) ([]wireToolCall, string, error) {
 			if lfmPython.MatchString(rest) {
 				nonJSON = true
 				raw = rest
+				if end, complete := scanToolStructure(rest, true); complete {
+					raw = rest[end:]
+				}
 				continue
 			}
 			closeTag = "<|tool_call_end|>"
@@ -143,9 +185,10 @@ func parseJSONToolCalls(raw string) ([]wireToolCall, string, error) {
 		}
 		calls = append(calls, call)
 	}
-	if nonJSON && len(calls) > 0 {
+	if (nonJSON && (len(calls) > 0 || len(qwenCalls) > 0)) || (len(calls) > 0 && len(qwenCalls) > 0) {
 		return nil, "", fmt.Errorf("yzma: mixed or unmatched tool call syntax")
 	}
+	calls = append(calls, qwenCalls...)
 	text.WriteString(raw)
 	return calls, message.StripMarkup(text.String()), nil
 }

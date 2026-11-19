@@ -24,6 +24,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/firebase/genkit/go/ai"
@@ -156,6 +157,35 @@ func TestGenerateStreamingAndCallbackErrors(t *testing.T) {
 	}
 	if err := plugin.Preload(t.Context(), "local-chat"); err != nil {
 		t.Errorf("model reservation not released: %v", err)
+	}
+}
+
+func TestPreloadFromStreamingCallback(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	loads := 0
+	op := &testTextOperator{
+		testModelOperator: &testModelOperator{load: func(context.Context, ModelOptions) (llama.Model, error) {
+			loads++
+			return 42, nil
+		}},
+		generate: func(ctx context.Context, _ llama.Model, _ TextGenerationInput, onText func(context.Context, string) error) (TextGenerationResult, error) {
+			return TextGenerationResult{Text: "hello"}, onText(ctx, "hello")
+		},
+	}
+	plugin, g := initLoadingTest(t, op)
+	def := testModelDefinition()
+	model := plugin.DefineModel(g, def, nil)
+	_, err := model.Generate(ctx, ai.NewModelRequest(nil, ai.NewUserTextMessage("hello")),
+		func(ctx context.Context, _ *ai.ModelResponseChunk) error {
+			gen := plugin.models[def.Name]
+			if len(gen.gate) != 1 {
+				t.Error("native inference lost its reservation")
+			}
+			return plugin.Preload(ctx, def.Name)
+		})
+	if err != nil || loads != 1 {
+		t.Fatalf("generation with reentrant preload = %v, loads = %d; want success and one load", err, loads)
 	}
 }
 

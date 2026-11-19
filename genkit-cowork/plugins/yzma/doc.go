@@ -19,8 +19,9 @@
 // explicit preloading, streaming text generation, and cleanup. Generation supports
 // decoder-only models, chat or raw completion, sampling settings, and stop sequences.
 // Chat models can opt into tool calling through ModelDefinition.ToolCalling.
-// Genkit executes the tools. The plugin preserves JSON wire types when it
-// validates arguments and uses Yzma's family parser for non-JSON syntax.
+// Genkit executes the tools. The plugin parses JSON and Qwen call envelopes
+// directly and rejects numbers that would lose precision in Genkit's tool
+// dispatch. Other non-JSON formats use Yzma's family parser.
 // Chat and completion can generate constrained
 // JSON objects through genkit.GenerateData, without tools or streaming. See the
 // package README for the supported schema subset. Vision chat accepts ordered

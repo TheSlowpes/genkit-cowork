@@ -355,6 +355,7 @@ func generationResponse(input *ai.ModelRequest, result TextGenerationResult, par
 
 // Preload loads a registered model's weights and any media companion without inference.
 // Concurrent calls share a successful load. A failed load can be retried.
+// Once loaded, Preload does not wait for inference, including in streaming callbacks.
 // name is the unprefixed name supplied to DefineModel or resolved through Model.
 func (y *Yzma) Preload(ctx context.Context, name string) error {
 	if err := ctx.Err(); err != nil {
@@ -373,6 +374,9 @@ func (y *Yzma) Preload(ctx context.Context, name string) error {
 	y.mu.Unlock()
 	if gen == nil {
 		return fmt.Errorf("yzma.Preload: model %q is not defined", name)
+	}
+	if gen.ready.Load() {
+		return gen.available(ctx)
 	}
 	if err := gen.acquire(ctx); err != nil {
 		return err

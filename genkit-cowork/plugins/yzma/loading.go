@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/hybridgroup/yzma/pkg/llama"
 	"github.com/hybridgroup/yzma/pkg/mtmd"
@@ -137,6 +138,7 @@ type generator struct {
 	gate            chan struct{}
 	loadGate        chan struct{}
 	closed          <-chan struct{}
+	ready           atomic.Bool // All resources loaded; only shutdown can unload them.
 	loaded          llama.Model
 	speechDecoder   mtmd.Context
 	projector       ProjectorHandle
@@ -170,6 +172,7 @@ func (g *generator) acquire(ctx context.Context) error {
 		g.release()
 		return err
 	}
+	g.ready.Store(true)
 	return nil
 }
 

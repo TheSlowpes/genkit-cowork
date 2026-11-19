@@ -183,6 +183,8 @@ model, first resolve it with `yzma.Model` or a Genkit model lookup. Both
 `yzma.Model(g, "local-chat")` and `yzma.IsDefinedModel(g, "local-chat")`
 resolve names without loading weights.
 Preloading is optional: the first generation call loads the model when necessary.
+Once loaded, `Preload` returns without waiting for inference, including when
+called from a streaming callback.
 
 ### Choose a model type
 
@@ -321,12 +323,18 @@ local.DefineModel(g, yzma.ModelDefinition{
 
 Pass registered Genkit tools through `ai.WithTools(...)`. Genkit performs the
 execution loop; the plugin never directly runs a model-requested function.
-`auto`, `required`, and `none` tool choices are supported.
+Use `auto` for automatic tool chains that should end with a text answer.
+Genkit v1.9 forwards `required` on every turn, so the adapter requires a call
+even after Genkit has executed a tool. To require a call only on the first
+turn, use `required` with `ai.WithReturnToolRequests(true)` and make a separate
+`auto` request after handling the tool result.
 
 The adapter reads JSON call envelopes directly so numbers, strings, nulls,
-objects, and arrays keep their original types during schema validation. It uses
-Yzma's family parser for non-JSON syntax such as Gemma's `call:` format. Calls get
-unique IDs, which stay with the arguments and tool results in subsequent turns.
+objects, and arrays keep their original types during schema validation. It also
+checks Qwen's function and parameter tags directly, so an incomplete optional
+parameter cannot be silently dropped. Other non-JSON formats, such as Gemma's
+`call:` format, use Yzma's family parser. Calls get unique IDs, which stay with
+the arguments and tool results in subsequent turns.
 
 Tool-enabled turns are buffered until parsing completes. Streaming callbacks
 receive complete text/tool parts, not raw tool-call syntax. Ordinary chat without
@@ -349,13 +357,14 @@ YZMA_TEST_TOOL_MODEL="$HOME/models/gemma-4-E4B-it-Q4_0.gguf" \
   task test:yzma:tools:native
 ```
 
-Yzma's parser exposes arguments as strings, so their types are restored from the
-offered schema rather than guessed. String values such as `"0123"` stay strings.
-Unions without a single unambiguous type are not supported. Parsed integers at or
-beyond the float64 exact-integer boundary are rejected. Some Gemma parser forms
-flatten nested objects; those fail schema validation rather than being executed
-with changed argument structure. Use a parser/model format that preserves the
-required structure for tools with nested arguments.
+For non-JSON calls, argument types are restored from the offered schema.
+String values such as `"0123"` stay strings. Unions without a single
+unambiguous type are not supported. Genkit v1.9 decodes numbers through
+`float64` before dispatching tools. The adapter rejects values that would
+change in that conversion, including nested IDs such as `9007199254740993`.
+Use string fields for IDs that may exceed that precision. Some Gemma parser
+forms also flatten nested objects. Use JSON calls for tools that require the
+original nesting.
 
 ## Constrained structured output
 

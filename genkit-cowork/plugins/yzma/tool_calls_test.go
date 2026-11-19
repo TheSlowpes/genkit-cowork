@@ -85,6 +85,57 @@ func TestToolCallsRejectUnsafeOutputs(t *testing.T) {
 	}
 }
 
+func TestQwenToolCallsValidateWholeEnvelope(t *testing.T) {
+	tool := &ai.ToolDefinition{Name: "run", InputSchema: map[string]any{
+		"type": "object", "additionalProperties": false, "properties": map[string]any{
+			"text": map[string]any{"type": "string"}, "dryRun": map[string]any{"type": "boolean"},
+		},
+	}}
+	const wrapped = `<tool_call><function=run><parameter=text>}</parameter></function></tool_call>`
+	const bare = `<function=run><parameter=dryRun>true</parameter></function>`
+	parse := func(raw string, limited bool) ([]*ai.Part, error) {
+		return parsedToolParts(TextGenerationResult{Text: raw, Limited: limited}, []*ai.ToolDefinition{tool}, ai.ToolChoiceAuto)
+	}
+	parts, err := parse("Working on it.\n"+wrapped+"\n"+bare, false)
+	if err != nil || len(parts) != 3 || parts[0].Text != "Working on it." ||
+		parts[1].ToolRequest == nil || parts[2].ToolRequest == nil {
+		t.Fatalf("Qwen calls = (%v, %v), want text and two requests", parts, err)
+	}
+	if parts[1].ToolRequest.Input.(map[string]any)["text"] != "}" ||
+		parts[2].ToolRequest.Input.(map[string]any)["dryRun"] != true {
+		t.Errorf("Qwen arguments = %v and %v", parts[1].ToolRequest.Input, parts[2].ToolRequest.Input)
+	}
+	for name, raw := range map[string]string{
+		"unclosed optional parameter": `<function=run><parameter=dryRun>true</function>`,
+		"unclosed after valid call":   wrapped + `<function=run><parameter=dryRun>true</function>`,
+		"partial trailing function":   wrapped + `<function`,
+		"next tag must not close it":  `<function=run><parameter=text>hi<parameter=dryRun>true</parameter></function>`,
+		"unclosed wrapper":            `<tool_call>` + bare,
+		"misplaced parameter":         wrapped + `<parameter=dryRun>true</parameter>`,
+		"unrecognized body text":      `<function=run>dryRun=true</function>`,
+		"duplicate parameter":         `<function=run><parameter=text>a</parameter><parameter=text>b</parameter></function>`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if parts, err := parse(raw, false); err == nil || parts != nil {
+				t.Errorf("parse = (%v, %v), want no requests and an error", parts, err)
+			}
+		})
+	}
+	if parts, err := parse(wrapped, true); err == nil || parts != nil {
+		t.Errorf("limited Qwen output = (%v, %v), want no requests and an error", parts, err)
+	}
+	if parts, err := parse("Partial answer.", true); err != nil || len(parts) != 1 || parts[0].Text != "Partial answer." {
+		t.Errorf("limited plain text = (%v, %v), want text without a tool error", parts, err)
+	}
+	// Qwen-looking text inside another format's arguments isn't an envelope.
+	const gemma = `<|tool_call>call:run{text:<|"|><parameter=dryRun><|"|>}<tool_call|>`
+	parts, err = parse(gemma, false)
+	if err != nil || len(parts) != 1 || parts[0].ToolRequest == nil ||
+		parts[0].ToolRequest.Input.(map[string]any)["text"] != "<parameter=dryRun>" {
+		t.Errorf("Gemma with literal tag text = (%v, %v)", parts, err)
+	}
+}
+
 func TestToolArgumentTypes(t *testing.T) {
 	schema := map[string]any{"type": "object", "properties": map[string]any{
 		"string": map[string]any{"type": "string"}, "bool": map[string]any{"type": "boolean"},
@@ -256,15 +307,16 @@ func TestJSONToolCallsPreserveWireTypes(t *testing.T) {
 
 func TestJSONToolCallsKeepStructureAndRejectBadBatches(t *testing.T) {
 	def := &ai.ToolDefinition{Name: "echo", InputSchema: map[string]any{"type": "object"}}
-	const good = `<tool_call>{"name":"echo","arguments":{"arguments":{"n":9007199254740993},"list":[null,"42",false]}}</tool_call>`
-	parts, err := parsedToolParts(TextGenerationResult{Text: good}, []*ai.ToolDefinition{def}, ai.ToolChoiceAuto)
-	if err != nil || len(parts) != 1 || parts[0].ToolRequest == nil {
-		t.Fatalf("parse = (%v, %v)", parts, err)
+	const large = `<tool_call>{"name":"echo","arguments":{"arguments":{"n":9007199254740993},"list":[null,"42",false],"parameters":{"x":1}}}</tool_call>`
+	calls, _, err := parseWireToolCalls(large)
+	if err != nil || len(calls) != 1 {
+		t.Fatalf("parse = (%v, %v)", calls, err)
 	}
-	args, err := json.Marshal(parts[0].ToolRequest.Input)
-	if err != nil || string(args) != `{"arguments":{"n":9007199254740993},"list":[null,"42",false]}` {
+	args, err := json.Marshal(calls[0].args)
+	if err != nil || string(args) != `{"arguments":{"n":9007199254740993},"list":[null,"42",false],"parameters":{"x":1}}` {
 		t.Fatalf("arguments = %s, err = %v", args, err)
 	}
+	good := strings.Replace(large, "9007199254740993", "42", 1)
 	for _, raw := range []string{
 		good + `<tool_call>{"name":"echo","arguments":{}}`,
 		good + `<tool_call>{"name":"echo","arguments":{},"args":{}}</tool_call>`,
@@ -276,6 +328,62 @@ func TestJSONToolCallsKeepStructureAndRejectBadBatches(t *testing.T) {
 		if parts, err := parsedToolParts(TextGenerationResult{Text: raw}, []*ai.ToolDefinition{def, testAddDefinition()}, ai.ToolChoiceAuto); err == nil || parts != nil {
 			t.Errorf("parse(%q) = (%v, %v), want no parts and error", raw, parts, err)
 		}
+	}
+}
+
+func TestGenkitToolDispatchPreservesNestedArguments(t *testing.T) {
+	type payload struct {
+		ID int64 `json:"id"`
+	}
+	type input struct {
+		Arguments  []payload `json:"arguments"`
+		Parameters payload   `json:"parameters"`
+	}
+	const exact = int64(9007199254740992)
+	for _, tc := range []struct {
+		name, number string
+		wantError    bool
+	}{
+		{name: "exact", number: "9007199254740992"},
+		{name: "rounded integer", number: "9007199254740993", wantError: true},
+		{name: "rounded integer hidden by short float spelling", number: "1000000000000000100", wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			op := &testTextOperator{
+				testModelOperator: &testModelOperator{load: func(context.Context, ModelOptions) (llama.Model, error) {
+					return 42, nil
+				}},
+				generate: func(_ context.Context, _ llama.Model, input TextGenerationInput, _ func(context.Context, string) error) (TextGenerationResult, error) {
+					if input.Messages[len(input.Messages)-1].GetRole() == "tool" {
+						return TextGenerationResult{Text: "Done."}, nil
+					}
+					return TextGenerationResult{
+						Text: `<tool_call>{"name":"echo","arguments":{"arguments":[{"id":` + tc.number +
+							`}],"parameters":{"id":42}}}</tool_call>`,
+					}, nil
+				},
+			}
+			plugin, g := initLoadingTest(t, op)
+			def := testModelDefinition()
+			def.ToolCalling = true
+			model := plugin.DefineModel(g, def, nil)
+			executed := false
+			tool := genkit.DefineTool(g, "echo", "Echo the nested ID", func(_ *ai.ToolContext, in input) (string, error) {
+				executed = true
+				if len(in.Arguments) != 1 || in.Arguments[0].ID != exact || in.Parameters.ID != 42 {
+					t.Errorf("tool got %+v; want arguments ID %d and parameters ID 42", in, exact)
+				}
+				return "ok", nil
+			})
+			resp, err := genkit.Generate(t.Context(), g, ai.WithModel(model), ai.WithTools(tool), ai.WithPrompt("Use echo."))
+			if tc.wantError {
+				if executed || err == nil || !strings.Contains(err.Error(), "lose precision") {
+					t.Fatalf("executed = %v, error = %v; want a precision error before execution", executed, err)
+				}
+			} else if err != nil || !executed || resp.Text() != "Done." {
+				t.Fatalf("response = %v, error = %v, executed = %v; want completed tool chain", resp, err, executed)
+			}
+		})
 	}
 }
 

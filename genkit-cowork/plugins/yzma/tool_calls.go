@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
 	"regexp"
 	"strings"
 
@@ -174,7 +175,7 @@ var emptyGemmaCall = regexp.MustCompile(`<\|tool_call>\s*call:([a-zA-Z_][\w./-]*
 var bareEmptyGemmaCall = regexp.MustCompile(`^\s*call:([a-zA-Z_][\w./-]*)\{\s*\}\s*$`)
 
 func parsedToolParts(result TextGenerationResult, definitions []*ai.ToolDefinition, choice ai.ToolChoice) ([]*ai.Part, error) {
-	wireCalls, text, err := parseJSONToolCalls(result.Text)
+	wireCalls, text, err := parseWireToolCalls(result.Text)
 	if err != nil {
 		return nil, err
 	}
@@ -243,6 +244,9 @@ func validatedToolParts(text string, calls []wireToolCall, definitions []*ai.Too
 		if err := validateToolArguments(args, tool.InputSchema); err != nil {
 			return nil, fmt.Errorf("tool %q: %w", tool.Name, err)
 		}
+		if err := validateToolNumberTransport(args); err != nil {
+			return nil, fmt.Errorf("tool %q: %w", tool.Name, err)
+		}
 		parts = append(parts, ai.NewToolRequestPart(&ai.ToolRequest{
 			Name: tool.Name, Ref: uuid.NewString(), Input: args,
 		}))
@@ -250,9 +254,53 @@ func validatedToolParts(text string, calls []wireToolCall, definitions []*ai.Too
 	return parts, nil
 }
 
+// validateToolNumberTransport rejects numbers that Genkit v1.9's RunJSON would
+// change when it decodes through float64 before normalizing the tool input.
+func validateToolNumberTransport(value any) error {
+	switch v := value.(type) {
+	case map[string]any:
+		for key, child := range v {
+			if err := validateToolNumberTransport(child); err != nil {
+				return fmt.Errorf("%s: %w", key, err)
+			}
+		}
+	case []any:
+		for i, child := range v {
+			if err := validateToolNumberTransport(child); err != nil {
+				return fmt.Errorf("[%d]: %w", i, err)
+			}
+		}
+	case json.Number:
+		f, err := v.Float64()
+		if err == nil {
+			original, ok := new(big.Rat).SetString(v.String())
+			if ok {
+				// Integers may be converted directly to int64 by Genkit. The
+				// shortest decimal spelling of f alone cannot prove exactness.
+				if !original.IsInt() || original.Cmp(new(big.Rat).SetFloat64(f)) == 0 {
+					encoded, _ := json.Marshal(f) // Float64 succeeded, so f is finite.
+					reencoded, ok := new(big.Rat).SetString(string(encoded))
+					if ok && original.Cmp(reencoded) == 0 {
+						return nil
+					}
+				}
+			}
+		}
+		return fmt.Errorf("number %s would lose precision in Genkit tool dispatch", v)
+	}
+	return nil
+}
+
 // completeToolOutput checks structural completeness independently of the
 // forgiving family parsers. Quoted braces and Gemma string delimiters are literal.
 func completeToolOutput(raw string) bool {
+	_, ok := scanToolStructure(raw, false)
+	return ok
+}
+
+// scanToolStructure can also stop at the end of one argument object to keep
+// literal tag text inside Gemma arguments out of the envelope scanner.
+func scanToolStructure(raw string, oneObject bool) (int, bool) {
 	var stack []byte
 	quote := ""
 	for i := 0; i < len(raw); {
@@ -285,13 +333,16 @@ func completeToolOutput(raw string) bool {
 		case '}', ']':
 			if len(stack) == 0 || (raw[i] == '}' && stack[len(stack)-1] != '{') ||
 				(raw[i] == ']' && stack[len(stack)-1] != '[') {
-				return false
+				return 0, false
 			}
 			stack = stack[:len(stack)-1]
+			if oneObject && len(stack) == 0 {
+				return i + 1, true
+			}
 		}
 		i++
 	}
-	return len(stack) == 0 && quote == ""
+	return len(raw), !oneObject && len(stack) == 0 && quote == ""
 }
 
 // untypedToolArguments interprets non-JSON family syntax using the offered
