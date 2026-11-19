@@ -124,10 +124,10 @@ tasks:
       - go test ./genkit-cowork/plugins/yzma -run '^TestNativeToolCalling$' -v -count=1
 
   test:yzma:grounding:native:
-    desc: Check localization on two PNG fixtures with the Qwen3.5-0.8B pair
+    desc: Check localization on two PNG fixtures with the Pelican1.0-VL-3B pair
     cmds:
       - ': "${YZMA_LIB:?Set YZMA_LIB to the native library directory}"'
-      - ': "${YZMA_TEST_VLA_MODEL:?Set YZMA_TEST_VLA_MODEL to the Qwen3.5-0.8B GGUF}"'
+      - ': "${YZMA_TEST_VLA_MODEL:?Set YZMA_TEST_VLA_MODEL to the Pelican1.0-VL-3B GGUF}"'
       - ': "${YZMA_TEST_VLA_PROJECTOR:?Set YZMA_TEST_VLA_PROJECTOR to its matching projector GGUF}"'
       - go test ./genkit-cowork/plugins/yzma -run '^TestNativeBoundingBox$' -v -count=1
 

@@ -97,6 +97,9 @@ func validateProjectorOptions(model ModelDefinition) error {
 	if !p.Images && !p.Audio && !p.Video {
 		return fmt.Errorf("a media projector requires an enabled input capability")
 	}
+	if p.ImageMinTokens < 0 || p.ImageMinTokens > 4096 || (p.ImageMinTokens != 0 && !p.Images && !p.Video) {
+		return fmt.Errorf("imageMinTokens must be 0..4096 and requires image or video input when set")
+	}
 	return nil
 }
 

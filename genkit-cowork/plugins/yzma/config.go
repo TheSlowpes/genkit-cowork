@@ -79,6 +79,10 @@ type ProjectorOptions struct {
 	// Video enables sampled inline MP4 on a compatible vision pair. It does not
 	// enable standalone images or audio.
 	Video bool `json:"video,omitempty"`
+	// ImageMinTokens sets the minimum image encoder token budget for supported
+	// vision models. Use 1..4096 for image or video input; zero leaves the
+	// native default unchanged. Larger images use more inference context.
+	ImageMinTokens int32 `json:"imageMinTokens,omitempty"`
 }
 
 // ModelOptions controls weight loading. Changing these options requires reloading

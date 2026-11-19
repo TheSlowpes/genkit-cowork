@@ -159,7 +159,7 @@ func TestGroundingFixtureRejectsWholeFrameAndWrongObject(t *testing.T) {
 func TestNativeBoundingBox(t *testing.T) {
 	modelPath, projectorPath, lib := os.Getenv("YZMA_TEST_VLA_MODEL"), os.Getenv("YZMA_TEST_VLA_PROJECTOR"), os.Getenv("YZMA_LIB")
 	if modelPath == "" || projectorPath == "" || lib == "" {
-		t.Skip("set YZMA_TEST_VLA_MODEL and YZMA_TEST_VLA_PROJECTOR to the Qwen3.5-0.8B pair and set YZMA_LIB")
+		t.Skip("set YZMA_TEST_VLA_MODEL and YZMA_TEST_VLA_PROJECTOR to the Pelican1.0-VL-3B pair and set YZMA_LIB")
 	}
 	for _, path := range []string{modelPath, projectorPath} {
 		info, err := os.Stat(path)
@@ -180,7 +180,7 @@ func TestNativeBoundingBox(t *testing.T) {
 	model := local.DefineModel(g, ModelDefinition{
 		Name: "local-box", Type: ModelTypeChat,
 		Loading:   ModelOptions{GGUFPath: modelPath, NGPULayers: ptr(int32(0))},
-		Projector: &ProjectorOptions{GGUFPath: projectorPath, Images: true},
+		Projector: &ProjectorOptions{GGUFPath: projectorPath, Images: true, ImageMinTokens: 1024},
 		Context:   ContextOptions{ContextSize: ptr(uint32(4096)), Threads: ptr(int32(2)), BatchThreads: ptr(int32(2))},
 		GenerationDefaults: &GenerateContentConfig{
 			MaxOutputTokens: ptr(128), Temperature: ptr(0.0),

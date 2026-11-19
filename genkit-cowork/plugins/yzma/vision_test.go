@@ -71,6 +71,31 @@ func pngPart(data []byte) *ai.Part {
 	return ai.NewMediaPart("image/png", "data:image/png;base64,"+base64.StdEncoding.EncodeToString(data))
 }
 
+func TestProjectorImageMinTokens(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		minTokens int32
+		vision    bool
+		wantError bool
+	}{
+		{"native default", 0, false, false},
+		{"grounding budget", 1024, true, false},
+		{"negative", -1, true, true},
+		{"above limit", 4097, true, true},
+		{"audio only", 1024, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			def := ModelDefinition{Type: ModelTypeChat, Projector: &ProjectorOptions{
+				GGUFPath: "projector.gguf", Images: tc.vision, Audio: !tc.vision, ImageMinTokens: tc.minTokens,
+			}}
+			err := validateProjectorOptions(def)
+			if (err != nil) != tc.wantError || (err != nil && !strings.Contains(err.Error(), "imageMinTokens")) {
+				t.Errorf("validateProjectorOptions() = %v, want imageMinTokens error: %t", err, tc.wantError)
+			}
+		})
+	}
+}
+
 func TestVisionDiscovery(t *testing.T) {
 	for _, tc := range []struct {
 		name       string

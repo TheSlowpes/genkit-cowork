@@ -27,6 +27,8 @@
 // inline JPEG and PNG parts through a compatible projector. It supports
 // constrained JSON without tools. GenerateBoundingBox returns a validated,
 // typed box for an image and instruction and does not execute actions.
+// Set ProjectorOptions.ImageMinTokens for vision models that need a larger
+// image encoder budget, such as Pelican for grounding.
 // Qwen3-ASR chat accepts ordered inline PCM WAV parts through a compatible
 // projector, without tools or structured output.
 // SmolVLM 256M Instruct can opt into sampled inline MP4 independently of audio.

@@ -18,7 +18,7 @@
 // in a Genkit request. With -box it prints a grammar-constrained bounding box
 // instead of a text answer. It runs locally, without a model server or media
 // fetches, and never acts on a prediction.
-// Use -check-grounding with the documented Qwen pair to test two generated
+// Use -check-grounding with the documented Pelican pair to test two generated
 // target positions against known coordinates. A whole-frame box fails.
 // See the Yzma plugin README for the model/projector files, exact command,
 // and an example response.
@@ -110,13 +110,17 @@ func run(ctx context.Context, modelPath, projectorPath, imagePath, question stri
 	}()
 	gpu, threads, contextSize := int32(0), int32(2), uint32(4096)
 	maxTokens, temperature := 48, 0.0
+	projector := &yzma.ProjectorOptions{GGUFPath: projectorPath, Images: true}
 	if predictBox || checkGrounding {
 		maxTokens = 128
+	}
+	if checkGrounding {
+		projector.ImageMinTokens = 1024
 	}
 	model := local.DefineModel(g, yzma.ModelDefinition{
 		Name: "vision", Type: yzma.ModelTypeChat,
 		Loading:   yzma.ModelOptions{GGUFPath: modelPath, NGPULayers: &gpu},
-		Projector: &yzma.ProjectorOptions{GGUFPath: projectorPath, Images: true},
+		Projector: projector,
 		Context:   yzma.ContextOptions{ContextSize: &contextSize, Threads: &threads, BatchThreads: &threads},
 		GenerationDefaults: &yzma.GenerateContentConfig{
 			MaxOutputTokens: &maxTokens, Temperature: &temperature,

@@ -822,11 +822,21 @@ reorders coordinates. A valid box can still be wrong about what is in the
 image. The result is data only; this call supplies no tools or action
 execution.
 
-To reproduce the grounding check below, use the public
-[Qwen3.5-0.8B-Q4_0.gguf and matching mmproj-F16.gguf](https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/tree/6ab461498e2023f6e3c1baea90a8f0fe38ab64d0).
-Together they take about 712 MB. The fixture and test do not download them.
-The [base model card](https://huggingface.co/Qwen/Qwen3.5-0.8B) reports RefCOCO
-results, but this quantized pair did not pass the local check.
+The [Yzma model guide](https://yzma.ai/docs/guides/models/#pelican10-vl-3b)
+lists Pelican1.0-VL-3B for grounding and shows its `bounding_box_2d` array
+output. To run the check, use this
+[pinned Pelican GGUF pair](https://huggingface.co/mradermacher/Pelican1.0-VL-3B-GGUF/tree/b08afd4ebda9573bc6b1f7242a52a3e30ff44b40):
+
+| File | Bytes |
+| --- | ---: |
+| `Pelican1.0-VL-3B.Q4_K_M.gguf` | 1,929,901,568 |
+| `Pelican1.0-VL-3B.mmproj-Q8_0.gguf` | 847,768,384 |
+
+The fixture and test do not download the files. The example uses
+`ProjectorOptions.ImageMinTokens: 1024`, the minimum llama.cpp recommends
+for Qwen-VL grounding. This increases the encoder resolution without
+changing the fixture or how the boxes are scored. A zero value leaves the
+native default unchanged for other models.
 
 `-check-grounding` generates two images with the same red target in different
 positions, plus a blue distractor. It asks the same question for both images
@@ -836,8 +846,8 @@ if either misses.
 
 ```sh
 export YZMA_LIB="$HOME/.local/lib"
-export YZMA_TEST_VLA_MODEL="$HOME/models/Qwen3.5-0.8B-Q4_0.gguf"
-export YZMA_TEST_VLA_PROJECTOR="$HOME/models/mmproj-F16.gguf"
+export YZMA_TEST_VLA_MODEL="$HOME/models/Pelican1.0-VL-3B.Q4_K_M.gguf"
+export YZMA_TEST_VLA_PROJECTOR="$HOME/models/Pelican1.0-VL-3B.mmproj-Q8_0.gguf"
 task dev:yzma:vision -- -check-grounding \
   -model "$YZMA_TEST_VLA_MODEL" -projector "$YZMA_TEST_VLA_PROJECTOR"
 ```
@@ -849,22 +859,23 @@ task test:yzma:grounding:native
 ```
 
 **Observed CPU result:** With Yzma v1.33.0 and llama.cpp build 12359
-(`b1b770d90`), the decoder and projector loaded and both images encoded.
-The test and example rejected both boxes before overlap scoring because
-neither box had positive width:
+(`b1b770d90`), both images loaded and each encoded to 1024 vision tokens.
+Both model predictions were valid boxes, but neither met the 0.5 IoU gate:
 
-| Red square | Expected `(left, top, right, bottom)` | Predicted |
-| --- | --- | --- |
-| Left | `(100, 200, 400, 500)` | `(100, 100, 100, 1000)` |
-| Right | `(600, 200, 900, 500)` | `(160, 100, 160, 1000)` |
+| Red square | Expected `(left, top, right, bottom)` | Predicted | IoU |
+| --- | --- | --- | ---: |
+| Left | `(100, 200, 400, 500)` | `(150, 200, 450, 340)` | 0.361 |
+| Right | `(600, 200, 900, 500)` | `(600, 300, 800, 500)` | 0.444 |
 
-Rewording the coordinate instructions and rerunning on 1000 × 1000 versions
-of the same images did not produce two passing boxes. A stock llama.cpp
-multimodal CLI control with a `bbox_2d` grammar returned the exact source-pixel
-edges `[32, 64, 128, 160]` for the left image despite the normalization
-instruction. For the right image, `[192, 64, 592, 192]` missed in normalized
-coordinates and exceeded the source image width if read as pixels. These runs
-confirm image input, not localization under this coordinate contract.
+Without the projector override, each image used 121 vision tokens and IoU
+was 0.000 and 0.156, respectively. A stock llama.cpp multimodal CLI control
+using `bounding_box_2d`, normalized coordinates, and 1024 tokens returned
+`[178, 203, 359, 448]` for the left image (0.493 IoU) and a whole-frame box
+for the right image (0.090 IoU). The array representation did not meet the
+gate either. These runs do not verify grounding on both targets.
+
+An earlier CPU run with Qwen3.5-0.8B Q4_0 and its F16 projector returned
+zero-width boxes for both fixtures. It confirmed image input, not grounding.
 
 Use `-box -image path.png -question '…'` for your own image. That mode checks
 geometry only because there is no known answer to compare with.

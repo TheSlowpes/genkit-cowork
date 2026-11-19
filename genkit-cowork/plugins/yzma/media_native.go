@@ -62,6 +62,9 @@ func (defaultModelOperator) LoadProjector(ctx context.Context, model llama.Model
 	params.Warmup = false
 	params.PrintTimings = false
 	params.UseGPU = def.Loading.NGPULayers == nil || *def.Loading.NGPULayers != 0
+	if minTokens := def.Projector.ImageMinTokens; minTokens != 0 {
+		params.ImageMinTokens = minTokens
+	}
 	if threads := def.Context.BatchThreads; threads != nil && *threads > 0 {
 		params.Threads = *threads
 	}
