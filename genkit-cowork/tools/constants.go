@@ -29,12 +29,15 @@ const (
 
 const (
 	// DEFAULT_MAX_LINES is the default line cap for tool output.
+	//
 	// Deprecated: Use DefaultMaxLines.
 	DEFAULT_MAX_LINES = DefaultMaxLines
 	// DEFAULT_MAX_BYTES is the default byte cap for tool output.
+	//
 	// Deprecated: Use DefaultMaxBytes.
 	DEFAULT_MAX_BYTES = DefaultMaxBytes
 	// CONTEXT_LINES is the number of surrounding lines included in edit diffs.
+	//
 	// Deprecated: Use ContextLines.
 	CONTEXT_LINES = ContextLines
 )

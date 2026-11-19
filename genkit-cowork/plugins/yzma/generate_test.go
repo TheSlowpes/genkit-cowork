@@ -269,6 +269,7 @@ type scriptedTokenSession struct {
 	next      int
 	decodeErr int
 	onSample  func()
+	endMarker string
 }
 
 func (s *scriptedTokenSession) Decode(ctx context.Context, tokens []llama.Token) error {
@@ -291,7 +292,12 @@ func (s *scriptedTokenSession) Sample(ctx context.Context) (llama.Token, error) 
 	return token, nil
 }
 
-func (s *scriptedTokenSession) IsEnd(token llama.Token) bool { return token == 99 }
+func (s *scriptedTokenSession) End(token llama.Token) (bool, string) {
+	if token == 99 {
+		return true, s.endMarker
+	}
+	return false, ""
+}
 
 func (s *scriptedTokenSession) Piece(token llama.Token) (string, error) {
 	piece, ok := s.pieces[token]
@@ -353,6 +359,23 @@ func TestGenerateTokens(t *testing.T) {
 				t.Errorf("prompt batching (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+func TestGenerateTokensRetainsHarmonyCallEnd(t *testing.T) {
+	const body = `<|channel|>commentary to=functions.add<|message|>{"a":2,"b":3}`
+	session := &scriptedTokenSession{
+		tokens: []llama.Token{1, 99}, pieces: map[llama.Token]string{1: body},
+		endMarker: harmonyCallEnd,
+	}
+	result, err := generateTokens(t.Context(), session, []llama.Token{10}, 2, 16,
+		TextGenerationInput{MaxOutputTokens: 2, ToolCalling: true}, nil)
+	if err != nil || result.Text != body+harmonyCallEnd || result.Limited || result.OutputTokens != 2 {
+		t.Fatalf("generation = (%+v, %v), want completed Harmony call", result, err)
+	}
+	parts, err := parsedToolParts(result, []*ai.ToolDefinition{testAddDefinition()}, ai.ToolChoiceAuto)
+	if err != nil || len(parts) != 1 || !parts[0].IsToolRequest() {
+		t.Fatalf("parse = (%v, %v), want one request", parts, err)
 	}
 }
 

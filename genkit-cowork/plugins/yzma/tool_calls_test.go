@@ -285,6 +285,9 @@ func TestJSONToolCallsPreserveWireTypes(t *testing.T) {
 		},
 		"mistral": func(args string) string { return `[TOOL_CALLS]echo[ARGS]` + args },
 		"gpt":     func(args string) string { return `.echo <|message|>` + args },
+		"harmony": func(args string) string {
+			return `<|channel|>commentary to=functions.echo <|constrain|>json<|message|>` + args + `<|call|>`
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			parse := func(args string) ([]*ai.Part, error) {
@@ -300,6 +303,53 @@ func TestJSONToolCallsPreserveWireTypes(t *testing.T) {
 			if err != nil || len(parts) != 1 || parts[0].ToolRequest == nil ||
 				parts[0].ToolRequest.Input.(map[string]any)["value"] != "</tool_call>42" {
 				t.Fatalf("parse valid string = (%+v, %v)", parts, err)
+			}
+		})
+	}
+}
+
+func TestHarmonyToolCallFraming(t *testing.T) {
+	const header = `<|channel|>commentary to=functions.add <|constrain|>json<|message|>`
+	const args = `{"a":2,"b":3}`
+	const good = header + args + `<|call|>`
+	const preamble = `<|channel|>analysis<|message|>Use the add tool.<|end|>` +
+		`<|start|>assistant<|channel|>commentary<|message|>Calculating.<|end|><|start|>assistant`
+	const role = `<|start|>assistant to=functions.add<|channel|>commentary<|message|>` + args + `<|call|>`
+	parse := func(raw string, limited bool) ([]*ai.Part, error) {
+		return parsedToolParts(TextGenerationResult{Text: raw, Limited: limited},
+			[]*ai.ToolDefinition{testAddDefinition()}, ai.ToolChoiceAuto)
+	}
+	parts, err := parse(preamble+good+role, false)
+	if err != nil || len(parts) != 3 || parts[0].Text != "Calculating." {
+		t.Fatalf("parse = (%v, %v), want the preamble and two requests", parts, err)
+	}
+	for _, part := range parts[1:] {
+		if part.ToolRequest == nil || part.ToolRequest.Name != "add" {
+			t.Fatalf("part = %v, want add request", part)
+		}
+		got := part.ToolRequest.Input.(map[string]any)
+		if got["a"] != json.Number("2") || got["b"] != json.Number("3") {
+			t.Errorf("arguments = %#v, want the original JSON numbers", got)
+		}
+	}
+	const reasoning = `<|channel|>analysis<|message|><function=add><parameter=a>2</parameter>` +
+		`<parameter=b>3</parameter></function><|end|>`
+	parts, err = parse(reasoning+`<|start|>assistant<|channel|>final<|message|>Done.<|return|>`, false)
+	if err != nil || len(parts) != 1 || !parts[0].IsText() || parts[0].Text != "Done." {
+		t.Fatalf("parse = (%v, %v), want only final text", parts, err)
+	}
+	for name, result := range map[string]TextGenerationResult{
+		"no terminator":     {Text: header + args},
+		"wrong terminator":  {Text: header + args + `<|end|>`},
+		"extra body":        {Text: header + args + `{}` + `<|call|>`},
+		"limited":           {Text: good, Limited: true},
+		"broken batch":      {Text: good + header + `{"a":2,"b":`},
+		"invalid schema":    {Text: good + header + `{"a":"2","b":3}<|call|>`},
+		"unknown recipient": {Text: good + strings.Replace(header, "functions.", "python.", 1) + args + `<|call|>`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if parts, err := parse(result.Text, result.Limited); err == nil || parts != nil {
+				t.Errorf("parse = (%v, %v), want no parts and an error", parts, err)
 			}
 		})
 	}
@@ -387,11 +437,45 @@ func TestGenkitToolDispatchPreservesNestedArguments(t *testing.T) {
 	}
 }
 
-func TestInlineNamedJSONWithoutArgumentsRemainsText(t *testing.T) {
-	const raw = `{"name":"Ada","age":37}`
-	parts, err := parsedToolParts(TextGenerationResult{Text: raw}, nil, ai.ToolChoiceAuto)
-	if err != nil || len(parts) != 1 || !parts[0].IsText() || parts[0].Text != raw {
-		t.Fatalf("parse = (%v, %v), want the original text", parts, err)
+func TestToolDelimitersInProse(t *testing.T) {
+	const qwen = `<function=add><parameter=a>2</parameter><parameter=b>3</parameter></function>`
+	const inline = `{"name":"add","args":{"a":2,"b":3}}`
+	parse := func(raw string) ([]*ai.Part, error) {
+		return parsedToolParts(TextGenerationResult{Text: raw}, []*ai.ToolDefinition{testAddDefinition()}, ai.ToolChoiceAuto)
+	}
+	for _, raw := range []string{
+		"Use the <parameter> delimiter and close with </parameter>.",
+		`{"name":"Ada","age":37}`,
+		`For example, {"name": <value>}.`,
+		`An example starts with {"name":`,
+		`{"name":"args"`,
+		`{"name":<value>,"note":"argument key \"args\":"}`,
+	} {
+		if parts, err := parse(raw); err != nil || len(parts) != 1 || !parts[0].IsText() || parts[0].Text != raw {
+			t.Errorf("parse(%q) = (%v, %v), want the original text", raw, parts, err)
+		}
+	}
+	for _, call := range []string{qwen, inline} {
+		const prose = `The <parameter> delimiter goes before {"name": <value>}.`
+		if parts, err := parse(prose + "\n" + call); err != nil || len(parts) != 2 ||
+			parts[0].Text != prose || !parts[1].IsToolRequest() {
+			t.Errorf("parse with preamble = (%v, %v), want text and a request", parts, err)
+		}
+	}
+	for _, raw := range []string{
+		`{"name":"add","arguments":`,
+		`{"name":<value>,"args":{}}`,
+		`{"name":"add","arguments`,
+		`{"name":"add","arguments"}`,
+		inline + `{"name":"add","args":{"a":2,"b":`,
+		inline + `{"name":42,"arguments":{"a":2,"b":3}}`,
+		inline + `<function=add><parameter=a>2</function>`,
+		inline + qwen,
+		qwen + `<parameter=a>2</parameter>`,
+	} {
+		if parts, err := parse(raw); err == nil || parts != nil {
+			t.Errorf("parse(%q) = (%v, %v), want no parts and an error", raw, parts, err)
+		}
 	}
 }
 

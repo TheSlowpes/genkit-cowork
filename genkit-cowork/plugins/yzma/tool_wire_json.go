@@ -31,20 +31,34 @@ type wireToolCall struct {
 	untyped map[string]string
 }
 
-const wireToolName = `[a-zA-Z_][\w./-]*`
+const (
+	wireToolName      = `[a-zA-Z_][\w./-]*`
+	harmonyCallEnd    = "<|call|>"
+	harmonyTurnEnd    = "<|return|>"
+	harmonyMessageEnd = "<|end|>"
+	harmonyAssistant  = `(?:<\|start\|>assistant)?`
+	harmonyJSONBody   = `\s*(?:<\|constrain\|>\s*json\s*)?<\|message\|>`
+)
 
 var (
-	toolSyntax = regexp.MustCompile(`<\|tool_call(?:_start\|>|>)|</?tool_call>|` + qwenTagPattern + `|<arg_key>|\[TOOL_CALLS\]|(?:\.` +
+	harmonyRecipient     = regexp.MustCompile(`^functions\.(` + wireToolName + `)` + harmonyJSONBody)
+	harmonyRoleRecipient = regexp.MustCompile(`^functions\.(` + wireToolName + `)\s*<\|channel\|>commentary` + harmonyJSONBody)
+	harmonyBoundary      = regexp.MustCompile(`<\|(?:end|return|start|channel|call)\|>`)
+	toolSyntax           = regexp.MustCompile(`<\|tool_call(?:_start\|>|>)|</?tool_call>|` + qwenTagPattern + `|<arg_key>|\[TOOL_CALLS\]|` +
+		`<\|start\|>assistant\s+to=|` + harmonyAssistant + `<\|channel\|>[a-z]+\s+to=|` +
+		harmonyAssistant + `<\|channel\|>(?:analysis|commentary|final)\s*<\|message\|>|<\|call\|>|(?:\.` +
 		wireToolName + `\s*)?<\|message\|>|\{\s*"name"\s*:|call:\s*` + wireToolName + `\s*\{`)
-	lfmPython = regexp.MustCompile(`^\[\s*` + wireToolName + `\s*\(`)
+	inlineJSONToken = regexp.MustCompile(`"(?:[^"\\]|\\(?s:.))*"|[{}\[\]]`)
+	lfmPython       = regexp.MustCompile(`^\[\s*` + wireToolName + `\s*\(`)
 )
 
 // parseWireToolCalls reads JSON and Qwen envelopes before falling back to the
-// family parsers. Those parsers normalize JSON and can skip malformed calls.
+// family parsers. A non-nil empty slice means a Harmony text frame was
+// consumed and must not be reinterpreted as a legacy tool call.
 func parseWireToolCalls(raw string) ([]wireToolCall, string, error) {
 	var calls, qwenCalls []wireToolCall
 	var text strings.Builder
-	nonJSON := false
+	nonJSON, harmonyText := false, false
 	for {
 		loc := toolSyntax.FindStringIndex(raw)
 		if loc == nil {
@@ -71,7 +85,12 @@ func parseWireToolCalls(raw string) ([]wireToolCall, string, error) {
 			continue
 		case strings.HasPrefix(marker, "<function") || strings.HasPrefix(marker, "</function") ||
 			strings.HasPrefix(marker, "<parameter") || strings.HasPrefix(marker, "</parameter"):
-			return nil, "", fmt.Errorf("yzma: misplaced Qwen delimiter %s", marker)
+			if len(qwenCalls) > 0 {
+				return nil, "", fmt.Errorf("yzma: misplaced Qwen delimiter %s", marker)
+			}
+			text.WriteString(marker)
+			raw = raw[loc[1]:]
+			continue
 		case marker == "<tool_call>" || marker == "<|tool_call>":
 			if marker == "<|tool_call>" && strings.HasPrefix(rest, "call:") {
 				nonJSON = true
@@ -123,6 +142,41 @@ func parseWireToolCalls(raw string) ([]wireToolCall, string, error) {
 			if !ok || name == "" || strings.ContainsAny(name, " \t\r\n[]{}<>") {
 				return nil, "", fmt.Errorf("yzma: malformed Mistral tool call")
 			}
+		case strings.HasSuffix(marker, "to="):
+			// Harmony allows the recipient in either the role or channel
+			// section. Only commentary calls to functions use our tool schema.
+			var header []string
+			switch {
+			case strings.Contains(marker, "<|channel|>commentary"):
+				header = harmonyRecipient.FindStringSubmatch(rest)
+			case !strings.Contains(marker, "<|channel|>"):
+				header = harmonyRoleRecipient.FindStringSubmatch(rest)
+			}
+			if header == nil {
+				return nil, "", fmt.Errorf("yzma: unsupported or malformed Harmony tool call header")
+			}
+			name, rest, closeTag = header[1], rest[len(header[0]):], harmonyCallEnd
+		case strings.Contains(marker, "<|channel|>"):
+			// Reasoning can contain tool syntax as text. Only a recipient
+			// in the header introduces a Harmony call.
+			harmonyText = true
+			body := raw[loc[1]:]
+			raw = ""
+			if boundary := harmonyBoundary.FindStringIndex(body); boundary != nil {
+				switch body[boundary[0]:boundary[1]] {
+				case harmonyMessageEnd, harmonyTurnEnd:
+					raw = body[boundary[1]:]
+					body = body[:boundary[0]]
+				default:
+					return nil, "", fmt.Errorf("yzma: unclosed Harmony message")
+				}
+			}
+			if !strings.Contains(marker, "<|channel|>analysis") {
+				text.WriteString(body)
+			}
+			continue
+		case marker == harmonyCallEnd:
+			return nil, "", fmt.Errorf("yzma: misplaced Harmony call terminator")
 		case strings.HasSuffix(marker, "<|message|>"):
 			// <|message|> is also used on ordinary GPT assistant turns.
 			name = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(marker, "."), "<|message|>"))
@@ -140,6 +194,11 @@ func parseWireToolCalls(raw string) ([]wireToolCall, string, error) {
 		decoder.UseNumber()
 		value, err := readWireJSON(decoder, 0)
 		if err != nil {
+			if inline && !hasMalformedInlineArguments(rest) {
+				text.WriteString(marker)
+				raw = raw[loc[1]:]
+				continue
+			}
 			return nil, "", fmt.Errorf("yzma: malformed JSON tool call: %w", err)
 		}
 		raw = rest[decoder.InputOffset():]
@@ -148,6 +207,11 @@ func parseWireToolCalls(raw string) ([]wireToolCall, string, error) {
 			raw, ok = strings.CutPrefix(strings.TrimSpace(raw), closeTag)
 			if !ok {
 				return nil, "", fmt.Errorf("yzma: missing %s after JSON tool call", closeTag)
+			}
+		} else if strings.HasSuffix(marker, "<|message|>") {
+			// The older .name shorthand is complete after its JSON object.
+			if tail, ok := strings.CutPrefix(strings.TrimSpace(raw), harmonyCallEnd); ok {
+				raw = tail
 			}
 		}
 		switch v := value.(type) {
@@ -185,12 +249,54 @@ func parseWireToolCalls(raw string) ([]wireToolCall, string, error) {
 		}
 		calls = append(calls, call)
 	}
-	if (nonJSON && (len(calls) > 0 || len(qwenCalls) > 0)) || (len(calls) > 0 && len(qwenCalls) > 0) {
+	if (nonJSON && (len(calls) > 0 || len(qwenCalls) > 0 || harmonyText)) || (len(calls) > 0 && len(qwenCalls) > 0) {
 		return nil, "", fmt.Errorf("yzma: mixed or unmatched tool call syntax")
 	}
 	calls = append(calls, qwenCalls...)
+	if calls == nil && harmonyText {
+		calls = []wireToolCall{}
+	}
 	text.WriteString(raw)
 	return calls, message.StripMarkup(text.String()), nil
+}
+
+// hasMalformedInlineArguments looks for an argument key even when JSON
+// decoding fails before reaching it. Quoted values and nested keys don't
+// turn ordinary named data into a tool call.
+func hasMalformedInlineArguments(raw string) bool {
+	depth := 0
+	for {
+		loc := inlineJSONToken.FindStringIndex(raw)
+		if loc == nil {
+			// A complete key name followed by EOF is visible even if its
+			// closing quote was never generated.
+			key, afterComma := strings.CutPrefix(strings.TrimSpace(raw), ",")
+			key = strings.TrimSpace(key)
+			return depth == 1 && afterComma && (key == `"args` || key == `"arguments`)
+		}
+		token := raw[loc[0]:loc[1]]
+		before := strings.TrimSpace(raw[:loc[0]])
+		raw = raw[loc[1]:]
+		switch token[0] {
+		case '{', '[':
+			depth++
+		case '}', ']':
+			depth--
+			if depth == 0 {
+				return false
+			}
+		case '"':
+			if depth == 1 {
+				tail := strings.TrimSpace(raw)
+				if strings.HasSuffix(before, ",") || (strings.HasPrefix(tail, ":") && !strings.HasSuffix(before, ":")) {
+					var key string
+					if json.Unmarshal([]byte(token), &key) == nil && (key == "arguments" || key == "args") {
+						return true
+					}
+				}
+			}
+		}
+	}
 }
 
 func jsonCallObject(value any) (wireToolCall, error) {

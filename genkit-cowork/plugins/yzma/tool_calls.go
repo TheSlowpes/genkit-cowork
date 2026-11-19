@@ -185,6 +185,9 @@ func parsedToolParts(result TextGenerationResult, definitions []*ai.ToolDefiniti
 		}
 		return validatedToolParts(text, wireCalls, definitions, choice)
 	}
+	if wireCalls != nil {
+		return toolTextPart(text, choice)
+	}
 
 	raw, sentinel := result.Text, ""
 	if emptyGemmaCall.MatchString(raw) || bareEmptyGemmaCall.MatchString(raw) {
@@ -198,13 +201,11 @@ func parsedToolParts(result TextGenerationResult, definitions []*ai.ToolDefiniti
 			strings.Contains(raw, "<function=") || strings.Contains(raw, "<arg_key>") {
 			return nil, fmt.Errorf("yzma: malformed or incomplete tool call")
 		}
-		if choice == ai.ToolChoiceRequired {
-			return nil, fmt.Errorf("yzma: the model did not produce a required tool call")
-		}
-		return []*ai.Part{ai.NewTextPart(message.StripMarkup(result.Text))}, nil
+		return toolTextPart(message.StripMarkup(result.Text), choice)
 	}
+	// GPT calls are executable only when the lossless parser recognized them.
 	if message.DetectFormat(raw) == message.FormatGPT {
-		return nil, fmt.Errorf("yzma: unrecognized GPT tool call syntax")
+		return nil, fmt.Errorf("yzma: unsupported GPT tool call syntax")
 	}
 	// Yzma repairs truncated JSON. Never execute a repaired, incomplete call.
 	if result.Limited || !completeToolOutput(raw) {
@@ -217,6 +218,13 @@ func parsedToolParts(result TextGenerationResult, definitions []*ai.ToolDefiniti
 		wireCalls = append(wireCalls, wireToolCall{name: call.Function.Name, untyped: call.Function.Arguments})
 	}
 	return validatedToolParts(message.StripMarkup(raw), wireCalls, definitions, choice)
+}
+
+func toolTextPart(text string, choice ai.ToolChoice) ([]*ai.Part, error) {
+	if choice == ai.ToolChoiceRequired {
+		return nil, fmt.Errorf("yzma: the model did not produce a required tool call")
+	}
+	return []*ai.Part{ai.NewTextPart(text)}, nil
 }
 
 func validatedToolParts(text string, calls []wireToolCall, definitions []*ai.ToolDefinition, choice ai.ToolChoice) ([]*ai.Part, error) {

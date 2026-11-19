@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -223,8 +224,13 @@ func generateNativeText(ctx context.Context, model llama.Model, input TextGenera
 		}
 	}
 	if input.ToolCalling {
-		input.StopSequences = append(append([]string(nil), input.StopSequences...),
-			message.StopMarkers(vocab, message.FormatAuto)...)
+		stops := message.StopMarkers(vocab, message.FormatAuto)
+		if eos := llama.VocabEOS(vocab); eos >= 0 && llama.VocabGetText(vocab, eos) == harmonyTurnEnd {
+			// Harmony uses <|end|> between messages, including reasoning
+			// and preambles before a call. It is not a generation stop.
+			stops = slices.DeleteFunc(stops, func(stop string) bool { return stop == harmonyMessageEnd })
+		}
+		input.StopSequences = append(slices.Clone(input.StopSequences), stops...)
 		input.StopSequences = append(input.StopSequences, "<|tool_response>", "<|tool_response_start|>")
 	}
 	session := nativeTokenSession{ctx: lctx, vocab: vocab, sampler: sampler, special: input.ToolCalling}
@@ -359,7 +365,7 @@ func textSampler(model llama.Model, params llama.SamplerParams) llama.Sampler {
 type tokenSession interface {
 	Decode(ctx context.Context, tokens []llama.Token) error
 	Sample(ctx context.Context) (llama.Token, error)
-	IsEnd(token llama.Token) bool
+	End(token llama.Token) (stop bool, marker string)
 	Piece(token llama.Token) (string, error)
 }
 
@@ -412,8 +418,16 @@ func (s nativeTokenSession) Sample(ctx context.Context) (llama.Token, error) {
 	return token, nil
 }
 
-func (s nativeTokenSession) IsEnd(token llama.Token) bool {
-	return llama.VocabIsEOG(s.vocab, token)
+// End retains Harmony's call terminator for tool validation, even when
+// llama.cpp classifies it as an end-of-generation token.
+func (s nativeTokenSession) End(token llama.Token) (bool, string) {
+	if !llama.VocabIsEOG(s.vocab, token) {
+		return false, ""
+	}
+	if s.special && llama.VocabGetText(s.vocab, token) == harmonyCallEnd {
+		return true, harmonyCallEnd
+	}
+	return true, ""
 }
 
 func (s nativeTokenSession) Piece(token llama.Token) (string, error) {
@@ -461,9 +475,9 @@ func sampleTokens(ctx context.Context, session tokenSession, inputTokens, remain
 			return result, err
 		}
 		result.OutputTokens++
-		if session.IsEnd(token) {
+		if end, marker := session.End(token); end {
 			_, err := output.flush(ctx, true)
-			result.Text = output.text.String()
+			result.Text = output.text.String() + marker
 			return result, err
 		}
 		piece, err := session.Piece(token)

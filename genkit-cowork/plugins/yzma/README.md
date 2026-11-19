@@ -330,7 +330,8 @@ turn, use `required` with `ai.WithReturnToolRequests(true)` and make a separate
 `auto` request after handling the tool result.
 
 The adapter reads JSON call envelopes directly so numbers, strings, nulls,
-objects, and arrays keep their original types during schema validation. It also
+objects, and arrays keep their original types during schema validation. Harmony
+commentary calls to `functions.*` must close with `<|call|>`. The adapter also
 checks Qwen's function and parameter tags directly, so an incomplete optional
 parameter cannot be silently dropped. Other non-JSON formats, such as Gemma's
 `call:` format, use Yzma's family parser. Calls get unique IDs, which stay with
