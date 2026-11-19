@@ -54,7 +54,7 @@ func validateVideoPair(model map[string]ggufValue, projector ggufHeader) error {
 	return validateVisionPair(model, projector)
 }
 
-func decodeVideoPart(ctx context.Context, payload string, budget int) (MediaInputPart, error) {
+func decodeVideoPart(payload string, budget int) (MediaInputPart, error) {
 	data, err := decodeInlineBytes(payload, min(budget, maxVideoBytes))
 	if err != nil {
 		return MediaInputPart{}, err
@@ -62,17 +62,70 @@ func decodeVideoPart(ctx context.Context, payload string, budget int) (MediaInpu
 	if err := validateMP4Boxes(data); err != nil {
 		return MediaInputPart{}, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, videoTimeout)
-	defer cancel()
+	return MediaInputPart{MIMEType: videoMIME, Data: data}, nil
+}
+
+// VideoDecoder replaces the built-in ffprobe/ffmpeg implementation. It
+// receives a container-validated MP4 under a 15-second deadline. It must
+// verify H.264, duration, dimensions, and frame count before decoding, apply
+// the same limits as the built-in decoder, and read only the supplied bytes.
+// Return one to four 256x256 samples in display order.
+type VideoDecoder interface {
+	DecodeVideo(ctx context.Context, mp4 []byte) ([]image.Image, error)
+}
+
+type ffmpegVideoDecoder struct{}
+
+func (ffmpegVideoDecoder) DecodeVideo(ctx context.Context, data []byte) ([]image.Image, error) {
 	count, err := probeVideo(ctx, data)
 	if err != nil {
-		return MediaInputPart{}, err
+		return nil, err
 	}
-	frames, err := decodeVideoFrames(ctx, data, count)
+	return decodeVideoFrames(ctx, data, count)
+}
+
+func (op defaultModelOperator) prepareVideo(ctx context.Context, messages []MediaMessage) error {
+	for i, msg := range messages {
+		for j := range msg.Parts {
+			part := &msg.Parts[j]
+			if part.MIMEType != videoMIME {
+				continue
+			}
+			frames, err := decodeVideoSamples(ctx, op.videoDecoder, part.Data)
+			if err != nil {
+				return fmt.Errorf("yzma: message %d part %d: %w", i, j, err)
+			}
+			part.VideoFrames = frames
+		}
+	}
+	return nil
+}
+
+func decodeVideoSamples(ctx context.Context, decoder VideoDecoder, data []byte) ([]image.Image, error) {
+	if decoder == nil {
+		decoder = ffmpegVideoDecoder{}
+	}
+	ctx, cancel := context.WithTimeout(ctx, videoTimeout)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	frames, err := decoder.DecodeVideo(ctx, data)
 	if err != nil {
-		return MediaInputPart{}, err
+		return nil, err
 	}
-	return MediaInputPart{MIMEType: videoMIME, Data: data, VideoFrames: frames}, nil
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(frames) < 1 || len(frames) > videoSamples {
+		return nil, fmt.Errorf("video decoder must return between 1 and %d samples", videoSamples)
+	}
+	for _, frame := range frames {
+		if frame == nil || frame.Bounds().Size() != image.Pt(videoSampleEdge, videoSampleEdge) {
+			return nil, fmt.Errorf("video decoder must return %dx%d samples", videoSampleEdge, videoSampleEdge)
+		}
+	}
+	return frames, nil
 }
 
 // validateMP4Boxes requires a complete, non-fragmented container that can

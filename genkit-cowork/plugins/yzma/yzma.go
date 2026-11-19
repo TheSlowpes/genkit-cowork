@@ -59,6 +59,11 @@ type Yzma struct {
 	Verbose   bool   // Reserved for future native logging configuration.
 	// Operator overrides native initialization and model I/O. Nil uses llama.cpp.
 	Operator ModelOperator
+	// CatalogOperator overrides filesystem access during model discovery.
+	CatalogOperator CatalogOperator
+	// VideoDecoder overrides MP4 decoding for the built-in model operator.
+	// Custom media operators receive the MP4 bytes and decode them themselves.
+	VideoDecoder VideoDecoder
 
 	mu       sync.Mutex // Guards the plugin's own state below.
 	initted  bool
@@ -104,7 +109,7 @@ func (y *Yzma) Init(ctx context.Context) []api.Action {
 	}
 	operator := y.Operator
 	if operator == nil {
-		operator = defaultModelOperator{}
+		operator = defaultModelOperator{videoDecoder: y.VideoDecoder}
 	}
 	if err := operator.Init(ctx, libPath); err != nil {
 		panic("yzma.Init: " + err.Error())
@@ -113,7 +118,7 @@ func (y *Yzma) Init(ctx context.Context) []api.Action {
 	y.models = make(map[string]*generator)
 	y.done = make(chan struct{})
 	y.loadGate = make(chan struct{}, 1)
-	y.catalog = discoverModels(ctx, y.ModelsDir)
+	y.catalog = discoverModels(ctx, y.ModelsDir, y.CatalogOperator)
 	y.initted = true
 	return []api.Action{}
 }
@@ -170,7 +175,7 @@ func (y *Yzma) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.Mod
 	if _, err := applyContextOptions(model.Context, llama.ContextParams{}); err != nil {
 		panic("yzma.DefineModel: " + err.Error())
 	}
-	if _, err := resolveGenerationConfig(nil, model.GenerationDefaults, nil); err != nil {
+	if _, err := resolveGenerationConfig(model.GenerationDefaults, nil); err != nil {
 		panic("yzma.DefineModel: " + err.Error())
 	}
 
@@ -266,7 +271,7 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := resolveGenerationConfig(nil, g.model.GenerationDefaults, requestConfig)
+	cfg, err := resolveGenerationConfig(g.model.GenerationDefaults, requestConfig)
 	if err != nil {
 		return nil, err
 	}

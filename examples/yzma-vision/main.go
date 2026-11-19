@@ -18,6 +18,8 @@
 // in a Genkit request. With -box it prints a grammar-constrained bounding box
 // instead of a text answer. It runs locally, without a model server or media
 // fetches, and never acts on a prediction.
+// Use -check-grounding with the documented Qwen pair to test two generated
+// target positions against known coordinates. A whole-frame box fails.
 // See the Yzma plugin README for the model/projector files, exact command,
 // and an example response.
 package main
@@ -40,6 +42,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 
 	"github.com/TheSlowpes/genkit-cowork/genkit-cowork/plugins/yzma"
+	"github.com/TheSlowpes/genkit-cowork/internal/groundingfixture"
 )
 
 func main() {
@@ -48,8 +51,10 @@ func main() {
 	image := flag.String("image", "", "Path to a JPEG or PNG")
 	question := flag.String("question", "", "Question or bounding box instruction")
 	box := flag.Bool("box", false, "Return a bounding box as JSON")
+	grounding := flag.Bool("check-grounding", false, "Localize a red square in two generated PNGs")
 	flag.Parse()
-	if *model == "" || *projector == "" || *image == "" {
+	if *model == "" || *projector == "" ||
+		(!*grounding && *image == "") || (*grounding && (*box || *image != "" || *question != "")) {
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -62,7 +67,7 @@ func main() {
 			*question = "What animal is in this image?"
 		}
 	}
-	if err := run(ctx, *model, *projector, *image, *question, *box); err != nil {
+	if err := run(ctx, *model, *projector, *image, *question, *box, *grounding); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -88,10 +93,13 @@ func readImage(path string) (*ai.Part, error) {
 	return ai.NewMediaPart(mime, "data:"+mime+";base64,"+base64.StdEncoding.EncodeToString(data)), nil
 }
 
-func run(ctx context.Context, modelPath, projectorPath, imagePath, question string, predictBox bool) (err error) {
-	image, err := readImage(imagePath)
-	if err != nil {
-		return err
+func run(ctx context.Context, modelPath, projectorPath, imagePath, question string, predictBox, checkGrounding bool) (err error) {
+	var image *ai.Part
+	if !checkGrounding {
+		image, err = readImage(imagePath)
+		if err != nil {
+			return err
+		}
 	}
 	local := &yzma.Yzma{}
 	g := genkit.Init(ctx, genkit.WithPlugins(local))
@@ -100,9 +108,9 @@ func run(ctx context.Context, modelPath, projectorPath, imagePath, question stri
 		defer cancel()
 		err = errors.Join(err, local.Close(closeCtx))
 	}()
-	gpu, threads, contextSize := int32(0), int32(4), uint32(4096)
+	gpu, threads, contextSize := int32(0), int32(2), uint32(4096)
 	maxTokens, temperature := 48, 0.0
-	if predictBox {
+	if predictBox || checkGrounding {
 		maxTokens = 128
 	}
 	model := local.DefineModel(g, yzma.ModelDefinition{
@@ -114,6 +122,9 @@ func run(ctx context.Context, modelPath, projectorPath, imagePath, question stri
 			MaxOutputTokens: &maxTokens, Temperature: &temperature,
 		},
 	}, nil)
+	if checkGrounding {
+		return checkTargets(ctx, g, model)
+	}
 	if predictBox {
 		box, err := yzma.GenerateBoundingBox(ctx, g, model, image, question)
 		if err != nil {
@@ -129,5 +140,23 @@ func run(ctx context.Context, modelPath, projectorPath, imagePath, question stri
 		return err
 	}
 	fmt.Printf("Answer: %s\n", result.Text())
+	return nil
+}
+
+func checkTargets(ctx context.Context, g *genkit.Genkit, model ai.Model) error {
+	for _, target := range groundingfixture.Targets() {
+		url, err := target.PNG()
+		if err != nil {
+			return err
+		}
+		box, err := yzma.GenerateBoundingBox(ctx, g, model, ai.NewMediaPart("image/png", url), groundingfixture.Instruction)
+		if err != nil {
+			return fmt.Errorf("%s target: %w", target.Name, err)
+		}
+		if err := target.Check(box.Left, box.Top, box.Right, box.Bottom); err != nil {
+			return err
+		}
+		fmt.Printf("%s red square: %+v\n", target.Name, *box)
+	}
 	return nil
 }

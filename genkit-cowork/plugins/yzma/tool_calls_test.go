@@ -19,6 +19,8 @@ package yzma
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -88,7 +90,7 @@ func TestToolArgumentTypes(t *testing.T) {
 		"string": map[string]any{"type": "string"}, "bool": map[string]any{"type": "boolean"},
 		"array": map[string]any{"type": "array"}, "object": map[string]any{"type": "object"},
 	}}
-	args, err := typedToolArguments(map[string]string{
+	args, err := untypedToolArguments(map[string]string{
 		"string": "0123", "bool": "false", "array": `[1,true,"x"]`, "object": `{"nested":42}`,
 	}, schema)
 	if err != nil {
@@ -209,9 +211,146 @@ func TestToolDefinitionsResolveReferences(t *testing.T) {
 	if properties["a"].(map[string]any)["type"] != "integer" || schema["$ref"] != "#/$defs/Input" {
 		t.Error("reference expansion failed or mutated the original schema")
 	}
-	if _, err := typedToolArguments(map[string]string{"a": "2"}, schema); err != nil {
+	if err := validateToolArguments(map[string]any{"a": json.Number("2")}, schema); err != nil {
 		t.Errorf("original referenced schema failed validation: %v", err)
 	}
+}
+
+func TestJSONToolCallsPreserveWireTypes(t *testing.T) {
+	def := &ai.ToolDefinition{Name: "echo", InputSchema: map[string]any{
+		"type": "object", "required": []string{"value"}, "additionalProperties": false,
+		"properties": map[string]any{"value": map[string]any{"type": "string"}},
+	}}
+	for name, wrap := range map[string]func(string) string{
+		"standard": func(args string) string {
+			return `<tool_call>{"name":"echo","arguments":` + args + `}</tool_call>`
+		},
+		"phi": func(args string) string {
+			return `<|tool_call>{"name":"echo","arguments":` + args + `}</tool_call>`
+		},
+		"inline": func(args string) string { return `{"name":"echo","args":` + args + `}` },
+		"lfm": func(args string) string {
+			return `<|tool_call_start|>[{"name":"echo","arguments":` + args + `}]<|tool_call_end|>`
+		},
+		"mistral": func(args string) string { return `[TOOL_CALLS]echo[ARGS]` + args },
+		"gpt":     func(args string) string { return `.echo <|message|>` + args },
+	} {
+		t.Run(name, func(t *testing.T) {
+			parse := func(args string) ([]*ai.Part, error) {
+				return parsedToolParts(TextGenerationResult{Text: wrap(args)}, []*ai.ToolDefinition{def}, ai.ToolChoiceAuto)
+			}
+			for _, args := range []string{`{"value":42}`, `{"value":false}`, `{"value":null}`,
+				`{"arguments":{"value":"42"}}`, `{"value":"one","value":"two"}`, `"{}"`, `null`} {
+				if parts, err := parse(args); err == nil || parts != nil {
+					t.Errorf("parse(%s) = (%v, %v), want no parts and error", args, parts, err)
+				}
+			}
+			parts, err := parse(`{"value":"</tool_call>42"}`)
+			if err != nil || len(parts) != 1 || parts[0].ToolRequest == nil ||
+				parts[0].ToolRequest.Input.(map[string]any)["value"] != "</tool_call>42" {
+				t.Fatalf("parse valid string = (%+v, %v)", parts, err)
+			}
+		})
+	}
+}
+
+func TestJSONToolCallsKeepStructureAndRejectBadBatches(t *testing.T) {
+	def := &ai.ToolDefinition{Name: "echo", InputSchema: map[string]any{"type": "object"}}
+	const good = `<tool_call>{"name":"echo","arguments":{"arguments":{"n":9007199254740993},"list":[null,"42",false]}}</tool_call>`
+	parts, err := parsedToolParts(TextGenerationResult{Text: good}, []*ai.ToolDefinition{def}, ai.ToolChoiceAuto)
+	if err != nil || len(parts) != 1 || parts[0].ToolRequest == nil {
+		t.Fatalf("parse = (%v, %v)", parts, err)
+	}
+	args, err := json.Marshal(parts[0].ToolRequest.Input)
+	if err != nil || string(args) != `{"arguments":{"n":9007199254740993},"list":[null,"42",false]}` {
+		t.Fatalf("arguments = %s, err = %v", args, err)
+	}
+	for _, raw := range []string{
+		good + `<tool_call>{"name":"echo","arguments":{}}`,
+		good + `<tool_call>{"name":"echo","arguments":{},"args":{}}</tool_call>`,
+		good + `<tool_call>{"name":"echo","arguments":{"n":tru}}</tool_call>`,
+		good + `<|tool_call>call:echo{}<tool_call|>`,
+		`<tool_call>{"name":"echo","arguments":{"nested":{"n":1,"n":2}}}</tool_call>`,
+		`<tool_call>{"name":"add","arguments":{"a":"2","b":3}}</tool_call>`,
+	} {
+		if parts, err := parsedToolParts(TextGenerationResult{Text: raw}, []*ai.ToolDefinition{def, testAddDefinition()}, ai.ToolChoiceAuto); err == nil || parts != nil {
+			t.Errorf("parse(%q) = (%v, %v), want no parts and error", raw, parts, err)
+		}
+	}
+}
+
+func TestInlineNamedJSONWithoutArgumentsRemainsText(t *testing.T) {
+	const raw = `{"name":"Ada","age":37}`
+	parts, err := parsedToolParts(TextGenerationResult{Text: raw}, nil, ai.ToolChoiceAuto)
+	if err != nil || len(parts) != 1 || !parts[0].IsText() || parts[0].Text != raw {
+		t.Fatalf("parse = (%v, %v), want the original text", parts, err)
+	}
+}
+
+// TestNativeToolCalling uses Gemma 4 to request a real Genkit tool, then reads
+// back a value that is present only in the tool result.
+func TestNativeToolCalling(t *testing.T) {
+	path, lib := os.Getenv("YZMA_TEST_TOOL_MODEL"), os.Getenv("YZMA_LIB")
+	if path == "" || lib == "" {
+		t.Skip("set YZMA_TEST_TOOL_MODEL to the Gemma 4 GGUF and set YZMA_LIB")
+	}
+	plugin := &Yzma{LibPath: lib, ModelsDir: filepath.Dir(path)}
+	g := genkit.Init(t.Context(), genkit.WithPlugins(plugin))
+	t.Cleanup(func() {
+		if err := plugin.Close(context.WithoutCancel(t.Context())); err != nil {
+			t.Error(err)
+		}
+	})
+	def := testModelDefinition()
+	def.Loading.GGUFPath, def.Loading.NGPULayers = path, ptr(int32(0))
+	def.Context = ContextOptions{ContextSize: ptr(uint32(2048)), Threads: ptr(int32(2)), BatchThreads: ptr(int32(2))}
+	def.GenerationDefaults = &GenerateContentConfig{Temperature: ptr(0.0), MaxOutputTokens: ptr(256)}
+	def.ToolCalling = true
+	model := plugin.DefineModel(g, def, nil)
+	type lookupInput struct {
+		City string `json:"city"`
+	}
+	type lookupOutput struct {
+		Code string `json:"code"`
+	}
+	const code = "violet-742"
+	executions := 0
+	lookup := genkit.DefineTool(g, "lookup_code", "Look up the secret code for a city",
+		func(ctx *ai.ToolContext, input lookupInput) (lookupOutput, error) {
+			executions++
+			if input.City != "Oslo" {
+				t.Errorf("tool input = %+v, want Oslo", input)
+			}
+			return lookupOutput{Code: code}, nil
+		})
+	result, err := genkit.Generate(t.Context(), g, ai.WithModel(model), ai.WithTools(lookup),
+		ai.WithPrompt("Call lookup_code with city Oslo, then reply with the code returned by the tool. Do not guess."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var requests []*ai.ToolRequest
+	var responses []*ai.ToolResponse
+	for _, msg := range result.History() {
+		for _, part := range msg.Content {
+			if part.IsToolRequest() {
+				requests = append(requests, part.ToolRequest)
+			}
+			if part.IsToolResponse() {
+				responses = append(responses, part.ToolResponse)
+			}
+		}
+	}
+	if executions != 1 || len(requests) != 1 || len(responses) != 1 {
+		t.Fatalf("executions = %d, calls = %d, tool replies = %d; final text = %q",
+			executions, len(requests), len(responses), result.Text())
+	}
+	call, reply := requests[0], responses[0]
+	output, err := json.Marshal(reply.Output)
+	if call.Ref == "" || call.Ref != reply.Ref || call.Name != "lookup_code" || reply.Name != call.Name ||
+		err != nil || string(output) != `{"code":"`+code+`"}` || !strings.Contains(result.Text(), code) {
+		t.Fatalf("call = %+v, reply = %+v, final text = %q", call, reply, result.Text())
+	}
+	t.Logf("matched lookup_code call and result %s; final text: %q", call.Ref, result.Text())
 }
 
 func TestToolHistoryRejectsMismatchedReferences(t *testing.T) {

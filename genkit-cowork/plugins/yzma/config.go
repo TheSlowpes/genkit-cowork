@@ -121,7 +121,7 @@ type ContextOptions struct {
 
 // GenerateContentConfig is the per-request configuration a Yzma model accepts
 // through Genkit's ai.WithConfig. Unset fields inherit model defaults, then
-// provider defaults, then Yzma sampler defaults. MaxOutputTokens defaults to 1024.
+// Yzma sampler defaults. MaxOutputTokens defaults to 1024.
 // Pointers distinguish explicit zero values from omitted settings.
 type GenerateContentConfig struct {
 	// MaxOutputTokens limits generated tokens, not the combined context size.

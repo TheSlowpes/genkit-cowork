@@ -15,7 +15,7 @@ tasks:
     desc: Check Go formatting and run go vet
     cmds:
       - |
-        unformatted=$(gofmt -l examples genkit-cowork) || exit 1
+        unformatted=$(gofmt -l examples genkit-cowork internal) || exit 1
         if [ -n "$unformatted" ]; then
           printf 'Run task fmt. Unformatted files:\n%s\n' "$unformatted" >&2
           exit 1
@@ -29,6 +29,8 @@ tasks:
       YZMA_TEST_SPEECH_MODEL: ''
       YZMA_TEST_DECISION_MODEL: ''
       YZMA_TEST_AUDIO_MODEL: ''
+      YZMA_TEST_TOOL_MODEL: ''
+      YZMA_TEST_VLA_MODEL: ''
     cmds:
       - go test ./...
 
@@ -74,6 +76,8 @@ tasks:
       YZMA_TEST_SPEECH_MODEL: ''
       YZMA_TEST_DECISION_MODEL: ''
       YZMA_TEST_AUDIO_MODEL: ''
+      YZMA_TEST_TOOL_MODEL: ''
+      YZMA_TEST_VLA_MODEL: ''
     cmds:
       - go test -race ./genkit-cowork/plugins/yzma
 
@@ -111,6 +115,21 @@ tasks:
     desc: Ask a local Yzma vision model about an inline image
     cmds:
       - go run ./examples/yzma-vision {{.CLI_ARGS}}
+
+  test:yzma:tools:native:
+    desc: Run the native tool round trip using the local Gemma 4 model
+    cmds:
+      - ': "${YZMA_LIB:?Set YZMA_LIB to the native library directory}"'
+      - ': "${YZMA_TEST_TOOL_MODEL:?Set YZMA_TEST_TOOL_MODEL to the Gemma 4 GGUF}"'
+      - go test ./genkit-cowork/plugins/yzma -run '^TestNativeToolCalling$' -v -count=1
+
+  test:yzma:grounding:native:
+    desc: Check localization on two PNG fixtures with the Qwen3.5-0.8B pair
+    cmds:
+      - ': "${YZMA_LIB:?Set YZMA_LIB to the native library directory}"'
+      - ': "${YZMA_TEST_VLA_MODEL:?Set YZMA_TEST_VLA_MODEL to the Qwen3.5-0.8B GGUF}"'
+      - ': "${YZMA_TEST_VLA_PROJECTOR:?Set YZMA_TEST_VLA_PROJECTOR to its matching projector GGUF}"'
+      - go test ./genkit-cowork/plugins/yzma -run '^TestNativeBoundingBox$' -v -count=1
 
   dev:yzma:decision:
     desc: Run the Yzma decision example with YZMA_LIB and an installed System One GGUF

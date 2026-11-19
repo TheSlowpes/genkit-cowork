@@ -69,7 +69,7 @@ func TestAudioInputGenkitOrder(t *testing.T) {
 		generate: func(_ context.Context, _ llama.Model, _ ProjectorHandle, input MediaGenerationInput) (TextGenerationResult, error) {
 			// The native path consumes these same spans and payloads in order.
 			input.ChatTemplate = `{{ messages[0].content }}`
-			spans, parts, err := renderMediaPrompt(input, nil)
+			spans, parts, err := renderMediaPrompt(input, "", "", nil)
 			if err != nil {
 				t.Fatal(err)
 			}

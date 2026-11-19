@@ -112,7 +112,7 @@ func TestNativeEmbeddedTemplate(t *testing.T) {
 	if err := os.Symlink(modelPath, filepath.Join(dir, "gemma.gguf")); err != nil {
 		t.Fatal(err)
 	}
-	discovered, ok := discoverModels(t.Context(), dir)["gemma"]
+	discovered, ok := discoverModels(t.Context(), dir, nil)["gemma"]
 	if !ok || discovered.Type != ModelTypeChat || discovered.Projector != nil || discovered.ToolCalling {
 		t.Fatalf("discovered Gemma = %+v, present = %v; want text-only chat without tools", discovered, ok)
 	}

@@ -280,6 +280,9 @@ Each pillar can be adopted independently. Use the full framework or pick individ
 | Edit | `NewEditTool(g, cwd, ...opts)` | Find-and-replace with exact/fuzzy matching, unified diff |
 | Write | `NewWriteTool(g, cwd, ...opts)` | File creation with auto-mkdir, operator interface |
 
+Use `tools.DefaultMaxLines`, `tools.DefaultMaxBytes`, and `tools.ContextLines`
+for output and diff limits. The old uppercase names remain deprecated aliases.
+
 ## Memory
 
 Memory is implemented through a `Session` store plus pluggable `SessionOperator` backends.
@@ -428,7 +431,7 @@ Plugins can be used independently of the rest of the framework.
 | [Skills](#skills) | Discover and load domain knowledge from `SKILL.md` files |
 | [Yzma](genkit-cowork/plugins/yzma/README.md) | Run local GGUFs in-process for chat, completion, tool calling, constrained JSON, image prompts, text embeddings, speech synthesis, and typed decisions |
 
-The Yzma guide covers Dev UI discovery, constrained JSON, [image prompts](genkit-cowork/plugins/yzma/README.md#ask-a-vision-model-about-an-image), and [bounding box predictions](genkit-cowork/plugins/yzma/README.md#predict-a-bounding-box).
+The Yzma guide covers Dev UI discovery, constrained JSON, [native Genkit tool calling](genkit-cowork/plugins/yzma/README.md#tool-calling), and [bounding boxes with a grounding check](genkit-cowork/plugins/yzma/README.md#predict-a-bounding-box).
 It also includes examples for [local speech synthesis](genkit-cowork/plugins/yzma/README.md#speech-output) and [typed System One decisions](genkit-cowork/plugins/yzma/README.md#typed-system-one-decisions).
 For speech recognition, see [transcribe an inline WAV](genkit-cowork/plugins/yzma/README.md#transcribe-an-inline-wav).
 

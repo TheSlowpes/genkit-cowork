@@ -16,8 +16,6 @@
 
 package tools
 
-// DefaultMaxLines is the default maximum number of lines returned by tools
-// that truncate textual output.
 const (
 	// DefaultMaxLines is the default line cap for tool output.
 	DefaultMaxLines = 2000
@@ -27,4 +25,16 @@ const (
 	DefaultMaxBytes = 50 * 1024
 	// ContextLines is the number of surrounding lines included in edit diffs.
 	ContextLines = 4
+)
+
+const (
+	// DEFAULT_MAX_LINES is the default line cap for tool output.
+	// Deprecated: Use DefaultMaxLines.
+	DEFAULT_MAX_LINES = DefaultMaxLines
+	// DEFAULT_MAX_BYTES is the default byte cap for tool output.
+	// Deprecated: Use DefaultMaxBytes.
+	DEFAULT_MAX_BYTES = DefaultMaxBytes
+	// CONTEXT_LINES is the number of surrounding lines included in edit diffs.
+	// Deprecated: Use ContextLines.
+	CONTEXT_LINES = ContextLines
 )

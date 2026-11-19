@@ -22,7 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
+	"io/fs"
 	"path/filepath"
 	"strings"
 
@@ -109,7 +109,7 @@ const systemOneTemplateKey = "tokenizer.chat_template.systemone"
 // discoverDecision claims a candidate before text classification if it has a
 // System One marker or a per-file calibration sidecar. A broken decision
 // artifact must not fall through and accidentally be listed as a text model.
-func discoverDecision(file ggufCandidate) (DecisionOptions, bool, error) {
+func discoverDecision(ctx context.Context, catalogIO CatalogOperator, file ggufCandidate) (DecisionOptions, bool, error) {
 	values := file.header.values
 	arch := values["general.architecture"].text
 	kind, hasKind := values[arch+".decision.type"]
@@ -128,7 +128,7 @@ func discoverDecision(file ggufCandidate) (DecisionOptions, bool, error) {
 		{".decider.json", DecisionReadoutDecider},
 	} {
 		path := stem + sidecar.suffix
-		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		if _, err := catalogIO.Lstat(ctx, path); errors.Is(err, fs.ErrNotExist) {
 			continue
 		} else if err != nil {
 			return o, true, fmt.Errorf("inspect decision sidecar: %w", err)
@@ -162,7 +162,7 @@ func discoverDecision(file ggufCandidate) (DecisionOptions, bool, error) {
 		if _, err := jinja.Compile(template.text); err != nil {
 			return o, true, fmt.Errorf("invalid systemone template: %w", err)
 		}
-	} else if _, err := readDecisionSidecar(o); err != nil {
+	} else if _, err := readDecisionSidecar(ctx, catalogIO, o); err != nil {
 		return o, true, err
 	}
 	return o, true, nil
@@ -175,20 +175,16 @@ type decisionCalibration struct {
 	decider *decide.DeciderConfig
 }
 
-func readDecisionSidecar(o DecisionOptions) (c decisionCalibration, err error) {
+func readDecisionSidecar(ctx context.Context, catalogIO CatalogOperator, o DecisionOptions) (c decisionCalibration, err error) {
 	const limit = 64 * 1024
-	info, err := os.Stat(o.ConfigPath)
-	if err != nil {
-		return c, fmt.Errorf("decision sidecar: %w", err)
-	}
-	if !info.Mode().IsRegular() || info.Size() > limit {
-		return c, errors.New("decision sidecar must be a regular file no larger than 64 KiB")
-	}
-	f, err := os.Open(o.ConfigPath)
+	f, size, err := catalogIO.OpenRegular(ctx, o.ConfigPath)
 	if err != nil {
 		return c, fmt.Errorf("decision sidecar: %w", err)
 	}
 	defer f.Close()
+	if size < 0 || size > limit {
+		return c, errors.New("decision sidecar must be a regular file no larger than 64 KiB")
+	}
 	data, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
 		return c, fmt.Errorf("decision sidecar: %w", err)
@@ -245,7 +241,7 @@ func (defaultModelOperator) LoadDecision(ctx context.Context, path string, optio
 	var c decisionCalibration
 	var err error
 	if options.Readout != DecisionReadoutGGUF {
-		c, err = readDecisionSidecar(options)
+		c, err = readDecisionSidecar(ctx, diskCatalog{}, options)
 		if err != nil {
 			return nil, err
 		}

@@ -21,12 +21,15 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"image"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
@@ -35,6 +38,111 @@ import (
 
 func mp4Part(data []byte) *ai.Part {
 	return ai.NewMediaPart(videoMIME, "data:video/mp4;base64,"+base64.StdEncoding.EncodeToString(data))
+}
+
+func mp4ContainerFixture() []byte {
+	box := func(kind string, body []byte) []byte {
+		size := binary.BigEndian.AppendUint32(nil, uint32(8+len(body)))
+		return append(append(size, kind...), body...)
+	}
+	header := binary.BigEndian.AppendUint32(make([]byte, 12), 1000)
+	header = binary.BigEndian.AppendUint32(header, 1000)
+	// Complete fast-start container with no H.264 track.
+	return bytes.Join([][]byte{box("ftyp", []byte("isom0000")), box("moov", box("mvhd", header)),
+		box("mdat", []byte("media"))}, nil)
+}
+
+func TestCustomVideoOperatorReceivesValidatedBytesWithoutFFmpeg(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	mp4 := mp4ContainerFixture()
+	called := false
+	local, g := initDiscoveryTest(t, t.TempDir(), &testVisionOperator{
+		testModelOperator: &testModelOperator{load: func(context.Context, ModelOptions) (llama.Model, error) {
+			return 42, nil
+		}},
+		loadProjector: func(context.Context, llama.Model, ModelDefinition) (ProjectorHandle, error) { return 7, nil },
+		freeProjector: func(context.Context, ProjectorHandle) error { return nil },
+		generate: func(_ context.Context, _ llama.Model, _ ProjectorHandle, input MediaGenerationInput) (TextGenerationResult, error) {
+			called = true
+			if input.Type != ModelTypeChat || input.MaxOutputTokens != 40 {
+				t.Errorf("settings = %+v", input.GenerationSettings)
+			}
+			part := input.Messages[0].Parts[0]
+			if part.MIMEType != videoMIME || !bytes.Equal(part.Data, mp4) || len(part.VideoFrames) != 0 {
+				t.Errorf("received part = %+v, want original MP4 and no decoded frames", part)
+			}
+			return TextGenerationResult{Text: "Video received"}, nil
+		},
+	})
+	def := testModelDefinition()
+	def.Projector = &ProjectorOptions{GGUFPath: "video.gguf", Video: true}
+	def.GenerationDefaults = &GenerateContentConfig{MaxOutputTokens: ptr(40)}
+	model := local.DefineModel(g, def, nil)
+	_, err := genkit.Generate(t.Context(), g, ai.WithModel(model), ai.WithMessages(ai.NewUserMessage(mp4Part(mp4))))
+	if err != nil || !called {
+		t.Fatalf("Generate error = %v, called = %v", err, called)
+	}
+}
+
+type videoDecoderFunc func(context.Context, []byte) ([]image.Image, error)
+
+func (f videoDecoderFunc) DecodeVideo(ctx context.Context, data []byte) ([]image.Image, error) {
+	return f(ctx, data)
+}
+
+func TestNativeVideoPreparationRunsAfterContainerValidationBeforeWeightLoad(t *testing.T) {
+	const badContainer = "not an MP4"
+	badTrack := errors.New("video track rejected by decoder")
+	calls := 0
+	op := defaultModelOperator{videoDecoder: videoDecoderFunc(func(context.Context, []byte) ([]image.Image, error) {
+		calls++
+		return nil, badTrack
+	})}
+	// No model resources or load gate exist. We must reject both requests
+	// before attempting to acquire the model.
+	g := &generator{operator: op, model: ModelDefinition{Projector: &ProjectorOptions{Video: true}}}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	req := ai.NewModelRequest(nil, ai.NewUserMessage(mp4Part([]byte(badContainer))))
+	if _, err := g.generateMedia(ctx, req, nil); err == nil || !strings.Contains(err.Error(), "invalid MP4") || calls != 0 {
+		t.Fatalf("invalid container produced error %v and %d decoder calls", err, calls)
+	}
+	req = ai.NewModelRequest(nil, ai.NewUserMessage(mp4Part(mp4ContainerFixture())))
+	if _, err := g.generateMedia(ctx, req, nil); !errors.Is(err, badTrack) || calls != 1 {
+		t.Fatalf("invalid track produced error %v and %d decoder calls", err, calls)
+	}
+}
+
+func TestVideoDecoderBounds(t *testing.T) {
+	data := []byte("validated container")
+	frame := image.NewRGBA(image.Rect(0, 0, videoSampleEdge, videoSampleEdge))
+	for _, tc := range []struct {
+		name   string
+		frames []image.Image
+		want   string
+	}{
+		{"valid", []image.Image{frame}, ""},
+		{"empty", nil, "between 1 and 4"},
+		{"too many", []image.Image{frame, frame, frame, frame, frame}, "between 1 and 4"},
+		{"too large", []image.Image{image.NewRGBA(image.Rect(0, 0, 257, 256))}, "256x256"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			op := videoDecoderFunc(func(ctx context.Context, got []byte) ([]image.Image, error) {
+				if _, ok := ctx.Deadline(); !ok || !bytes.Equal(got, data) {
+					t.Error("decoder did not receive bytes and a bounded context")
+				}
+				return tc.frames, nil
+			})
+			got, err := decodeVideoSamples(t.Context(), op, data)
+			if tc.want == "" {
+				if err != nil || len(got) != 1 || got[0] != frame {
+					t.Fatalf("decode = (%v, %v), want one frame", got, err)
+				}
+			} else if got != nil || err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("decode = (%v, %v), want %q", got, err, tc.want)
+			}
+		})
+	}
 }
 
 func TestVideoRejectsInvalidGenkitInputBeforeLoad(t *testing.T) {

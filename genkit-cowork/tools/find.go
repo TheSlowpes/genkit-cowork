@@ -264,12 +264,6 @@ func matchGlobPattern(pattern, rel string) (bool, error) {
 			return ok, err
 		}
 	}
-	if base, ok := strings.CutPrefix(pattern, "**/"); ok {
-		if ok, err := filepath.Match(base, filepath.Base(rel)); err != nil || ok {
-			return ok, err
-		}
-	}
-
 	return matchGlobParts(strings.Split(pattern, "/"), strings.Split(rel, "/"))
 }
 

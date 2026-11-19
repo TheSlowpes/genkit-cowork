@@ -320,15 +320,15 @@ func TestVisionRejectsStructuredOutputBeforeLoad(t *testing.T) {
 
 func TestVisionTemplateCannotReorderMedia(t *testing.T) {
 	input := MediaGenerationInput{
-		TextGenerationInput: TextGenerationInput{
-			Type: ModelTypeChat, ChatTemplate: `{{ messages[1].content }}{{ messages[0].content }}`,
+		GenerationSettings: GenerationSettings{
+			ChatTemplate: `{{ messages[1].content }}{{ messages[0].content }}`,
 		},
 		Messages: []MediaMessage{
 			{Role: "user", Parts: []MediaInputPart{{MIMEType: "image/png"}}},
 			{Role: "user", Parts: []MediaInputPart{{MIMEType: "image/png"}}},
 		},
 	}
-	if _, _, err := renderMediaPrompt(input, nil); err == nil || !strings.Contains(err.Error(), "ordered media slots") {
+	if _, _, err := renderMediaPrompt(input, "", "", nil); err == nil || !strings.Contains(err.Error(), "ordered media slots") {
 		t.Fatalf("render reordered prompt error = %v", err)
 	}
 }

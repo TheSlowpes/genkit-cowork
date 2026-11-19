@@ -69,6 +69,27 @@ type TextGenerationInput struct {
 	bosToken, eosToken string
 }
 
+// GenerationSettings holds the template and inference settings shared by text
+// and media. Sampler, output limits, and stops apply to one request.
+type GenerationSettings struct {
+	ChatTemplate     string
+	ChatTemplateName string
+	Context          ContextOptions
+	Sampler          llama.SamplerParams
+	MaxOutputTokens  int
+	StopSequences    []string
+}
+
+// Keep the public text fields flat so custom operators can still construct
+// keyed TextGenerationInput literals.
+func (in TextGenerationInput) settings() GenerationSettings {
+	return GenerationSettings{
+		ChatTemplate: in.ChatTemplate, ChatTemplateName: in.ChatTemplateName,
+		Context: in.Context, Sampler: in.Sampler,
+		MaxOutputTokens: in.MaxOutputTokens, StopSequences: in.StopSequences,
+	}
+}
+
 // TextGenerationResult contains raw model text and native token counts.
 // For tool-enabled models, the Genkit adapter parses and removes tool syntax.
 // OutputTokens includes sampled end-of-generation tokens and stripped stop text.
@@ -177,19 +198,11 @@ func generateNativeText(ctx context.Context, model llama.Model, input TextGenera
 	if err != nil {
 		return result, err
 	}
-	params, err := resolveContextParams(input.Context)
+	lctx, err := openInferenceContext(ctx, model, input.Context)
 	if err != nil {
 		return result, err
 	}
-	lctx, err := llama.InitFromModel(model, params)
-	if err != nil {
-		return result, fmt.Errorf("allocate inference context: %w", err)
-	}
-	llama.SetAbortCallback(lctx, func() bool { return ctx.Err() != nil })
-	defer func() {
-		llama.SetAbortCallback(lctx, nil)
-		err = errors.Join(err, llama.Free(lctx))
-	}()
+	defer closeInferenceContext(lctx, &err)
 	addSpecial := !parseSpecial || input.bosToken == "" || !strings.HasPrefix(prompt, input.bosToken)
 	tokens := llama.Tokenize(vocab, prompt, addSpecial, parseSpecial)
 	capacity, batchSize := int(llama.NCtxSeq(lctx)), int(llama.NBatch(lctx))
@@ -216,6 +229,27 @@ func generateNativeText(ctx context.Context, model llama.Model, input TextGenera
 	}
 	session := nativeTokenSession{ctx: lctx, vocab: vocab, sampler: sampler, special: input.ToolCalling}
 	return generateTokens(ctx, session, tokens, batchSize, capacity, input, onText)
+}
+
+func openInferenceContext(ctx context.Context, model llama.Model, options ContextOptions) (llama.Context, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	params, err := resolveContextParams(options)
+	if err != nil {
+		return 0, err
+	}
+	lctx, err := llama.InitFromModel(model, params)
+	if err != nil {
+		return 0, fmt.Errorf("allocate inference context: %w", err)
+	}
+	llama.SetAbortCallback(lctx, func() bool { return ctx.Err() != nil })
+	return lctx, nil
+}
+
+func closeInferenceContext(lctx llama.Context, err *error) {
+	llama.SetAbortCallback(lctx, nil)
+	*err = errors.Join(*err, llama.Free(lctx))
 }
 
 // addOutputGrammar runs after the sampler has accepted the prompt. Move the
@@ -410,11 +444,11 @@ func generateTokens(ctx context.Context, session tokenSession, prompt []llama.To
 			return result, fmt.Errorf("decode prompt: %w", err)
 		}
 	}
-	return sampleTokens(ctx, session, len(prompt), capacity-len(prompt), input, onText)
+	return sampleTokens(ctx, session, len(prompt), capacity-len(prompt), input.settings(), onText)
 }
 
 // sampleTokens starts from logits left by a successful text or media prefill.
-func sampleTokens(ctx context.Context, session tokenSession, inputTokens, remaining int, input TextGenerationInput, onText func(context.Context, string) error) (TextGenerationResult, error) {
+func sampleTokens(ctx context.Context, session tokenSession, inputTokens, remaining int, input GenerationSettings, onText func(context.Context, string) error) (TextGenerationResult, error) {
 	result := TextGenerationResult{InputTokens: inputTokens}
 	output := textOutput{stops: input.StopSequences, onText: onText}
 	limit := min(input.MaxOutputTokens, remaining)

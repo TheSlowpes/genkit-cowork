@@ -148,7 +148,7 @@ func TestApplyContextOptions(t *testing.T) {
 }
 
 func TestResolveGenerationConfig(t *testing.T) {
-	got, err := resolveGenerationConfig(nil, nil, nil)
+	got, err := resolveGenerationConfig(nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,12 +158,9 @@ func TestResolveGenerationConfig(t *testing.T) {
 	if got.MaxOutputTokens != 1024 {
 		t.Errorf("max tokens = %d, want 1024", got.MaxOutputTokens)
 	}
-	provider := &GenerateContentConfig{
-		Temperature: ptr(0.8), TopK: ptr(int32(20)), TopP: ptr(0.9),
-		MaxOutputTokens: ptr(100), StopSequences: ptr([]string{"STOP"}),
-	}
 	model := &GenerateContentConfig{
-		Temperature: ptr(0.4), MaxOutputTokens: ptr(200), MinP: ptr(0.1),
+		Temperature: ptr(0.4), TopK: ptr(int32(20)), TopP: ptr(0.9), MinP: ptr(0.1),
+		MaxOutputTokens: ptr(200), StopSequences: ptr([]string{"STOP"}),
 		RepeatPenalty: ptr(1.2), PenaltyLastN: ptr(int32(32)),
 		FrequencyPenalty: ptr(-0.5), PresencePenalty: ptr(0.2),
 	}
@@ -171,7 +168,7 @@ func TestResolveGenerationConfig(t *testing.T) {
 		Temperature: ptr(0.0), Seed: ptr(uint32(0)), MinP: ptr(0.0),
 		StopSequences: ptr([]string{}),
 	}
-	got, err = resolveGenerationConfig(provider, model, request)
+	got, err = resolveGenerationConfig(model, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,14 +183,14 @@ func TestResolveGenerationConfig(t *testing.T) {
 	if got.MaxOutputTokens != 200 || len(got.StopSequences) != 0 {
 		t.Errorf("loop settings = %d, %v; want 200, empty", got.MaxOutputTokens, got.StopSequences)
 	}
-	// Resolving again must inherit the original model and provider values.
-	next, err := resolveGenerationConfig(provider, model, nil)
+	// Resolving again must inherit the original model values.
+	next, err := resolveGenerationConfig(model, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	next.StopSequences[0] = "changed"
 	next.Sampler.DrySequenceBreakers[0] = "changed"
-	again, err := resolveGenerationConfig(provider, model, nil)
+	again, err := resolveGenerationConfig(model, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,12 +215,12 @@ func TestResolveGenerationConfigValidation(t *testing.T) {
 		"empty stop":     {StopSequences: ptr([]string{""})},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := resolveGenerationConfig(nil, nil, &cfg); err == nil {
+			if _, err := resolveGenerationConfig(nil, &cfg); err == nil {
 				t.Fatal("expected validation error")
 			}
 		})
 	}
-	_, err := resolveGenerationConfig(nil, nil, &GenerateContentConfig{Temperature: ptr(math.NaN())})
+	_, err := resolveGenerationConfig(nil, &GenerateContentConfig{Temperature: ptr(math.NaN())})
 	if err == nil || !strings.Contains(err.Error(), "temperature") {
 		t.Errorf("error = %v, want temperature field name", err)
 	}
@@ -232,7 +229,7 @@ func TestResolveGenerationConfigValidation(t *testing.T) {
 func Example_resolveGenerationConfig() {
 	model := &GenerateContentConfig{Temperature: ptr(0.7), MaxOutputTokens: ptr(128)}
 	request := &GenerateContentConfig{Temperature: ptr(0.0)}
-	cfg, err := resolveGenerationConfig(nil, model, request)
+	cfg, err := resolveGenerationConfig(model, request)
 	if err != nil {
 		panic(err)
 	}

@@ -174,6 +174,17 @@ var emptyGemmaCall = regexp.MustCompile(`<\|tool_call>\s*call:([a-zA-Z_][\w./-]*
 var bareEmptyGemmaCall = regexp.MustCompile(`^\s*call:([a-zA-Z_][\w./-]*)\{\s*\}\s*$`)
 
 func parsedToolParts(result TextGenerationResult, definitions []*ai.ToolDefinition, choice ai.ToolChoice) ([]*ai.Part, error) {
+	wireCalls, text, err := parseJSONToolCalls(result.Text)
+	if err != nil {
+		return nil, err
+	}
+	if len(wireCalls) > 0 {
+		if result.Limited {
+			return nil, fmt.Errorf("yzma: incomplete tool call; increase the output/context limit")
+		}
+		return validatedToolParts(text, wireCalls, definitions, choice)
+	}
+
 	raw, sentinel := result.Text, ""
 	if emptyGemmaCall.MatchString(raw) || bareEmptyGemmaCall.MatchString(raw) {
 		sentinel = "__yzma_empty_" + strings.ReplaceAll(uuid.NewString(), "-", "")
@@ -183,7 +194,7 @@ func parsedToolParts(result TextGenerationResult, definitions []*ai.ToolDefiniti
 	calls := message.ParseToolCalls(raw)
 	if len(calls) == 0 {
 		if strings.Contains(raw, "<tool_call") || strings.Contains(raw, "<|tool_call") ||
-			strings.Contains(raw, "<function=") || strings.Contains(raw, "[TOOL_CALLS]") {
+			strings.Contains(raw, "<function=") || strings.Contains(raw, "<arg_key>") {
 			return nil, fmt.Errorf("yzma: malformed or incomplete tool call")
 		}
 		if choice == ai.ToolChoiceRequired {
@@ -191,28 +202,45 @@ func parsedToolParts(result TextGenerationResult, definitions []*ai.ToolDefiniti
 		}
 		return []*ai.Part{ai.NewTextPart(message.StripMarkup(result.Text))}, nil
 	}
+	if message.DetectFormat(raw) == message.FormatGPT {
+		return nil, fmt.Errorf("yzma: unrecognized GPT tool call syntax")
+	}
 	// Yzma repairs truncated JSON. Never execute a repaired, incomplete call.
 	if result.Limited || !completeToolOutput(raw) {
 		return nil, fmt.Errorf("yzma: incomplete tool call; increase the output/context limit")
-	}
-	allowed := make(map[string]*ai.ToolDefinition, len(definitions))
-	for _, tool := range definitions {
-		allowed[tool.Name] = tool
-	}
-	var parts []*ai.Part
-	if text := message.StripMarkup(raw); text != "" {
-		parts = append(parts, ai.NewTextPart(text))
 	}
 	for _, call := range calls {
 		if sentinel != "" {
 			delete(call.Function.Arguments, sentinel)
 		}
-		tool := allowed[call.Function.Name]
+		wireCalls = append(wireCalls, wireToolCall{name: call.Function.Name, untyped: call.Function.Arguments})
+	}
+	return validatedToolParts(message.StripMarkup(raw), wireCalls, definitions, choice)
+}
+
+func validatedToolParts(text string, calls []wireToolCall, definitions []*ai.ToolDefinition, choice ai.ToolChoice) ([]*ai.Part, error) {
+	allowed := make(map[string]*ai.ToolDefinition, len(definitions))
+	for _, tool := range definitions {
+		allowed[tool.Name] = tool
+	}
+	var parts []*ai.Part
+	if text != "" {
+		parts = append(parts, ai.NewTextPart(text))
+	}
+	for _, call := range calls {
+		tool := allowed[call.name]
 		if tool == nil || choice == ai.ToolChoiceNone {
-			return nil, fmt.Errorf("yzma: model requested unoffered tool %q", call.Function.Name)
+			return nil, fmt.Errorf("yzma: model requested unoffered tool %q", call.name)
 		}
-		args, err := typedToolArguments(call.Function.Arguments, tool.InputSchema)
-		if err != nil {
+		args := call.args
+		if args == nil {
+			var err error
+			args, err = untypedToolArguments(call.untyped, tool.InputSchema)
+			if err != nil {
+				return nil, fmt.Errorf("tool %q: %w", tool.Name, err)
+			}
+		}
+		if err := validateToolArguments(args, tool.InputSchema); err != nil {
 			return nil, fmt.Errorf("tool %q: %w", tool.Name, err)
 		}
 		parts = append(parts, ai.NewToolRequestPart(&ai.ToolRequest{
@@ -266,10 +294,9 @@ func completeToolOutput(raw string) bool {
 	return len(stack) == 0 && quote == ""
 }
 
-// typedToolArguments restores types lost by Yzma's map[string]string parser.
-// Types come from the offered schema, never from guessing whether a string
-// happens to look numeric. Schemas and tool inputs necessarily use dynamic JSON.
-func typedToolArguments(raw map[string]string, schema map[string]any) (map[string]any, error) {
+// untypedToolArguments interprets non-JSON family syntax using the offered
+// schema. JSON envelopes never take this path.
+func untypedToolArguments(raw map[string]string, schema map[string]any) (map[string]any, error) {
 	if schema == nil {
 		schema = map[string]any{"type": "object", "additionalProperties": false}
 	}
@@ -315,14 +342,21 @@ func typedToolArguments(raw map[string]string, schema map[string]any) (map[strin
 			return nil, fmt.Errorf("argument %q requires an unambiguous schema type; got %v", key, property["type"])
 		}
 	}
+	return args, nil
+}
+
+func validateToolArguments(args, schema map[string]any) error {
+	if schema == nil {
+		schema = map[string]any{"type": "object", "additionalProperties": false}
+	}
 	validation, err := gojsonschema.Validate(gojsonschema.NewGoLoader(schema), gojsonschema.NewGoLoader(args))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if !validation.Valid() {
-		return nil, fmt.Errorf("arguments do not match the tool schema: %v", validation.Errors())
+		return fmt.Errorf("arguments do not match the tool schema: %v", validation.Errors())
 	}
-	return args, nil
+	return nil
 }
 
 func dereferenceSchema(schema, root map[string]any) (map[string]any, error) {

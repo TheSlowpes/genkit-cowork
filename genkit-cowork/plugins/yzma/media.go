@@ -37,6 +37,8 @@ type ProjectorHandle uintptr
 // FreeProjector must leave the handle valid on error so Close can retry.
 // GenerateMedia owns its request resources and releases them before returning.
 // Its text callback and result follow the TextGenerationOperator contract.
+// For video, GenerateMedia receives bounded MP4 bytes after container validation.
+// The operator must validate the video track before decoding it.
 type MediaGenerationOperator interface {
 	LoadProjector(ctx context.Context, model llama.Model, definition ModelDefinition) (ProjectorHandle, error)
 	FreeProjector(ctx context.Context, projector ProjectorHandle) error
@@ -52,10 +54,11 @@ type ConstrainedMediaGenerationOperator interface {
 	GenerateConstrainedMedia(ctx context.Context, model llama.Model, projector ProjectorHandle, input MediaGenerationInput, grammar string) (TextGenerationResult, error)
 }
 
-// MediaGenerationInput contains generation settings and ordered chat messages.
-// TextGenerationInput.Messages is unused. Read the ordered Messages instead.
+// MediaGenerationInput contains generation settings and ordered media messages.
+// Media generation always uses a chat template and does not support tools.
 type MediaGenerationInput struct {
-	TextGenerationInput
+	GenerationSettings
+	Type     ModelType // Always ModelTypeChat.
 	Messages []MediaMessage
 }
 
@@ -70,7 +73,8 @@ type MediaInputPart struct {
 	Text     string
 	MIMEType string
 	Data     []byte
-	// VideoFrames holds the sampled frames of a validated video in display order.
+	// VideoFrames is populated for the built-in operator before model loading.
+	// Custom operators receive the MP4 in Data with VideoFrames unset.
 	VideoFrames []image.Image
 	image       image.Image
 	pcm16       []byte
@@ -145,20 +149,27 @@ func (g *generator) generateMedia(ctx context.Context, input *ai.ModelRequest, c
 		validated.Output = nil
 		messageInput = &validated
 	}
-	messages, err := mediaMessages(ctx, messageInput, *g.model.Projector, constraint != nil)
-	if err != nil {
-		return nil, err
-	}
 	requestConfig, err := decodeGenerationConfig(input.Config)
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := resolveGenerationConfig(nil, g.model.GenerationDefaults, requestConfig)
+	cfg, err := resolveGenerationConfig(g.model.GenerationDefaults, requestConfig)
 	if err != nil {
 		return nil, err
 	}
 	if constraint != nil && len(cfg.StopSequences) > 0 {
 		return nil, fmt.Errorf("yzma: constrained output does not support stop sequences")
+	}
+	messages, err := mediaMessages(ctx, messageInput, *g.model.Projector, constraint != nil)
+	if err != nil {
+		return nil, err
+	}
+	// Only the built-in operator prepares video here, before loading weights.
+	// Custom media operators receive the validated container without decoding it.
+	if native, ok := operator.(defaultModelOperator); ok {
+		if err := native.prepareVideo(ctx, messages); err != nil {
+			return nil, err
+		}
 	}
 	if err := g.acquire(ctx); err != nil {
 		return nil, err
@@ -170,12 +181,12 @@ func (g *generator) generateMedia(ctx context.Context, input *ai.ModelRequest, c
 			return cb(ctx, &ai.ModelResponseChunk{Content: []*ai.Part{ai.NewTextPart(text)}})
 		}
 	}
-	settings := TextGenerationInput{
-		Type: ModelTypeChat, ChatTemplate: g.model.ChatTemplate,
+	settings := GenerationSettings{
+		ChatTemplate:     g.model.ChatTemplate,
 		ChatTemplateName: g.model.ChatTemplateName, Context: g.model.Context,
 		Sampler: cfg.Sampler, MaxOutputTokens: cfg.MaxOutputTokens, StopSequences: cfg.StopSequences,
 	}
-	generation := MediaGenerationInput{TextGenerationInput: settings, Messages: messages}
+	generation := MediaGenerationInput{GenerationSettings: settings, Type: ModelTypeChat, Messages: messages}
 	var result TextGenerationResult
 	if constraint != nil {
 		result, err = constrainedOperator.GenerateConstrainedMedia(ctx, g.loaded, g.projector, generation, constraint.grammar)
@@ -239,7 +250,7 @@ func mediaMessages(ctx context.Context, input *ai.ModelRequest, projector Projec
 				if count > maxMediaParts {
 					return nil, fmt.Errorf("yzma: at most %d media parts per request are supported", maxMediaParts)
 				}
-				p, err := decodeMediaPart(ctx, part, projector, budget, imagesOnly)
+				p, err := decodeMediaPart(part, projector, budget, imagesOnly)
 				if err != nil {
 					return nil, fmt.Errorf("yzma: message %d part %d: %w", i, j, err)
 				}
@@ -257,7 +268,7 @@ func mediaMessages(ctx context.Context, input *ai.ModelRequest, projector Projec
 	return messages, nil
 }
 
-func decodeMediaPart(ctx context.Context, part *ai.Part, projector ProjectorOptions, budget int, imagesOnly bool) (MediaInputPart, error) {
+func decodeMediaPart(part *ai.Part, projector ProjectorOptions, budget int, imagesOnly bool) (MediaInputPart, error) {
 	header, payload, hasData := strings.Cut(part.Text, ",")
 	mime, mediaURL := strings.CutPrefix(header, "data:")
 	mime, isBase64 := strings.CutSuffix(mime, ";base64")
@@ -281,7 +292,7 @@ func decodeMediaPart(ctx context.Context, part *ai.Part, projector ProjectorOpti
 		}
 	case videoMIME:
 		if projector.Video {
-			return decodeVideoPart(ctx, payload, budget)
+			return decodeVideoPart(payload, budget)
 		}
 	}
 	return MediaInputPart{}, fmt.Errorf("unsupported media MIME type %q", mime)

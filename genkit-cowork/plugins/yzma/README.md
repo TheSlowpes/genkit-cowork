@@ -242,6 +242,8 @@ Yzma's native runtime while the plugin is in use.
 | --- | --- |
 | `Yzma.LibPath` | Native library directory; falls back to `YZMA_LIB` |
 | `Yzma.ModelsDir` | Catalog directory; falls back to Yzma's default |
+| `Yzma.CatalogOperator` | Replace directory, GGUF header, and sidecar I/O for discovery |
+| `Yzma.VideoDecoder` | Replace MP4 decoding for the built-in media operator |
 | `ModelDefinition.Type` | Required chat, completion, speech, or decision mode |
 | `ModelDefinition.Decision` | Decision readout and calibration sidecar path |
 | `ModelDefinition.ToolCalling` | Opt into tool calling for a capable chat model |
@@ -267,8 +269,8 @@ overlay llama.cpp's native defaults, which require an initialized native runtime
 callback and keeps their storage alive until it returns. Do not retain the
 callback's native pointers.
 
-Generation resolution applies provider defaults, model defaults, then request
-overrides to fresh Yzma sampler settings. Output defaults to 1024 tokens. See
+Generation starts with fresh Yzma sampler defaults, then applies model defaults
+and request overrides. Output defaults to 1024 tokens. See
 [`ExampleModelDefinition`](config_test.go) for configuration and
 [`Example_resolveGenerationConfig`](resolve_test.go) for a greedy request
 overriding the model's temperature without changing its output limit.
@@ -276,6 +278,9 @@ overriding the model's temperature without changing its output limit.
 Set `Yzma.Operator` to a custom `ModelOperator` to replace native initialization,
 loading, and cleanup for testing or alternate execution environments. To support
 chat, that operator must also implement `TextGenerationOperator`.
+`Yzma.CatalogOperator` is independent of model loading. It supplies directory
+entries and file readers. The plugin still parses and validates bounded GGUF
+headers and decision sidecars.
 
 In chat mode, formatting reads the model's embedded template through llama.cpp,
 with a GGUF metadata fallback. Full Jinja templates use the same Go Jinja engine
@@ -318,10 +323,10 @@ Pass registered Genkit tools through `ai.WithTools(...)`. Genkit performs the
 execution loop; the plugin never directly runs a model-requested function.
 `auto`, `required`, and `none` tool choices are supported.
 
-The adapter uses `message.ParseToolCalls` for Yzma's supported output grammars and
-`message.StripMarkup` to preserve accompanying text without tool syntax. Calls
-receive unique IDs, which are retained with typed arguments and tool results in
-subsequent template renders.
+The adapter reads JSON call envelopes directly so numbers, strings, nulls,
+objects, and arrays keep their original types during schema validation. It uses
+Yzma's family parser for non-JSON syntax such as Gemma's `call:` format. Calls get
+unique IDs, which stay with the arguments and tool results in subsequent turns.
 
 Tool-enabled turns are buffered until parsing completes. Streaming callbacks
 receive complete text/tool parts, not raw tool-call syntax. Ordinary chat without
@@ -333,6 +338,16 @@ Before returning executable calls, the adapter checks offered tool names,
 structural completeness, and input schemas. Truncated calls, unknown tools,
 invalid arguments, and ambiguous argument types return errors. It does not
 execute Yzma's repaired/truncated JSON calls.
+
+The opt-in native test runs a real Genkit tool with a local Gemma 4 model. It
+checks that Genkit executes it once, correlates the result with the call ID, and
+feeds a secret value back to the model.
+
+```sh
+YZMA_LIB="$HOME/.local/lib" \
+YZMA_TEST_TOOL_MODEL="$HOME/models/gemma-4-E4B-it-Q4_0.gguf" \
+  task test:yzma:tools:native
+```
 
 Yzma's parser exposes arguments as strings, so their types are restored from the
 offered schema rather than guessed. String values such as `"0123"` stay strings.
@@ -807,32 +822,33 @@ reorders coordinates. A valid box can still be wrong about what is in the
 image. The result is data only; this call supplies no tools or action
 execution.
 
-Use the same SmolVLM 256M Instruct pair and sample photo as the vision example.
-From the repository root:
+For a grounding check, use [Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B),
+whose model card reports RefCOCO grounding results. Use the public
+[Qwen3.5-0.8B-Q4_0.gguf and matching mmproj-F16.gguf](https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/tree/main).
+Together they take about 712 MB. The fixture and test do not download them.
+
+`-check-grounding` generates two images with the same red target in different
+positions, plus a blue distractor. It asks the same question for both images
+and requires at least 0.5 intersection-over-union with each target. A whole-frame
+box scores 0.09 and fails. The quantized pair has not been verified on this
+fixture.
 
 ```sh
-export YZMA_LIB="$HOME/.local/lib/yzma"
-task setup
-VLA_IMAGE="$(go env GOMODCACHE)/github.com/hybridgroup/yzma@v1.33.0/images/domestic_llama.jpg"
-task dev:yzma:vision -- -box \
-  -model "$HOME/models/SmolVLM-256M-Instruct-Q8_0.gguf" \
-  -projector "$HOME/models/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf" \
-  -image "$VLA_IMAGE" -question "Locate the llama in the image."
+export YZMA_LIB="$HOME/.local/lib"
+export YZMA_TEST_VLA_MODEL="$HOME/models/Qwen3.5-0.8B-Q4_0.gguf"
+export YZMA_TEST_VLA_PROJECTOR="$HOME/models/mmproj-F16.gguf"
+task dev:yzma:vision -- -check-grounding \
+  -model "$YZMA_TEST_VLA_MODEL" -projector "$YZMA_TEST_VLA_PROJECTOR"
 ```
 
-The tested CPU run prints `{"left":0,"top":0,"right":1000,"bottom":1000}`.
-The small model guessed the whole frame. This pair verifies the data path,
-not precise object localization.
-
-The opt-in native test uses the same pair and image. It checks the typed
-result and verifies that asking for an empty box returns a geometry error:
+The opt-in native test uses the same fixtures and acceptance check:
 
 ```sh
-YZMA_TEST_MODEL="$HOME/models/SmolVLM-256M-Instruct-Q8_0.gguf" \
-YZMA_TEST_PROJECTOR="$HOME/models/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf" \
-YZMA_TEST_VLA_IMAGE="$VLA_IMAGE" \
-  task test:yzma:native -- -run '^TestNativeBoundingBox$' -count=1
+task test:yzma:grounding:native
 ```
+
+Use `-box -image path.png -question '…'` for your own image. That mode checks
+geometry only because there is no known answer to compare with.
 
 ## Ask a vision model about a video
 
@@ -865,6 +881,15 @@ the clip's position in the prompt. No audio track is decoded or passed to the mo
 Other audio, subtitle, and data tracks do not contribute to the prompt.
 All text and sampled frames must fit the model's context window.
 Video requests can stream text but cannot use tools or constrained output.
+
+The Genkit adapter validates the MP4 container and request budgets before
+passing `MediaGenerationInput` to the operator. The built-in operator probes
+and samples the clip before loading model weights. A custom
+`MediaGenerationOperator` gets the encoded clip bytes and no decoded frames.
+It owns track validation and decoding. To keep native inference and replace
+only decoding, set `Yzma.VideoDecoder`. It must enforce the same track limits
+before decoding. The built-in operator checks its returned frame count and
+dimensions before passing samples to llama.cpp.
 
 Run the [video example](../../../examples/yzma-video/main.go) from the
 repository root. This creates a two-second clip with red then blue and an

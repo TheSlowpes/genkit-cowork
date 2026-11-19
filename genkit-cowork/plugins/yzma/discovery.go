@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"maps"
@@ -105,7 +106,36 @@ type ggufCandidate struct {
 	header ggufHeader
 }
 
-func discoverModels(ctx context.Context, dir string) map[string]ModelDefinition {
+// CatalogOperator supplies directory entries, GGUF headers, and decision
+// calibration sidecars for discovery. OpenRegular reports the full size and
+// never opens a non-regular file. The plugin bounds reads and closes the
+// reader. This does not override model loading.
+type CatalogOperator interface {
+	ReadDir(ctx context.Context, dir string) ([]fs.DirEntry, error)
+	Lstat(ctx context.Context, path string) (fs.FileInfo, error)
+	OpenRegular(ctx context.Context, path string) (io.ReadCloser, int64, error)
+}
+
+type diskCatalog struct{}
+
+func (diskCatalog) ReadDir(ctx context.Context, dir string) ([]fs.DirEntry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return os.ReadDir(dir)
+}
+
+func (diskCatalog) Lstat(ctx context.Context, path string) (fs.FileInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return os.Lstat(path)
+}
+
+func discoverModels(ctx context.Context, dir string, catalogIO CatalogOperator) map[string]ModelDefinition {
+	if catalogIO == nil {
+		catalogIO = diskCatalog{}
+	}
 	useDefault := dir == ""
 	if useDefault {
 		dir = download.DefaultModelsDir()
@@ -115,10 +145,15 @@ func discoverModels(ctx context.Context, dir string) map[string]ModelDefinition 
 		slog.WarnContext(ctx, "yzma: cannot resolve models directory", "path", dir, "error", err)
 		return nil
 	}
-	entries, err := os.ReadDir(abs)
+	entries, err := catalogIO.ReadDir(ctx, abs)
 	if err != nil {
 		// Only silence a genuinely absent default, not a dangling symlink.
-		if _, statErr := os.Lstat(abs); !useDefault || !errors.Is(statErr, fs.ErrNotExist) || !errors.Is(err, fs.ErrNotExist) {
+		if useDefault && errors.Is(err, fs.ErrNotExist) {
+			if _, statErr := catalogIO.Lstat(ctx, abs); errors.Is(statErr, fs.ErrNotExist) {
+				return nil
+			}
+		}
+		if ctx.Err() == nil {
 			slog.WarnContext(ctx, "yzma: cannot read models directory", "path", abs, "error", err)
 		}
 		return nil
@@ -156,7 +191,7 @@ func discoverModels(ctx context.Context, dir string) map[string]ModelDefinition 
 		}
 		filename := names[0]
 		path := filepath.Join(abs, filename)
-		h, err := readGGUFHeader(ctx, path)
+		h, err := readCatalogGGUF(ctx, catalogIO, path)
 		if err != nil {
 			skip(path, err)
 			continue
@@ -173,7 +208,7 @@ func discoverModels(ctx context.Context, dir string) map[string]ModelDefinition 
 		}
 		id := strings.TrimSuffix(strings.ToLower(filename), ".gguf")
 		model := ModelDefinition{Name: id, Loading: ModelOptions{GGUFPath: file.path}}
-		decision, identified, err := discoverDecision(file)
+		decision, identified, err := discoverDecision(ctx, catalogIO, file)
 		if identified {
 			if err != nil {
 				skip(file.path, err)

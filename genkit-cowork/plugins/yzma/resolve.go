@@ -164,15 +164,15 @@ type resolvedGenerationConfig struct {
 	StopSequences   []string
 }
 
-// resolveGenerationConfig applies provider, model, then request settings to fresh
+// resolveGenerationConfig applies model, then request settings to fresh
 // Yzma sampler defaults. Output defaults to 1024 tokens until overridden.
 // This does not construct a sampler chain or invoke inference.
-func resolveGenerationConfig(provider, model, request *GenerateContentConfig) (resolvedGenerationConfig, error) {
+func resolveGenerationConfig(model, request *GenerateContentConfig) (resolvedGenerationConfig, error) {
 	result := resolvedGenerationConfig{
 		Sampler:         *llama.DefaultSamplerParams(),
 		MaxOutputTokens: 1024,
 	}
-	for _, cfg := range []*GenerateContentConfig{provider, model, request} {
+	for _, cfg := range []*GenerateContentConfig{model, request} {
 		if cfg == nil {
 			continue
 		}

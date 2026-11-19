@@ -19,9 +19,7 @@ package yzma
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"image/color"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,6 +28,8 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/hybridgroup/yzma/pkg/llama"
+
+	"github.com/TheSlowpes/genkit-cowork/internal/groundingfixture"
 )
 
 type testConstrainedMediaOperator struct {
@@ -75,7 +75,7 @@ func TestGenerateBoundingBox(t *testing.T) {
 					}
 					parts := input.Messages[0].Parts
 					if len(parts) != 2 || parts[0].MIMEType != "image/png" || !bytes.Equal(parts[0].Data, data) ||
-						!strings.Contains(parts[1].Text, instruction) || len(input.Tools) != 0 || input.ToolCalling {
+						!strings.Contains(parts[1].Text, instruction) {
 						t.Fatalf("expected image then instruction, without tools; got %+v", input)
 					}
 					return tc.result
@@ -138,22 +138,39 @@ func TestConstrainedMediaIncompatibleOptions(t *testing.T) {
 	}
 }
 
-func TestNativeBoundingBox(t *testing.T) {
-	modelPath, projectorPath, imagePath := os.Getenv("YZMA_TEST_MODEL"), os.Getenv("YZMA_TEST_PROJECTOR"), os.Getenv("YZMA_TEST_VLA_IMAGE")
-	if modelPath == "" || projectorPath == "" || imagePath == "" {
-		t.Skip("set YZMA_TEST_MODEL and YZMA_TEST_PROJECTOR to the SmolVLM 256M pair and YZMA_TEST_VLA_IMAGE to domestic_llama.jpg")
-	}
-	f, err := os.Open(imagePath)
-	if err != nil {
+func TestGroundingFixtureRejectsWholeFrameAndWrongObject(t *testing.T) {
+	targets := groundingfixture.Targets()
+	if err := targets[0].Check(100, 200, 400, 500); err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, maxImageBytes+1))
-	if err != nil || len(data) > maxImageBytes {
-		t.Fatalf("read JPEG fixture: %d bytes, error %v", len(data), err)
+	for _, target := range targets {
+		if err := target.Check(0, 0, 1000, 1000); err == nil {
+			t.Errorf("%s target accepted the whole frame", target.Name)
+		}
 	}
-	part := ai.NewMediaPart("image/jpeg", "data:image/jpeg;base64,"+base64.StdEncoding.EncodeToString(data))
-	local := &Yzma{ModelsDir: filepath.Dir(modelPath)}
+	if err := targets[1].Check(100, 200, 400, 500); err == nil {
+		t.Error("right target accepted the left target's coordinates")
+	}
+	if err := targets[0].Check(600, 600, 900, 900); err == nil {
+		t.Error("left target accepted the blue distractor's coordinates")
+	}
+}
+
+func TestNativeBoundingBox(t *testing.T) {
+	modelPath, projectorPath, lib := os.Getenv("YZMA_TEST_VLA_MODEL"), os.Getenv("YZMA_TEST_VLA_PROJECTOR"), os.Getenv("YZMA_LIB")
+	if modelPath == "" || projectorPath == "" || lib == "" {
+		t.Skip("set YZMA_TEST_VLA_MODEL and YZMA_TEST_VLA_PROJECTOR to the Qwen3.5-0.8B pair and set YZMA_LIB")
+	}
+	for _, path := range []string{modelPath, projectorPath} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("grounding model assets unavailable: %v", err)
+		}
+		if !info.Mode().IsRegular() {
+			t.Fatalf("grounding model asset %q is not a regular file", path)
+		}
+	}
+	local := &Yzma{LibPath: lib, ModelsDir: filepath.Dir(modelPath)}
 	g := genkit.Init(t.Context(), genkit.WithPlugins(local))
 	t.Cleanup(func() {
 		if err := local.Close(context.WithoutCancel(t.Context())); err != nil {
@@ -164,20 +181,26 @@ func TestNativeBoundingBox(t *testing.T) {
 		Name: "local-box", Type: ModelTypeChat,
 		Loading:   ModelOptions{GGUFPath: modelPath, NGPULayers: ptr(int32(0))},
 		Projector: &ProjectorOptions{GGUFPath: projectorPath, Images: true},
-		Context:   ContextOptions{ContextSize: ptr(uint32(4096)), Threads: ptr(int32(4)), BatchThreads: ptr(int32(4))},
+		Context:   ContextOptions{ContextSize: ptr(uint32(4096)), Threads: ptr(int32(2)), BatchThreads: ptr(int32(2))},
 		GenerationDefaults: &GenerateContentConfig{
 			MaxOutputTokens: ptr(128), Temperature: ptr(0.0),
 		},
 	}, nil)
-	box, err := GenerateBoundingBox(t.Context(), g, model, part, "Locate the llama in the image.")
-	if err != nil || box == nil {
-		t.Fatalf("GenerateBoundingBox = (%+v, %v), want a valid typed box", box, err)
+	for _, target := range groundingfixture.Targets() {
+		t.Run(target.Name, func(t *testing.T) {
+			dataURL, err := target.PNG()
+			if err != nil {
+				t.Fatal(err)
+			}
+			part := ai.NewMediaPart("image/png", dataURL)
+			box, err := GenerateBoundingBox(t.Context(), g, model, part, groundingfixture.Instruction)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := target.Check(box.Left, box.Top, box.Right, box.Bottom); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("localized %s red square: %+v", target.Name, *box)
+		})
 	}
-	t.Logf("Predicted box: %+v", *box)
-
-	box, err = GenerateBoundingBox(t.Context(), g, model, part, "Return an empty box: left=0, top=0, right=0, bottom=0.")
-	if box != nil || err == nil || !strings.Contains(err.Error(), "invalid bounding box") {
-		t.Fatalf("empty prediction = (%+v, %v), want no box and a geometry error", box, err)
-	}
-	t.Logf("Rejected prediction: %v", err)
 }

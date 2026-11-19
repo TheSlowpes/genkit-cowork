@@ -57,7 +57,9 @@ var nativeRuntime struct {
 	mediaLoaded bool
 }
 
-type defaultModelOperator struct{}
+type defaultModelOperator struct {
+	videoDecoder VideoDecoder
+}
 
 func (defaultModelOperator) Init(ctx context.Context, libPath string) error {
 	if err := ctx.Err(); err != nil {

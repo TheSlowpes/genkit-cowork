@@ -21,12 +21,15 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
@@ -35,6 +38,71 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/hybridgroup/yzma/pkg/llama"
 )
+
+type memoryCatalog struct{ files fstest.MapFS }
+
+func (c memoryCatalog) ReadDir(ctx context.Context, _ string) ([]fs.DirEntry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return fs.ReadDir(c.files, ".")
+}
+
+func (c memoryCatalog) Lstat(ctx context.Context, path string) (fs.FileInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return fs.Stat(c.files, filepath.Base(path))
+}
+
+func (c memoryCatalog) OpenRegular(ctx context.Context, path string) (io.ReadCloser, int64, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
+	file, err := c.files.Open(filepath.Base(path))
+	if err != nil {
+		return nil, 0, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, 0, err
+	}
+	return file, info.Size(), nil
+}
+
+func TestCatalogOperatorCanSupplyVirtualGGUFs(t *testing.T) {
+	path := writeGGUFFixture(t, t.TempDir(), "virtual.gguf", nil)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := &Yzma{
+		LibPath: t.TempDir(), ModelsDir: filepath.Join(t.TempDir(), "absent"),
+		CatalogOperator: memoryCatalog{fstest.MapFS{
+			"virtual.gguf":       &fstest.MapFile{Data: data},
+			"broken.gguf":        &fstest.MapFile{Data: data[:8]},
+			"judge.gguf":         &fstest.MapFile{Data: data},
+			"judge.decider.json": &fstest.MapFile{Data: []byte(`{"temperature":1.03}`)},
+		}},
+		Operator: &testModelOperator{load: func(context.Context, ModelOptions) (llama.Model, error) {
+			t.Fatal("catalog access must not load model weights")
+			return 0, nil
+		}},
+	}
+	g := genkit.Init(t.Context(), genkit.WithPlugins(local))
+	t.Cleanup(func() {
+		if err := local.Close(context.WithoutCancel(t.Context())); err != nil {
+			t.Error(err)
+		}
+	})
+	if Model(g, "virtual") == nil || Model(g, "broken") != nil {
+		t.Fatal("discovery should expose only the valid virtual GGUF")
+	}
+	if got := local.catalog["judge"]; got.Type != ModelTypeDecision || got.Decision.Readout != DecisionReadoutDecider {
+		t.Fatalf("virtual decision discovery = %+v, want a decider", got)
+	}
+}
 
 func writeGGUFFixture(t *testing.T, dir, filename string, metadata map[string]ggufValue) string {
 	t.Helper()

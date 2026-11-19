@@ -135,21 +135,39 @@ func (r ggufReader) skipArray() (uint32, uint64, error) {
 	return uint32(kind), count, nil
 }
 
-func readGGUFHeader(ctx context.Context, path string) (ggufHeader, error) {
-	var h ggufHeader
+func (diskCatalog) OpenRegular(ctx context.Context, path string) (io.ReadCloser, int64, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
 	// Stat first so a symlink to a FIFO cannot block the catalog scan.
 	info, err := os.Stat(path)
 	if err != nil {
-		return h, err
+		return nil, 0, err
 	}
 	if !info.Mode().IsRegular() {
-		return h, fmt.Errorf("not a regular file")
+		return nil, 0, fmt.Errorf("not a regular file")
 	}
 	f, err := os.Open(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	return f, info.Size(), nil
+}
+
+func readGGUFHeader(ctx context.Context, path string) (ggufHeader, error) {
+	return readCatalogGGUF(ctx, diskCatalog{}, path)
+}
+
+func readCatalogGGUF(ctx context.Context, catalogIO CatalogOperator, path string) (ggufHeader, error) {
+	var h ggufHeader
+	f, fileSize, err := catalogIO.OpenRegular(ctx, path)
 	if err != nil {
 		return h, err
 	}
 	defer f.Close()
+	if fileSize < 0 {
+		return h, fmt.Errorf("negative GGUF size")
+	}
 	limit := &io.LimitedReader{R: f, N: ggufHeaderLimit}
 	r := ggufReader{Reader: bufio.NewReaderSize(limit, 32<<10), order: binary.LittleEndian}
 	var magic [4]byte
@@ -205,6 +223,9 @@ func readGGUFHeader(ctx context.Context, path string) (ggufHeader, error) {
 	h.tensors = make(map[string]bool)
 	var maxOffset uint64
 	for range tensors {
+		if err := ctx.Err(); err != nil {
+			return h, err
+		}
 		name, err := r.text(1024, true)
 		if err != nil {
 			return h, fmt.Errorf("read GGUF tensor name: %w", err)
@@ -228,7 +249,7 @@ func readGGUFHeader(ctx context.Context, path string) (ggufHeader, error) {
 	}
 	headerSize := uint64(ggufHeaderLimit - limit.N - int64(r.Buffered()))
 	dataStart := (headerSize + alignment - 1) &^ (alignment - 1)
-	size := uint64(info.Size())
+	size := uint64(fileSize)
 	if size < dataStart || (tensors > 0 && size-dataStart <= maxOffset) {
 		return h, fmt.Errorf("GGUF tensor data is missing or truncated")
 	}

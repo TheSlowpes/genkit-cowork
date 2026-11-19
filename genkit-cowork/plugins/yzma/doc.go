@@ -19,8 +19,9 @@
 // explicit preloading, streaming text generation, and cleanup. Generation supports
 // decoder-only models, chat or raw completion, sampling settings, and stop sequences.
 // Chat models can opt into tool calling through ModelDefinition.ToolCalling.
-// Genkit executes the tools; the plugin renders schemas and history and parses
-// calls using Yzma's family parsers. Chat and completion can generate constrained
+// Genkit executes the tools. The plugin preserves JSON wire types when it
+// validates arguments and uses Yzma's family parser for non-JSON syntax.
+// Chat and completion can generate constrained
 // JSON objects through genkit.GenerateData, without tools or streaming. See the
 // package README for the supported schema subset. Vision chat accepts ordered
 // inline JPEG and PNG parts through a compatible projector. It supports
@@ -29,14 +30,17 @@
 // Qwen3-ASR chat accepts ordered inline PCM WAV parts through a compatible
 // projector, without tools or structured output.
 // SmolVLM 256M Instruct can opt into sampled inline MP4 independently of audio.
+// Custom media operators receive validated MP4 containers without running FFmpeg.
+// Set VideoDecoder to replace decoding for the built-in operator.
 // ModelTypeSpeech turns one text prompt into a WAV clip
 // using a Soprano backbone and matching decoder. It does not accept media input.
 // ModelTypeDecision uses Yzma's local System One readouts with typed Choice,
 // Score, and Noul fields.
 //
 // Pass a Yzma instance to genkit.WithPlugins to discover models in ModelsDir
-// or Yzma's default directory. The catalog is fixed at initialization. Restart
-// to pick up file changes. Use DefineModel for overrides or unclassified files.
+// or Yzma's default directory. Set CatalogOperator to replace discovery I/O
+// independently of model loading. The catalog is fixed at initialization.
+// Restart to pick up file changes. Use DefineModel for overrides or unclassified files.
 // Preload checks loading before the application starts serving requests.
 // Manual definitions require ModelDefinition.Type. ModelTypeChat uses a chat
 // template, while ModelTypeCompletion accepts one user prompt without formatting.

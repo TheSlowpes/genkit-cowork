@@ -108,9 +108,9 @@ func generateNativeMedia(ctx context.Context, model llama.Model, projector Proje
 	}
 	mctx := mtmd.Context(projector)
 	vocab := llama.ModelGetVocab(model)
-	input.bosToken = tokenSpelling(vocab, llama.VocabBOS(vocab))
-	input.eosToken = tokenSpelling(vocab, llama.VocabEOS(vocab))
-	prompt, payloads, err := renderMediaPrompt(input, func() string {
+	bosToken := tokenSpelling(vocab, llama.VocabBOS(vocab))
+	eosToken := tokenSpelling(vocab, llama.VocabEOS(vocab))
+	prompt, payloads, err := renderMediaPrompt(input, bosToken, eosToken, func() string {
 		if input.ChatTemplateName == "" {
 			if name, _ := llama.ModelMetaValStr(model, "general.basename"); name == "SmolVLM" {
 				return smolVLMTemplate
@@ -121,28 +121,17 @@ func generateNativeMedia(ctx context.Context, model llama.Model, projector Proje
 	if err != nil {
 		return result, err
 	}
-	if err := ctx.Err(); err != nil {
-		return result, err
-	}
-	params, err := resolveContextParams(input.Context)
+	lctx, err := openInferenceContext(ctx, model, input.Context)
 	if err != nil {
 		return result, err
 	}
-	lctx, err := llama.InitFromModel(model, params)
-	if err != nil {
-		return result, fmt.Errorf("allocate inference context: %w", err)
-	}
-	llama.SetAbortCallback(lctx, func() bool { return ctx.Err() != nil })
-	defer func() {
-		llama.SetAbortCallback(lctx, nil)
-		err = errors.Join(err, llama.Free(lctx))
-	}()
+	defer closeInferenceContext(lctx, &err)
 	sampler := textSampler(model, input.Sampler)
 	if sampler == 0 {
 		return result, fmt.Errorf("allocate sampler")
 	}
 	defer llama.SamplerFree(sampler)
-	addSpecial := input.bosToken == "" || !strings.HasPrefix(prompt[0], input.bosToken)
+	addSpecial := bosToken == "" || !strings.HasPrefix(prompt[0], bosToken)
 	var position llama.Pos
 	inputTokens, remaining, err := prefillMedia(ctx, lctx, mctx, sampler, prompt, payloads, addSpecial, &position)
 	if err != nil {
@@ -154,14 +143,17 @@ func generateNativeMedia(ctx context.Context, model llama.Model, projector Proje
 		}
 	}
 	session := nativeTokenSession{ctx: lctx, vocab: vocab, sampler: sampler, position: &position}
-	return sampleTokens(ctx, session, inputTokens, remaining, input.TextGenerationInput, onText)
+	return sampleTokens(ctx, session, inputTokens, remaining, input.GenerationSettings, onText)
 }
 
 // renderMediaPrompt lets the chat template place turns and special tokens but
 // rejects templates that drop, duplicate, or reorder media slots.
-func renderMediaPrompt(input MediaGenerationInput, template func() string) ([]string, []MediaInputPart, error) {
+func renderMediaPrompt(input MediaGenerationInput, bosToken, eosToken string, template func() string) ([]string, []MediaInputPart, error) {
 	var payloads []MediaInputPart
-	input.TextGenerationInput.Messages = make([]message.Message, 0, len(input.Messages))
+	chat := TextGenerationInput{
+		Type: ModelTypeChat, ChatTemplate: input.ChatTemplate, ChatTemplateName: input.ChatTemplateName,
+		bosToken: bosToken, eosToken: eosToken, Messages: make([]message.Message, 0, len(input.Messages)),
+	}
 	for _, msg := range input.Messages {
 		var text strings.Builder
 		for _, part := range msg.Parts {
@@ -172,9 +164,9 @@ func renderMediaPrompt(input MediaGenerationInput, template func() string) ([]st
 				text.WriteString(part.Text)
 			}
 		}
-		input.TextGenerationInput.Messages = append(input.TextGenerationInput.Messages, message.Chat{Role: msg.Role, Content: text.String()})
+		chat.Messages = append(chat.Messages, message.Chat{Role: msg.Role, Content: text.String()})
 	}
-	rendered, _, err := prepareTextPrompt(input.TextGenerationInput, template, llama.ChatApplyTemplate)
+	rendered, _, err := prepareTextPrompt(chat, template, llama.ChatApplyTemplate)
 	if err != nil {
 		return nil, nil, err
 	}
