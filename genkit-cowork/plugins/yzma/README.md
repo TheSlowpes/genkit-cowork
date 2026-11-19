@@ -768,6 +768,7 @@ SmolVLM pair above is verified here.
 - Vision requests can stream text or use [constrained JSON](#constrained-structured-output)
   without streaming. Neither mode accepts tools. Constrained media requests
   accept only images.
+  Image support alone does not enable [video input](#ask-a-vision-model-about-a-video).
   After a successful load, the model and projector stay
   resident until `Close`, which frees the projector before its model. If
   loading a projector or speech decoder fails or is canceled, the plugin
@@ -831,6 +832,66 @@ YZMA_TEST_MODEL="$HOME/models/SmolVLM-256M-Instruct-Q8_0.gguf" \
 YZMA_TEST_PROJECTOR="$HOME/models/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf" \
 YZMA_TEST_VLA_IMAGE="$VLA_IMAGE" \
   task test:yzma:native -- -run '^TestNativeBoundingBox$' -count=1
+```
+
+## Ask a vision model about a video
+
+Register the [SmolVLM 256M Instruct GGUF pair](#ask-a-vision-model-about-an-image)
+with `Projector: &yzma.ProjectorOptions{GGUFPath: path, Video: true}`. Video
+requires explicit opt-in and a matching idefics3 projector. You can also
+set `Images: true` to accept standalone images in the same request.
+Install `ffmpeg` and `ffprobe` on `PATH` for video requests. The tested
+version is FFmpeg 6.1. Other model families and native video modes are not
+supported by this path.
+
+Pass `ai.NewMediaPart("video/mp4", "data:video/mp4;base64,...")` in a user
+message. The plugin accepts non-fragmented, fast-start MP4 with H.264 in
+the first video track and explicit 32-bit box sizes. It rejects local
+paths, remote URLs, malformed clips, and unknown duration or frame counts.
+Limits before base64
+encoding: 4 MiB per clip, four media parts and 8 MiB of media per request.
+Both container and video track must be at most 10 seconds, with 1–300 frames
+in the video track and declared dimensions of at most 1024 pixels per edge.
+
+The plugin checks the decoded frame count against the declared count and
+rejects video samples outside the allowed timeline. Probing and decoding
+share a 15-second timeout per clip. The plugin keeps up to four frames
+spaced by display-order **frame index**, including the first and last: for
+`n` frames and `k > 1` samples, keep index `floor(i*(n-1)/(k-1))` for
+`i` from `0` through `k-1`. Variable-rate clips are not sampled at equal
+time intervals. Frames are resized with aspect ratio preserved and padded
+to 256 × 256 pixels, then passed with `Frame 1:`, `Frame 2:`, and so on at
+the clip's position in the prompt. No audio track is decoded or passed to the model.
+Other audio, subtitle, and data tracks do not contribute to the prompt.
+All text and sampled frames must fit the model's context window.
+Video requests can stream text but cannot use tools or constrained output.
+
+Run the [video example](../../../examples/yzma-video/main.go) from the
+repository root. This creates a two-second clip with red then blue and an
+ignored AAC soundtrack. The sample command and native test use an FFmpeg
+build with the `libx264` encoder.
+
+```sh
+ffmpeg -v error \
+  -f lavfi -i 'color=red:s=256x256:r=1:d=1[a];color=blue:s=256x256:r=1:d=1[b];[a][b]concat=n=2:v=1:a=0' \
+  -f lavfi -i 'sine=frequency=440:duration=2' \
+  -map 0:v -map 1:a -c:v libx264 -threads 1 -c:a aac -movflags +faststart colors.mp4
+
+export YZMA_LIB="$HOME/.local/lib/yzma"
+task dev:yzma:video -- \
+  -model "$HOME/models/SmolVLM-256M-Instruct-Q8_0.gguf" \
+  -projector "$HOME/models/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf" \
+  -video colors.mp4 -question "What color is the first frame?"
+```
+
+The `Answer:` line should identify red as the first color. The CPU-only
+native test creates clips with both color orders and checks the answers
+through Genkit. It does not download models or other media.
+
+```sh
+YZMA_TEST_MODEL="$HOME/models/SmolVLM-256M-Instruct-Q8_0.gguf" \
+YZMA_TEST_PROJECTOR="$HOME/models/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf" \
+  task test:yzma:native -- -run '^TestNativeVideoGeneration$' -count=1
 ```
 
 ## Transcribe an inline WAV

@@ -50,6 +50,11 @@ func (defaultModelOperator) LoadProjector(ctx context.Context, model llama.Model
 			return 0, err
 		}
 	}
+	if def.Projector.Video {
+		if err := validateVideoPair(decoder.values, projector); err != nil {
+			return 0, err
+		}
+	}
 	if err := loadMediaLibrary(ctx); err != nil {
 		return 0, err
 	}
@@ -64,8 +69,8 @@ func (defaultModelOperator) LoadProjector(ctx context.Context, model llama.Model
 	defer params.SetProgressCallback(nil)
 	mctx, err := mtmd.InitFromFile(def.Projector.GGUFPath, model, params)
 	err = errors.Join(err, ctx.Err())
-	if err == nil && def.Projector.Images && !mtmd.SupportVision(mctx) {
-		err = fmt.Errorf("loaded projector does not support image input")
+	if err == nil && (def.Projector.Images || def.Projector.Video) && !mtmd.SupportVision(mctx) {
+		err = fmt.Errorf("loaded projector does not support vision input")
 	}
 	if err == nil && def.Projector.Audio {
 		err = validateNativeAudio(mctx)
@@ -214,7 +219,21 @@ func prefillMedia(ctx context.Context, lctx llama.Context, mctx mtmd.Context, sa
 			parts = append(parts, mtmd.NewInputTextPart(mtmd.NewInputText(span, false, true)))
 		}
 		if i < len(payloads) {
-			bitmap, err := mediaBitmap(ctx, payloads[i])
+			part := payloads[i]
+			if part.MIMEType == videoMIME {
+				for frameIndex, frame := range part.VideoFrames {
+					label := "\nFrame " + strconv.Itoa(frameIndex+1) + ": "
+					parts = append(parts, mtmd.NewInputTextPart(mtmd.NewInputText(label, false, false)))
+					bitmap, err := imageBitmap(ctx, frame)
+					if err != nil {
+						return 0, 0, err
+					}
+					bitmaps = append(bitmaps, bitmap)
+					parts = append(parts, mtmd.NewInputBitmapPart(bitmap))
+				}
+				continue
+			}
+			bitmap, err := mediaBitmap(ctx, part)
 			if err != nil {
 				return 0, 0, err
 			}

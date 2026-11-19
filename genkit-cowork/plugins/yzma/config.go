@@ -76,6 +76,9 @@ type ProjectorOptions struct {
 	Images   bool   `json:"images,omitempty"`
 	// Audio enables inline mono 16 kHz PCM WAV input.
 	Audio bool `json:"audio,omitempty"`
+	// Video enables sampled inline MP4 on a compatible vision pair. It does not
+	// enable standalone images or audio.
+	Video bool `json:"video,omitempty"`
 }
 
 // ModelOptions controls weight loading. Changing these options requires reloading

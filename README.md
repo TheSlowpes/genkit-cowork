@@ -433,6 +433,7 @@ It also includes examples for [local speech synthesis](genkit-cowork/plugins/yzm
 For speech recognition, see [transcribe an inline WAV](genkit-cowork/plugins/yzma/README.md#transcribe-an-inline-wav).
 
 The [Yzma embedding example](genkit-cowork/plugins/yzma/README.md#run-the-embedding-example) embeds text locally through Genkit.
+The [Yzma video example](genkit-cowork/plugins/yzma/README.md#ask-a-vision-model-about-a-video) sends an inline MP4 to a local vision model.
 
 ## Design Patterns
 

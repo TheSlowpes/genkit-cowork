@@ -28,6 +28,7 @@
 // typed box for an image and instruction and does not execute actions.
 // Qwen3-ASR chat accepts ordered inline PCM WAV parts through a compatible
 // projector, without tools or structured output.
+// SmolVLM 256M Instruct can opt into sampled inline MP4 independently of audio.
 // ModelTypeSpeech turns one text prompt into a WAV clip
 // using a Soprano backbone and matching decoder. It does not accept media input.
 // ModelTypeDecision uses Yzma's local System One readouts with typed Choice,
@@ -60,5 +61,6 @@
 // explicit registration, and cleanup. See examples/yzma-structured for
 // constrained generation, examples/yzma-vision for inline images and bounding boxes,
 // examples/yzma-speech for saving a WAV, examples/yzma-audio for transcription,
+// examples/yzma-video for inline MP4,
 // and examples/yzma-decision for local System One decisions.
 package yzma

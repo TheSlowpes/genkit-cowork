@@ -89,6 +89,11 @@ tasks:
     cmds:
       - go run ./examples/yzma-structured {{.CLI_ARGS}}
 
+  dev:yzma:video:
+    desc: Ask a local Yzma vision model about an inline MP4
+    cmds:
+      - go run ./examples/yzma-video {{.CLI_ARGS}}
+
   dev:yzma:speech:
     desc: Save speech from a local Soprano GGUF pair with YZMA_LIB and model flags after --
     cmds:

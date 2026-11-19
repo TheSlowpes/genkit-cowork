@@ -70,8 +70,10 @@ type MediaInputPart struct {
 	Text     string
 	MIMEType string
 	Data     []byte
-	image    image.Image
-	pcm16    []byte
+	// VideoFrames holds the sampled frames of a validated video in display order.
+	VideoFrames []image.Image
+	image       image.Image
+	pcm16       []byte
 }
 
 const (
@@ -88,7 +90,7 @@ func validateProjectorOptions(model ModelDefinition) error {
 	if model.Type != ModelTypeChat || model.ToolCalling {
 		return fmt.Errorf("a media projector requires a chat model without tool calling")
 	}
-	if !p.Images && !p.Audio {
+	if !p.Images && !p.Audio && !p.Video {
 		return fmt.Errorf("a media projector requires an enabled input capability")
 	}
 	return nil
@@ -143,18 +145,9 @@ func (g *generator) generateMedia(ctx context.Context, input *ai.ModelRequest, c
 		validated.Output = nil
 		messageInput = &validated
 	}
-	messages, err := mediaMessages(ctx, messageInput, *g.model.Projector)
+	messages, err := mediaMessages(ctx, messageInput, *g.model.Projector, constraint != nil)
 	if err != nil {
 		return nil, err
-	}
-	if constraint != nil {
-		for _, msg := range messages {
-			for _, part := range msg.Parts {
-				if part.MIMEType != "" && !strings.HasPrefix(part.MIMEType, "image/") {
-					return nil, fmt.Errorf("yzma: constrained media output supports only image input")
-				}
-			}
-		}
 	}
 	requestConfig, err := decodeGenerationConfig(input.Config)
 	if err != nil {
@@ -204,7 +197,7 @@ func (g *generator) generateMedia(ctx context.Context, input *ai.ModelRequest, c
 	return generationResponse(input, result, []*ai.Part{ai.NewTextPart(result.Text)}), nil
 }
 
-func mediaMessages(ctx context.Context, input *ai.ModelRequest, projector ProjectorOptions) ([]MediaMessage, error) {
+func mediaMessages(ctx context.Context, input *ai.ModelRequest, projector ProjectorOptions, imagesOnly bool) ([]MediaMessage, error) {
 	if input == nil || len(input.Messages) == 0 {
 		return nil, fmt.Errorf("yzma: at least one message is required")
 	}
@@ -246,7 +239,7 @@ func mediaMessages(ctx context.Context, input *ai.ModelRequest, projector Projec
 				if count > maxMediaParts {
 					return nil, fmt.Errorf("yzma: at most %d media parts per request are supported", maxMediaParts)
 				}
-				p, err := decodeMediaPart(part, projector, budget)
+				p, err := decodeMediaPart(ctx, part, projector, budget, imagesOnly)
 				if err != nil {
 					return nil, fmt.Errorf("yzma: message %d part %d: %w", i, j, err)
 				}
@@ -264,7 +257,7 @@ func mediaMessages(ctx context.Context, input *ai.ModelRequest, projector Projec
 	return messages, nil
 }
 
-func decodeMediaPart(part *ai.Part, projector ProjectorOptions, budget int) (MediaInputPart, error) {
+func decodeMediaPart(ctx context.Context, part *ai.Part, projector ProjectorOptions, budget int, imagesOnly bool) (MediaInputPart, error) {
 	header, payload, hasData := strings.Cut(part.Text, ",")
 	mime, mediaURL := strings.CutPrefix(header, "data:")
 	mime, isBase64 := strings.CutSuffix(mime, ";base64")
@@ -274,6 +267,9 @@ func decodeMediaPart(part *ai.Part, projector ProjectorOptions, budget int) (Med
 	if part.ContentType != "" && part.ContentType != mime {
 		return MediaInputPart{}, fmt.Errorf("media content type does not match the data URL")
 	}
+	if imagesOnly && !strings.HasPrefix(mime, "image/") {
+		return MediaInputPart{}, fmt.Errorf("constrained media output supports only image input")
+	}
 	switch mime {
 	case "image/jpeg", "image/png":
 		if projector.Images {
@@ -282,6 +278,10 @@ func decodeMediaPart(part *ai.Part, projector ProjectorOptions, budget int) (Med
 	case "audio/wav", "audio/x-wav":
 		if projector.Audio {
 			return decodeAudioPart(mime, payload, budget)
+		}
+	case videoMIME:
+		if projector.Video {
+			return decodeVideoPart(ctx, payload, budget)
 		}
 	}
 	return MediaInputPart{}, fmt.Errorf("unsupported media MIME type %q", mime)
