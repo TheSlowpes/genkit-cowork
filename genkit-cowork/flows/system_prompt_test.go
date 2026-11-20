@@ -91,8 +91,11 @@ func TestBuildSystemPrompt_SelectedToolsDriveGuidelines(t *testing.T) {
 		SelectedTools: []string{"bash", "read"},
 	})
 
-	if !strings.Contains(text, "Use bash for file operations like ls, find, grep") {
+	if !strings.Contains(text, "Use bash for command execution and shell pipelines") {
 		t.Error("expected bash guideline when bash is selected")
+	}
+	if strings.Contains(text, "Use find for file discovery by glob pattern") {
+		t.Error("did not expect find guideline when find is not selected")
 	}
 	if strings.Contains(text, "Use edit for surgical") {
 		t.Error("did not expect edit guideline when edit is not selected")
@@ -108,8 +111,17 @@ func TestBuildSystemPrompt_GuidelinesIncludeBashWhenBashSelected(t *testing.T) {
 	text := invokePromptFn(t, SystemPromptOptions{
 		SelectedTools: []string{"bash"},
 	})
-	if !strings.Contains(text, "Use bash for file operations like ls, find, grep") {
+	if !strings.Contains(text, "Use bash for command execution and shell pipelines") {
 		t.Error("expected bash guideline when bash tool is selected")
+	}
+}
+
+func TestBuildSystemPrompt_GuidelinesIncludeFindWhenFindSelected(t *testing.T) {
+	text := invokePromptFn(t, SystemPromptOptions{
+		SelectedTools: []string{"find"},
+	})
+	if !strings.Contains(text, "Use find for file discovery by glob pattern") {
+		t.Error("expected find guideline when find tool is selected")
 	}
 }
 
@@ -193,9 +205,9 @@ func TestBuildSystemPrompt_DuplicateGuidelinesDropped(t *testing.T) {
 	text := invokePromptFn(t, SystemPromptOptions{
 		SelectedTools: []string{"bash"},
 		// Duplicate the auto-generated bash guideline.
-		Guidelines: []string{"Use bash for file operations like ls, find, grep"},
+		Guidelines: []string{"Use bash for command execution and shell pipelines"},
 	})
-	count := strings.Count(text, "Use bash for file operations like ls, find, grep")
+	count := strings.Count(text, "Use bash for command execution and shell pipelines")
 	if count != 1 {
 		t.Errorf("expected duplicate guideline to appear exactly once, got %d occurrences", count)
 	}

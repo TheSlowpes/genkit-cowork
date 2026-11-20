@@ -332,8 +332,9 @@ func TestVectorOperator_LoadState_DelegatesToBase(t *testing.T) {
 		TenantID: "t1",
 		Messages: makeMessages(5),
 	}
-	if err := vop.SaveState(ctx, tenantID, "sess-ld", state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+	// Seed the base store without scheduling indexing in this load-only test.
+	if err := base.SaveState(ctx, tenantID, "sess-ld", state); err != nil {
+		t.Fatalf("seed session: %v", err)
 	}
 
 	loaded, err := vop.LoadState(ctx, tenantID, "sess-ld", SlidingWindow, 2)

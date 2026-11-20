@@ -15,5 +15,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package tools provides pluggable Genkit tool implementations for agent
-// capabilities, including bash, read, edit, and write operations.
+// capabilities, including bash, find, read, edit, and write operations.
 package tools

@@ -6,6 +6,12 @@ A coworking framework for [Firebase Genkit](https://github.com/firebase/genkit) 
 go get github.com/TheSlowpes/genkit-cowork
 ```
 
+## Development
+
+Install [Task](https://taskfile.dev/installation/) and the Go version in
+`go.mod`. Run `task --list` to see the available commands and `task ci` to
+run the same checks as GitHub Actions.
+
 ## Quick Start
 
 ### 1. Create a Genkit instance and session store
@@ -41,6 +47,7 @@ import "github.com/TheSlowpes/genkit-cowork/genkit-cowork/tools"
 bashTool := tools.NewBashTool(g, "/working/dir",
     tools.WithCommandPrefix("#!/bin/bash\nset -e\n"),
 )
+findTool  := tools.NewFindTool(g, "/working/dir")
 readTool  := tools.NewReadTool(g, "/working/dir")
 editTool  := tools.NewEditTool(g, "/working/dir")
 writeTool := tools.NewWriteTool(g, "/working/dir")
@@ -54,7 +61,7 @@ writeTool := tools.NewWriteTool(g, "/working/dir")
 messageFlow := flows.NewHandleMessageFlow(g, store,
     flows.WithCustomAgentConfig(flows.AgentLoopConfig{
         Model:    "googleai/gemini-2.0-flash",
-        Tools:    []string{"bash", "read", "edit", "write"},
+        Tools:    []string{"bash", "find", "read", "edit", "write"},
         MaxTurns: 25,
     }),
 )
@@ -226,10 +233,10 @@ The framework is built around four pillars:
 │   │   Flows   │  │   Tools   │                   │
 │   │           │  │           │                   │
 │   │  agent    │  │  bash     │                   │
-│   │  loop     │  │  read     │                   │
-│   │  message  │  │  edit     │                   │
-│   │  heartbeat│  │  write    │                   │
-│   │  reply    │  │           │                   │
+│   │  loop     │  │  find     │                   │
+│   │  message  │  │  read     │                   │
+│   │  heartbeat│  │  edit     │                   │
+│   │  reply    │  │  write    │                   │
 │   └───────────┘  └───────────┘                   │
 │                                                  │
 │   ┌───────────┐  ┌───────────┐                   │
@@ -248,7 +255,7 @@ The framework is built around four pillars:
 
 Each pillar can be adopted independently. Use the full framework or pick individual pieces:
 
-- **Tools only** — register `NewBashTool`, `NewReadTool`, `NewEditTool`, `NewWriteTool` with any Genkit instance.
+- **Tools only** — register `NewBashTool`, `NewFindTool`, `NewReadTool`, `NewEditTool`, `NewWriteTool` with any Genkit instance.
 - **Flows only** — use the agent loop, message handling, heartbeat, or reply flows.
 - **Memory only** — use `NewSession` with in-memory, file-backed, or vector-augmented operators.
 - **Skills only** — register the `Skills` plugin to discover and serve domain knowledge.
@@ -268,9 +275,13 @@ Each pillar can be adopted independently. Use the full framework or pick individ
 | Tool | Constructor | Description |
 |------|------------|-------------|
 | Bash | `NewBashTool(g, cwd, ...opts)` | Shell command execution with timeout, env, spawn hooks |
+| Find | `NewFindTool(g, cwd, ...opts)` | Glob-based file discovery with `**`, `.gitignore`, and truncation |
 | Read | `NewReadTool(g, cwd, ...opts)` | File/image reading with pagination, truncation, auto-resize |
 | Edit | `NewEditTool(g, cwd, ...opts)` | Find-and-replace with exact/fuzzy matching, unified diff |
 | Write | `NewWriteTool(g, cwd, ...opts)` | File creation with auto-mkdir, operator interface |
+
+Use `tools.DefaultMaxLines`, `tools.DefaultMaxBytes`, and `tools.ContextLines`
+for output and diff limits. The old uppercase names remain deprecated aliases.
 
 ## Memory
 
@@ -352,6 +363,7 @@ Each `SessionMessage` stores `MessageID`, `Origin`, `Kind`, `Content`, and `Time
 ### Examples
 
 - `examples/pgvector/main.go` shows pgvector wiring for session memory only by wrapping the Genkit PostgreSQL plugin as a `memory.VectorBackend` and plugging it into `memory.NewVectorOperator`.
+- `examples/tui-chat/main.go` wires tools, flows, memory, and reply delivery into a terminal chat. Set `READ_ONLY=1` to restrict the agent to only the `find` and `read` tools.
 
 ## Skills
 
@@ -410,6 +422,22 @@ On `Init`, the plugin resolves the skills directory (checking `defaultSkillsDirs
 
 When `AllowedSkills` is non-empty, only skills whose names appear in that list are exposed by `SkillTool` and `ListSkills`.
 
+## Plugins
+
+Plugins can be used independently of the rest of the framework.
+
+| Plugin | Purpose |
+| --- | --- |
+| [Skills](#skills) | Discover and load domain knowledge from `SKILL.md` files |
+| [Yzma](genkit-cowork/plugins/yzma/README.md) | Run local GGUFs in-process for chat, completion, tool calling, constrained JSON, image prompts, text embeddings, speech synthesis, and typed decisions |
+
+The Yzma guide covers Dev UI discovery, constrained JSON, [native Genkit tool calling and accepted call formats](genkit-cowork/plugins/yzma/README.md#tool-calling), and [bounding boxes with a grounding check](genkit-cowork/plugins/yzma/README.md#predict-a-bounding-box).
+It also includes examples for [local speech synthesis](genkit-cowork/plugins/yzma/README.md#speech-output) and [typed System One decisions](genkit-cowork/plugins/yzma/README.md#typed-system-one-decisions).
+For speech recognition, see [transcribe an inline WAV](genkit-cowork/plugins/yzma/README.md#transcribe-an-inline-wav).
+
+The [Yzma embedding example](genkit-cowork/plugins/yzma/README.md#run-the-embedding-example) embeds text locally through Genkit.
+The [Yzma video example](genkit-cowork/plugins/yzma/README.md#ask-a-vision-model-about-a-video) sends an inline MP4 to a local vision model.
+
 ## Design Patterns
 
 - **Functional options** — all constructors accept variadic option functions for clean, extensible configuration.
@@ -442,10 +470,11 @@ genkit-cowork/
 │   ├── constants.go          # Output limits
 │   └── memory_retrieval.go   # Tenant/session memory retrieval tools
 ├── plugins/            # Genkit plugins
-│   └── skills/               # Skill discovery and serving
-│       ├── skills.go          # Plugin struct, Init, tool registration
-│       ├── skill_parser.go    # SKILL.md frontmatter parsing
-│       └── skill_scanner.go   # Directory scanning, skill discovery
+│   ├── skills/               # Skill discovery and serving
+│   │   ├── skills.go          # Plugin struct, Init, tool registration
+│   │   ├── skill_parser.go    # SKILL.md frontmatter parsing
+│   │   └── skill_scanner.go   # Directory scanning, skill discovery
+│   └── yzma/                 # Local GGUF model loading and lifecycle management
 ├── media/              # MIME detection and processing
 │   ├── mime.go               # Image MIME detection, image resizing
 │   ├── registry.go           # MIME to DocumentProcessor registry

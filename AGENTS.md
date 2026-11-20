@@ -2,6 +2,24 @@
 
 A coworking framework for [Firebase Genkit](https://github.com/firebase/genkit) (Go) that gives AI agents pluggable capabilities for autonomous and interactive work. The framework is built around four pillars — **Flows**, **Tools**, **Memory**, and **Skills** — each of which can be registered with a Genkit application independently or as a complete suite.
 
+## Agent skills
+
+### Issue tracker
+
+Track work in GitHub Issues for `TheSlowpes/genkit-cowork`. Before reading or publishing issues, see `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Before triaging or labeling an issue, see `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This repo has one domain context. Before exploring domain terms or decisions, see `docs/agents/domain.md`.
+
+### Commands
+
+Run builds, tests, and checks through `task`. Use `task --list` to find commands. CI and `wt merge` both run `task ci`.
+
 ## Agent Instructions
 
 As an AI eveloper working on this codebase, you MUST adhere to the operational protocols:
@@ -235,9 +253,9 @@ genkit-cowork/
 
 ### Code Quality & Linting
 
-- **Run Linting**: Always run `go vet ./...` from the `go/` directory for all Go code changes.
-- **Format Code**: Run `bin/fmt` (which runs `go fmt`) to ensure code is formatted correctly.
-- **Pass All Tests**: Ensure all unit tests pass (`go test ./...`).
+- **Check Go code**: Run `task check` for formatting and vet.
+- **Format Code**: Run `task fmt` to fix Go formatting.
+- **Pass All Tests**: Run `task test` for all unit tests.
 - **Production Ready**: The objective is to produce production-grade code.
 - **Shift Left**: Employ a "shift left" strategy—catch errors early.
 - **Strict Typing**: Go is statically typed. Do not use `interface{}` (or `any`) unless absolutely necessary and documented.
@@ -262,7 +280,6 @@ genkit-cowork/
     - Use proper punctuation.
     - Start function comments with the function name
     - Use `// TODO (issue-id): fix this later.` format for stubs.
-- Ensure that `go vet` passes without errors.
 
 #### Documentation
 
@@ -295,7 +312,7 @@ genkit-cowork/
 
 #### Formatting
 
-- **Tool:** Format code using `go fmt`.
+- **Tool:** Format code using `task fmt`.
 - **Line Length:** Go doesn't have a strict line length limit, but keep it reasonable (e.g. 80-100 characters).
 - **Strings:** Wrap long lines and strings appropriately.
 
@@ -319,7 +336,7 @@ genkit-cowork/
 ```
 
 - **Scope**: Write comprehensive unit tests following the fail-fast approach.
-- **Execution**: Run via `go test ./...`.
+- **Execution**: Run `task test`.
 - **Porting**: Maintain 1:1 logic parity accurately if porting tests. Do not invent behavior.
 - **Fixes**: Fix underlying code issues rather than special-casing tests.
 - **Modernize**: Consider using `modernize` to update code to modern Go idioms (e.g., `slices`, `maps`) when fixing underlying issues.
