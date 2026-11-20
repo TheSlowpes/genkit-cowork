@@ -56,12 +56,15 @@ need registration.
 ### Discover local models in the Dev UI
 
 Install the [Genkit CLI](https://genkit.dev/docs/devtools/) and the compatible
-native libraries described above. Put a local `SmolLM2-135M.Q4_K_M.gguf` in
-`$HOME/models`. Use the base model, not the `Instruct` variant. The tested
-105 MB artifact is
-[`QuantFactory/SmolLM2-135M-GGUF`](https://huggingface.co/QuantFactory/SmolLM2-135M-GGUF/blob/main/SmolLM2-135M.Q4_K_M.gguf).
+native libraries described above. Download the base SmolLM2 model, not the
+`Instruct` variant. Gemma 4 is optional for text chat and tool calling.
 
-From the repository root:
+| Artifact | Download size |
+| --- | ---: |
+| [SmolLM2-135M.Q4_K_M.gguf](https://huggingface.co/QuantFactory/SmolLM2-135M-GGUF/resolve/main/SmolLM2-135M.Q4_K_M.gguf) | 105 MB |
+| [gemma-4-E4B-it-Q4_0.gguf](https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_0.gguf) | 4.59 GB |
+
+Save the files you want to use under `$HOME/models`. From the repository root:
 
 ```sh
 export YZMA_LIB="$HOME/.local/lib/yzma"
@@ -390,9 +393,10 @@ precision and explicit null object fields that Genkit would drop return errors.
 Omit optional object fields instead. Arrays may contain null if allowed by the
 schema. Call IDs stay with the arguments and tool results in later turns.
 
-The opt-in native test runs a real Genkit tool with a local Gemma 4 model. It
-checks that Genkit executes it once, correlates the result with the call ID, and
-feeds a secret value back to the model.
+The opt-in native test runs a real Genkit tool with the
+[Gemma 4 model listed above](#discover-local-models-in-the-dev-ui). It checks
+that Genkit executes it once, correlates the result with the call ID, and feeds
+a secret value back to the model.
 
 ```sh
 YZMA_LIB="$HOME/.local/lib" \
@@ -444,8 +448,9 @@ Custom `ModelOperator` implementations must also implement
 `ConstrainedTextGenerationOperator` to advertise and run this feature.
 
 To run the [structured output example](../../../examples/yzma-structured/main.go),
-install the native libraries described above and use the base
-`SmolLM2-135M.Q4_K_M.gguf` in completion mode. From the repository root:
+install the native libraries described above and use the
+[base SmolLM2 model](#discover-local-models-in-the-dev-ui) in completion mode.
+From the repository root:
 
 ```sh
 YZMA_LIB="$HOME/.local/lib/yzma" task dev:yzma:structured -- \
@@ -580,36 +585,40 @@ load or score already in progress. `Close` waits for active scoring.
 
 ### Run the decision example
 
-Use the public Decider 0.8B Q2_K GGUF (422 MB) and its 341-byte calibration file.
-With the compatible native libraries from [installation](#installation), run
-from the repository root:
+Run the [decision example](../../../examples/yzma-decision/main.go) with these
+two files:
+
+| Artifact | Download size |
+| --- | ---: |
+| [decider-0.8b.Q2_K.gguf](https://huggingface.co/mradermacher/decider-0.8b-GGUF/resolve/001df41ddc126176cab96c8aec9ada45008fbe62/decider-0.8b.Q2_K.gguf) | 422 MB |
+| [decider_config.json](https://huggingface.co/Mapika/decider-0.8b/resolve/a0a01d6f8135298f400a8c856b355793012ae971/decider_config.json?download=true) | 341 bytes |
+
+Save both files under `$HOME/models/decider`. Rename `decider_config.json` to
+`decider-0.8b.Q2_K.decider.json` so discovery can match it to the GGUF.
+From the repository root:
 
 ```sh
 export YZMA_LIB="$HOME/.local/lib/yzma"
-dir="${TMPDIR:-/tmp}/yzma-decision-models"
-mkdir -p "$dir"
-curl -fL -o "$dir/decider-0.8b.Q2_K.gguf" \
-  https://huggingface.co/mradermacher/decider-0.8b-GGUF/resolve/001df41ddc126176cab96c8aec9ada45008fbe62/decider-0.8b.Q2_K.gguf
-curl -fL -o "$dir/decider-0.8b.Q2_K.decider.json" \
-  https://huggingface.co/Mapika/decider-0.8b/resolve/a0a01d6f8135298f400a8c856b355793012ae971/decider_config.json
-task dev:yzma:decision -- -models-dir "$dir" -model decider-0.8b.q2_k
+DECISION_MODELS="$HOME/models/decider"
+task dev:yzma:decision -- -models-dir "$DECISION_MODELS" -model decider-0.8b.q2_k
 ```
 
-The [example](../../../examples/yzma-decision/main.go) prints the typed result
-as JSON. For the default ticket, expect `department.choice` to be `billing`,
-`department.probabilities` to include all three options, and `urgent.probability`
-to be above `0.5`.
+The example prints the typed result as JSON. For the default ticket, expect
+`department.choice` to be `billing`, `department.probabilities` to include all
+three options, and `urgent.probability` to be above `0.5`.
 
 Use the same files for the opt-in native test:
 
 ```sh
-YZMA_TEST_DECISION_MODEL="$dir/decider-0.8b.Q2_K.gguf" task test:yzma:decision:native
+YZMA_TEST_DECISION_MODEL="$DECISION_MODELS/decider-0.8b.Q2_K.gguf" \
+  task test:yzma:decision:native
 ```
 
 ## Run an explicit definition in the Genkit Dev UI
 
-Install the [Genkit CLI](https://genkit.dev/docs/devtools/) if needed, then run
-these commands from the repository root:
+Install the [Genkit CLI](https://genkit.dev/docs/devtools/) if needed. Use the
+[example models listed above](#discover-local-models-in-the-dev-ui) or substitute
+your own local GGUF. From the repository root:
 
 ```sh
 export YZMA_LIB=/path/to/libs
@@ -625,7 +634,7 @@ For a base model, use `-type completion` and select `yzma/local-completion` unde
 Models. Supply a single text prompt; this mode does not support a multi-turn chat:
 
 ```sh
-task dev:yzma:ui -- -model ~/models/SmolLM2-135M.Q4_K_M.gguf -type completion
+task dev:yzma:ui -- -model "$HOME/models/SmolLM2-135M.Q4_K_M.gguf" -type completion
 ```
 
 The example uses embedded Jinja templates automatically, including the template
@@ -636,7 +645,7 @@ format; the plugin does not guess a replacement.
 To test tools with your Gemma 4 model:
 
 ```sh
-task dev:yzma:ui -- -model ~/models/gemma-4-E4B-it-Q4_0.gguf -tools
+task dev:yzma:ui -- -model "$HOME/models/gemma-4-E4B-it-Q4_0.gguf" -tools
 ```
 
 Select **Flows → localChat**, and use `{"prompt":"Use add to calculate 2 + 3."}`.
@@ -663,11 +672,12 @@ YZMA_LIB=/path/to/libs task dev:yzma -- \
   -model /path/to/model.gguf -prompt "Say hello."
 ```
 
-To continue a raw prompt with a base model:
+To continue a raw prompt with the
+[base SmolLM2 model](#discover-local-models-in-the-dev-ui):
 
 ```sh
 YZMA_LIB=/path/to/libs task dev:yzma -- \
-  -model ~/models/SmolLM2-135M.Q4_K_M.gguf \
+  -model "$HOME/models/SmolLM2-135M.Q4_K_M.gguf" \
   -type completion -prompt "Once upon a time"
 ```
 
@@ -694,7 +704,7 @@ without an embedded chat template. The discovery test uses the file without
 overrides. To run that test on its own against the example's base model:
 
 ```sh
-YZMA_LIB=/path/to/libs YZMA_TEST_MODEL=~/models/SmolLM2-135M.Q4_K_M.gguf \
+YZMA_LIB=/path/to/libs YZMA_TEST_MODEL="$HOME/models/SmolLM2-135M.Q4_K_M.gguf" \
   task test:yzma:native -- -run '^TestNativeDiscoveredTextGeneration$'
 ```
 
@@ -708,7 +718,7 @@ YZMA_LIB="$HOME/.local/lib/yzma" YZMA_TEST_MODEL="$HOME/models/SmolLM2-135M.Q4_K
 To test the embedded template without allocating model weights:
 
 ```sh
-YZMA_LIB=/path/to/libs YZMA_TEST_MODEL=~/models/gemma-4-E4B-it-Q4_0.gguf \
+YZMA_LIB=/path/to/libs YZMA_TEST_MODEL="$HOME/models/gemma-4-E4B-it-Q4_0.gguf" \
   task test:yzma:native -- -run '^TestNativeEmbeddedTemplate$'
 ```
 
@@ -763,10 +773,15 @@ must also implement `TextEmbeddingOperator` to run embedding requests.
 
 ### Run the embedding example
 
-Install the native libraries described above. Use
-[`CompendiumLabs/bge-small-en-v1.5-gguf`'s `bge-small-en-v1.5-q4_k_m.gguf`](https://huggingface.co/CompendiumLabs/bge-small-en-v1.5-gguf/blob/main/bge-small-en-v1.5-q4_k_m.gguf)
-(24,808,576 bytes, SHA-256 `363a0a4855dff6c653e06efe3209157debcf7f74e52d0d7c71e2747cd523043e`).
-Place it in `$HOME/models` under that filename. From the repository root:
+Install the native libraries described above and download this file:
+
+| Artifact | Download size |
+| --- | ---: |
+| [bge-small-en-v1.5-q4_k_m.gguf](https://huggingface.co/CompendiumLabs/bge-small-en-v1.5-gguf/resolve/main/bge-small-en-v1.5-q4_k_m.gguf) | 24.8 MB |
+
+Save the file under `$HOME/models`. Its SHA-256 is
+`363a0a4855dff6c653e06efe3209157debcf7f74e52d0d7c71e2747cd523043e`.
+From the repository root:
 
 ```sh
 YZMA_LIB="$HOME/.local/lib/yzma" go run ./examples/yzma-embeddings \
@@ -794,11 +809,15 @@ YZMA_LIB="$HOME/.local/lib/yzma" YZMA_TEST_TYPE=embedding \
 
 ## Ask a vision model about an image
 
-Use the public [SmolVLM 256M Instruct GGUF pair](https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF):
-`SmolVLM-256M-Instruct-Q8_0.gguf` (175 MB) and
-`mmproj-SmolVLM-256M-Instruct-Q8_0.gguf` (104 MB). Put both files in
-`$HOME/models`. The library directory in `YZMA_LIB` must contain `mtmd`
-alongside the llama.cpp libraries. From the repository root:
+Download the SmolVLM 256M Instruct model and its matching projector:
+
+| Artifact | Download size |
+| --- | ---: |
+| [SmolVLM-256M-Instruct-Q8_0.gguf](https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/SmolVLM-256M-Instruct-Q8_0.gguf) | 175 MB |
+| [mmproj-SmolVLM-256M-Instruct-Q8_0.gguf](https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf) | 104 MB |
+
+Save both files under `$HOME/models`. The library directory in `YZMA_LIB` must
+contain `mtmd` alongside the llama.cpp libraries. From the repository root:
 
 ```sh
 export YZMA_LIB="$HOME/.local/lib/yzma"
@@ -873,15 +892,14 @@ execution.
 
 The [Yzma model guide](https://yzma.ai/docs/guides/models/#pelican10-vl-3b)
 lists Pelican1.0-VL-3B for grounding and shows its `bounding_box_2d` array
-output. To run the check, use this
-[pinned Pelican GGUF pair](https://huggingface.co/mradermacher/Pelican1.0-VL-3B-GGUF/tree/b08afd4ebda9573bc6b1f7242a52a3e30ff44b40):
+output. To run the check, download this pinned Pelican GGUF pair:
 
-| File | Bytes |
+| Artifact | Download size |
 | --- | ---: |
-| `Pelican1.0-VL-3B.Q4_K_M.gguf` | 1,929,901,568 |
-| `Pelican1.0-VL-3B.mmproj-Q8_0.gguf` | 847,768,384 |
+| [Pelican1.0-VL-3B.Q4_K_M.gguf](https://huggingface.co/mradermacher/Pelican1.0-VL-3B-GGUF/resolve/b08afd4ebda9573bc6b1f7242a52a3e30ff44b40/Pelican1.0-VL-3B.Q4_K_M.gguf) | 1.93 GB |
+| [Pelican1.0-VL-3B.mmproj-Q8_0.gguf](https://huggingface.co/mradermacher/Pelican1.0-VL-3B-GGUF/resolve/b08afd4ebda9573bc6b1f7242a52a3e30ff44b40/Pelican1.0-VL-3B.mmproj-Q8_0.gguf) | 848 MB |
 
-The fixture and test do not download the files. The example uses
+Save both files under `$HOME/models`. The example uses
 `ProjectorOptions.ImageMinTokens: 1024`, the minimum llama.cpp recommends
 for Qwen-VL grounding. This increases the encoder resolution without
 changing the fixture or how the boxes are scored. A zero value leaves the
@@ -1015,16 +1033,16 @@ before base64. Text and audio keep their order through the chat template, and
 the resulting tokens must fit the model context. HTTP URLs and file paths are
 rejected. Requests can stream text, but cannot use tools or structured output.
 
-Put these public files in `$HOME/models`:
+Download the Qwen3-ASR model and its matching projector:
 
-- [Qwen3-ASR-0.6B.Q4_K_S.gguf](https://huggingface.co/mradermacher/Qwen3-ASR-0.6B-GGUF/blob/main/Qwen3-ASR-0.6B.Q4_K_S.gguf)
-  (470,781,408 bytes)
-- [mmproj-Qwen3-ASR-0.6B-Q8_0.gguf](https://huggingface.co/ggml-org/Qwen3-ASR-0.6B-GGUF/blob/main/mmproj-Qwen3-ASR-0.6B-Q8_0.gguf)
-  (214,392,480 bytes)
+| Artifact | Download size |
+| --- | ---: |
+| [Qwen3-ASR-0.6B.Q4_K_S.gguf](https://huggingface.co/mradermacher/Qwen3-ASR-0.6B-GGUF/resolve/main/Qwen3-ASR-0.6B.Q4_K_S.gguf) | 471 MB |
+| [mmproj-Qwen3-ASR-0.6B-Q8_0.gguf](https://huggingface.co/ggml-org/Qwen3-ASR-0.6B-GGUF/resolve/main/mmproj-Qwen3-ASR-0.6B-Q8_0.gguf) | 214 MB |
 
-Use the Yzma-compatible llama.cpp and `mtmd` libraries (tested on CPU with
-llama.cpp b12359). From the repository root, generate the sample with FFmpeg
-built with the `flite` filter, then run the example:
+Save both files under `$HOME/models`. Use the Yzma-compatible llama.cpp and
+`mtmd` libraries (tested on CPU with llama.cpp b12359). From the repository root,
+generate the sample with FFmpeg built with the `flite` filter, then run the example:
 
 ```sh
 export YZMA_LIB="$HOME/.local/lib"
