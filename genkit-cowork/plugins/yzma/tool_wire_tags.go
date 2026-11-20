@@ -65,9 +65,9 @@ func parseQwenFunction(raw string) (wireToolCall, string, error) {
 		if !ok {
 			return wireToolCall{}, "", fmt.Errorf("yzma: expected a Qwen parameter or </function> in %q", name)
 		}
-		arg, tail, closed := taggedValue(value, qwenDelimiter, "</parameter>")
-		if !closed {
-			return wireToolCall{}, "", fmt.Errorf("yzma: missing </parameter> for Qwen parameter %q", key)
+		arg, tail, err := taggedValue(value, qwenDelimiter, "</parameter>", "<parameter=")
+		if err != nil {
+			return wireToolCall{}, "", fmt.Errorf("yzma: Qwen parameter %q: %w", key, err)
 		}
 		if _, duplicate := args[key]; duplicate {
 			return wireToolCall{}, "", fmt.Errorf("yzma: duplicate Qwen parameter %q", key)
@@ -110,9 +110,9 @@ func parseGLMCall(raw string) (wireToolCall, string, error) {
 		if !ok {
 			return wireToolCall{}, body, fmt.Errorf("missing GLM value for argument %q", key)
 		}
-		arg, tail, ok := taggedValue(value, glmDelimiter, glmValueEnd)
-		if !ok {
-			return wireToolCall{}, body, fmt.Errorf("unclosed GLM value for argument %q", key)
+		arg, tail, err := taggedValue(value, glmDelimiter, glmValueEnd, glmKeyOpen)
+		if err != nil {
+			return wireToolCall{}, body, fmt.Errorf("GLM argument %q: %w", key, err)
 		}
 		if _, exists := args[key]; exists {
 			return wireToolCall{}, body, fmt.Errorf("duplicate GLM argument %q", key)
@@ -126,9 +126,9 @@ func parseGLMCall(raw string) (wireToolCall, string, error) {
 }
 
 // taggedValue respects literal delimiters in a leading JSON value. JSON
-// syntax is enough to locate the boundary; duplicate and type checks happen
-// later, when the offered schema says the value should be decoded as JSON.
-func taggedValue(raw string, delimiter *regexp.Regexp, close string) (string, string, bool) {
+// syntax can locate the boundary, but must not merge two apparent argument
+// pairs when a quote from the second would also close the first.
+func taggedValue(raw string, delimiter *regexp.Regexp, close, next string) (string, string, error) {
 	body := strings.TrimLeft(raw, " \r\n\t")
 	start := 0
 	if body != "" && strings.ContainsRune(`{["`, rune(body[0])) {
@@ -136,14 +136,25 @@ func taggedValue(raw string, delimiter *regexp.Regexp, close string) (string, st
 		var value json.RawMessage
 		if d.Decode(&value) == nil {
 			start = len(raw) - len(body) + int(d.InputOffset())
+			protected := raw[:start]
+			for {
+				_, after, ok := strings.Cut(protected, close)
+				if !ok {
+					break
+				}
+				if strings.HasPrefix(strings.TrimSpace(after), next) {
+					return "", raw, fmt.Errorf("ambiguous %s before another argument inside JSON", close)
+				}
+				protected = after
+			}
 		}
 	}
 	loc := delimiter.FindStringIndex(raw[start:])
 	if loc == nil || !strings.HasPrefix(raw[start+loc[0]:], close) {
-		return "", raw, false
+		return "", raw, fmt.Errorf("missing %s", close)
 	}
 	end := start + loc[0]
-	return raw[:end], raw[end+len(close):], true
+	return raw[:end], raw[end+len(close):], nil
 }
 
 func qwenOpenTag(raw, prefix string) (string, string, bool) {

@@ -338,6 +338,8 @@ the answer. Prose outside those frames stays intact apart from outer whitespace
 and recognized protocol markers. JSON objects and arrays in prose are opaque
 unless an outer object has both `name` and `args` or `arguments`, in either
 order. A call-shaped object inside another object or array is still prose.
+An unclosed non-call JSON-shaped span does not hide a later explicit call
+marker outside a quoted string.
 Outside a Harmony text frame, Markdown fences do not change call detection.
 Explicit thinking frames and prompt-injected thinking prefixes ending in
 `</think>` or `<channel|>` never produce calls. An unclosed thinking frame, or
@@ -366,7 +368,8 @@ complete-looking call.
 The parser does not repair older Mistral `[TOOL_CALLS][…]` arrays, alternate
 `<toolcall>` wrappers, bare Gemma strings or missing commas, or Qwen/GLM values
 with unquoted occurrences of their own delimiters. Those delimiters can appear
-inside a leading JSON value in a Qwen or GLM argument. A Gemma quote token
+inside a leading JSON value in a Qwen or GLM argument, unless a literal closing
+tag is followed by what could be another argument. A Gemma quote token
 cannot appear inside a string delimited by that same token; use JSON quotes
 instead. LFM2 Python accepts keyword arguments, strings, lists, dictionaries
 with string keys, numbers in JSON notation, and Python or JSON spellings of

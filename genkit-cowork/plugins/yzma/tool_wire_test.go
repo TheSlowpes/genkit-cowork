@@ -18,6 +18,7 @@ package yzma
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
@@ -96,6 +97,7 @@ func TestToolWireVisibleTextUsesFrameSpans(t *testing.T) {
 	}{
 		{"generic object and array", object + " " + array, object + " " + array, 0},
 		{"ordinary args-only data", `{"args":[1,2]}`, `{"args":[1,2]}`, 0},
+		{"unclosed prose does not expose nested inline JSON", `Related [2 notes. {"name":"echo","args":{"text":"nested"}}`, `Related [2 notes. {"name":"echo","args":{"text":"nested"}}`, 0},
 		{"ordinary prose before and after", "status: 200 " + wireTestGemma + " After [a bracket", "status: 200  After [a bracket", 1},
 		{"ordinary call prefix", "We call: this a demo. " + wireTestGemma, "We call: this a demo.", 1},
 		{"ordinary call at end", "The next call: echo", "The next call: echo", 0},
@@ -130,11 +132,14 @@ func TestGenkitToolFrameDispatch(t *testing.T) {
 	}
 	const done = "Done."
 	const harmonyExample = `Example: <|start|>assistant<|channel|>commentary to=functions.echo<|message|>{"text":"<|return|>"}<|call|> Done.`
+	const harmonyCall = `<|channel|>commentary to=functions.echo<|message|>{"text":"ok"}<|call|>`
+	const openProse = " Related [2 notes. "
 	for _, tc := range []struct {
 		name, raw string
 		wantInput *input
 		wantText  string
 		wantErr   bool
+		errText   string
 	}{
 		{
 			name: "inline reordered escaped key and Unicode",
@@ -151,6 +156,11 @@ func TestGenkitToolFrameDispatch(t *testing.T) {
 			wantInput: &input{Text: "  hi  ", Object: &object{Value: "</parameter><tool_call>"}},
 		},
 		{
+			name:      "Qwen unambiguous quoted closing tag",
+			raw:       `<function=echo><parameter=text>"left</parameter>right"</parameter></function>`,
+			wantInput: &input{Text: `"left</parameter>right"`},
+		},
+		{
 			name:      "Gemma arrays, nested marker, whitespace and JSON escapes",
 			raw:       `<|tool_call>call:echo{text:<|"|>say <tool_call|> <|tool_call_start|> [TOOL_CALLS]<|"|> ,items:[<|"|> a <|"|>,"b\nc"],object:{value:<|"|><think><|"|>}}<tool_call|>`,
 			wantInput: &input{Text: "say <tool_call|> <|tool_call_start|> [TOOL_CALLS]", Items: []string{" a ", "b\nc"}, Object: &object{Value: "<think>"}},
@@ -159,6 +169,11 @@ func TestGenkitToolFrameDispatch(t *testing.T) {
 			name:      "GLM horizontal spacing and multiline value",
 			raw:       "echo<arg_key>text</arg_key> \t<arg_value> { \n x\n</arg_value>",
 			wantInput: &input{Text: " { \n x\n"},
+		},
+		{
+			name:      "GLM unambiguous quoted closing tag",
+			raw:       `echo<arg_key>text</arg_key><arg_value>"left</arg_value>right"</arg_value>`,
+			wantInput: &input{Text: `"left</arg_value>right"`},
 		},
 		{
 			name:      "LFM2 Python exact escapes and nested literals",
@@ -206,6 +221,41 @@ func TestGenkitToolFrameDispatch(t *testing.T) {
 			wantText: done,
 		},
 		{
+			name:     "fully framed hidden duplicate preserves answer",
+			raw:      `<think><tool_call>{"name":"echo","args":{"text":"first","text":"</think>"}}</tool_call></think>` + done,
+			wantText: done,
+		},
+		{
+			name:    "unclosed prose bracket before truncated explicit call",
+			raw:     wireTestJSON + openProse + `<tool_call>{"name":"echo","args":`,
+			wantErr: true,
+			errText: "invalid JSON tool call body",
+		},
+		{
+			name:    "unclosed prose bracket before mixed explicit call",
+			raw:     wireTestJSON + openProse + wireTestGemma,
+			wantErr: true,
+			errText: "mixed JSON and Gemma",
+		},
+		{
+			name:    "Qwen quote spanning duplicate parameters",
+			raw:     `<function=echo><parameter=text>"left</parameter><parameter=text>right"</parameter></function>`,
+			wantErr: true,
+			errText: "ambiguous </parameter>",
+		},
+		{
+			name:    "GLM quote spanning duplicate arguments",
+			raw:     `echo<arg_key>text</arg_key><arg_value>"left</arg_value><arg_key>text</arg_key><arg_value>right"</arg_value>`,
+			wantErr: true,
+			errText: "ambiguous </arg_value>",
+		},
+		{
+			name:    "Harmony truncated shorthand after valid call",
+			raw:     harmonyCall + ".echo <|messag",
+			wantErr: true,
+			errText: "incomplete or misplaced tool call delimiter",
+		},
+		{
 			name:    "Qwen nested duplicates after valid call",
 			raw:     wireTestQwen + `<function=echo><parameter=text>bad</parameter><parameter=object>{"value":"a","va\u006cue":"b"}</parameter></function>`,
 			wantErr: true,
@@ -238,8 +288,8 @@ func TestGenkitToolFrameDispatch(t *testing.T) {
 			})
 			resp, err := genkit.Generate(t.Context(), g, ai.WithModel(model), ai.WithTools(tool), ai.WithPrompt("Use echo."))
 			if tc.wantErr {
-				if err == nil || len(submitted) != 0 {
-					t.Fatalf("dispatch = (%v, %v), want error and zero calls", submitted, err)
+				if err == nil || len(submitted) != 0 || !strings.Contains(err.Error(), tc.errText) {
+					t.Fatalf("dispatch = (%v, %v), want error containing %q and zero calls", submitted, err, tc.errText)
 				}
 				return
 			}

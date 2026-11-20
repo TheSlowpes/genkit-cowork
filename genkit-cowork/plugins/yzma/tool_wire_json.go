@@ -27,7 +27,7 @@ import (
 // inlineJSONSpan classifies a JSON-shaped span without decoding its values.
 // It also identifies call keys in broken objects. In either case a nested
 // value or a quoted marker can never become a separate outer frame.
-func inlineJSONSpan(raw string) (end int, candidate bool) {
+func inlineJSONSpan(raw string) (end int, candidate, complete bool) {
 	var stack []byte
 	var name, args, keyPosition bool
 	var previous byte
@@ -58,12 +58,12 @@ func inlineJSONSpan(raw string) (end int, candidate bool) {
 			i++
 		case '}', ']':
 			if (stack[len(stack)-1] == '{') != (raw[i] == '}') {
-				return len(raw), args // Unresolved nesting; don't scan through it.
+				return len(raw), args, false
 			}
 			stack = stack[:len(stack)-1]
 			i++
 			if len(stack) == 0 {
-				return i, name && args
+				return i, name && args, true
 			}
 		case ',':
 			keyPosition = len(stack) == 1
@@ -77,7 +77,7 @@ func inlineJSONSpan(raw string) (end int, candidate bool) {
 		}
 		previous = ch
 	}
-	return len(raw), args
+	return len(raw), args, false
 }
 
 // quotedEnd returns the extent of a JSON or Python quoted token, even when

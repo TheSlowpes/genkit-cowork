@@ -113,8 +113,7 @@ func parseWireCalls(source string) ([]wireToolCall, string, error) {
 		if turnBoundary.MatchString(raw) {
 			break
 		}
-		if len(turn.hidden) == 0 && (strings.HasPrefix(raw, "<|start|>") ||
-			strings.HasPrefix(raw, "<|channel|>") || strings.HasPrefix(raw, "<|message|>")) {
+		if len(turn.hidden) == 0 && harmonyFrameStart(raw) {
 			tail, err := turn.harmony(raw)
 			if err != nil {
 				return nil, "", fmt.Errorf("yzma: %w", err)
@@ -151,9 +150,9 @@ func parseWireCalls(source string) ([]wireToolCall, string, error) {
 		case err != nil && len(turn.hidden) == 0:
 			return nil, "", fmt.Errorf("yzma: %w", err)
 		case err != nil:
-			// A broken child frame has no trustworthy end. A reasoning
-			// closer in its payload must not expose a later call.
-			raw = ""
+			// Hidden frames ignore validity, not boundaries. An unknown
+			// boundary yields an empty tail rather than exposing payload.
+			raw = tail
 		case tail != raw:
 			if kind == "" {
 				turn.visible(raw[:len(raw)-len(tail)])
@@ -255,7 +254,8 @@ func (t *wireTurn) closeHidden(raw string) int {
 func partialCallTag(raw string) bool {
 	for _, tag := range []string{jsonOpen, jsonClose, phiOpen, "<tool_call|>", lfmOpen, lfmClose,
 		"<function=", "</function>", "<parameter=", "</parameter>", "<arg_key>", "</arg_key>",
-		"<arg_value>", "</arg_value>", mistralOpen, mistralArgs, mistralClose} {
+		"<arg_value>", "</arg_value>", mistralOpen, mistralArgs, mistralClose,
+		harmonyMessage, harmonyCallEnd, "<|start|>", "<|channel|>"} {
 		if len(raw) >= 4 && strings.HasPrefix(tag, raw) {
 			return true
 		}
@@ -263,6 +263,49 @@ func partialCallTag(raw string) bool {
 	return false
 }
 
+func harmonyFrameStart(raw string) bool {
+	return strings.HasPrefix(raw, "<|start|>") || strings.HasPrefix(raw, "<|channel|>") ||
+		strings.HasPrefix(raw, harmonyMessage)
+}
+
+// resumeAfterBrokenJSON finds a protocol boundary in an unclosed non-call
+// span. Bare JSON nested in that span stays prose, and quoted markers stay
+// literal. Only explicit framing can regain control of the turn scanner.
+func resumeAfterBrokenJSON(raw string) string {
+	for raw = raw[1:]; raw != ""; {
+		loc := wireToken.FindStringIndex(raw)
+		if loc == nil {
+			break
+		}
+		raw = raw[loc[0]:]
+		switch raw[0] {
+		case '"':
+			end, _ := quotedEnd(raw)
+			raw = raw[end:]
+			continue
+		case '<':
+			if harmonyFrameStart(raw) || hiddenOpen.MatchString(raw) || turnBoundary.MatchString(raw) ||
+				strings.HasPrefix(raw, "</think>") || strings.HasPrefix(raw, "<channel|>") ||
+				strings.HasPrefix(raw, "<channel>") ||
+				(!qwenProseTag.MatchString(raw) && (unmatchedCallTag.MatchString(raw) || partialCallTag(raw))) {
+				return raw
+			}
+		case '[':
+			if unmatchedCallTag.MatchString(raw) || partialCallTag(raw) {
+				return raw
+			}
+		case '{':
+			// A bare object is not an explicit protocol boundary.
+		default:
+			return raw // Named Gemma, GLM, or Harmony shorthand.
+		}
+		raw = raw[1:]
+	}
+	return ""
+}
+
+// On error, a nonempty tail is safe to resume at only if the end of the
+// entire frame is known independently of the error.
 func readCallSpan(raw, token string) (wireFamily, []wireToolCall, string, error) {
 	switch {
 	case strings.HasPrefix(raw, jsonOpen), strings.HasPrefix(raw, phiOpen):
@@ -277,6 +320,9 @@ func readCallSpan(raw, token string) (wireFamily, []wireToolCall, string, error)
 		}
 		if body, ok := strings.CutPrefix(body, "call:"); open == phiOpen && ok {
 			call, tail, err := parseGemmaCall(body, true)
+			if err != nil {
+				return wireGemma, nil, "", err
+			}
 			return wireGemma, []wireToolCall{call}, tail, err
 		}
 		return jsonCallSpan(wireJSON, body, "", jsonClose)
@@ -285,9 +331,15 @@ func readCallSpan(raw, token string) (wireFamily, []wireToolCall, string, error)
 		return wireQwen, calls, tail, err
 	case strings.HasPrefix(token, "call:"):
 		call, tail, err := parseGemmaCall(raw[len("call:"):], false)
+		if err != nil {
+			return wireGemma, nil, "", err
+		}
 		return wireGemma, []wireToolCall{call}, tail, err
 	case strings.HasSuffix(token, glmKeyOpen):
 		call, tail, err := parseGLMCall(raw)
+		if err != nil {
+			return wireGLM, nil, "", err
+		}
 		return wireGLM, []wireToolCall{call}, tail, err
 	case strings.HasPrefix(raw, lfmOpen):
 		body := strings.TrimSpace(raw[len(lfmOpen):])
@@ -295,6 +347,9 @@ func readCallSpan(raw, token string) (wireFamily, []wireToolCall, string, error)
 			calls, tail, err := parseLFMPython(body)
 			if err == nil {
 				tail, err = requireWireClose(tail, lfmClose)
+			}
+			if err != nil {
+				return wireLFMPython, nil, "", err
 			}
 			return wireLFMPython, calls, tail, err
 		}
@@ -319,8 +374,11 @@ func readCallSpan(raw, token string) (wireFamily, []wireToolCall, string, error)
 		}
 		return kind, calls, tail, err
 	case len(token) > 1 && (token[0] == '{' || token[0] == '['):
-		end, candidate := inlineJSONSpan(raw)
+		end, candidate, complete := inlineJSONSpan(raw)
 		if !candidate {
+			if !complete {
+				return "", nil, resumeAfterBrokenJSON(raw), nil
+			}
 			return "", nil, raw[end:], nil
 		}
 		kind, calls, tail, err := jsonCallSpan(wireJSON, raw[:end], "", "")
@@ -336,12 +394,23 @@ func readCallSpan(raw, token string) (wireFamily, []wireToolCall, string, error)
 func jsonCallSpan(kind wireFamily, raw, name, close string) (wireFamily, []wireToolCall, string, error) {
 	value, tail, err := splitWireJSON(raw)
 	if err != nil {
+		tail = ""
+		body := strings.TrimSpace(raw)
+		if body != "" && (body[0] == '{' || body[0] == '[') {
+			if end, _, complete := inlineJSONSpan(body); complete {
+				if close == "" {
+					tail = body[end:]
+				} else if after, closeErr := requireWireClose(body[end:], close); closeErr == nil {
+					tail = after
+				}
+			}
+		}
 		return kind, nil, tail, fmt.Errorf("invalid %s tool call body: %w", kind, err)
 	}
 	if close != "" {
 		tail, err = requireWireClose(tail, close)
 		if err != nil {
-			return kind, nil, tail, err
+			return kind, nil, "", err
 		}
 	}
 	if name != "" {
