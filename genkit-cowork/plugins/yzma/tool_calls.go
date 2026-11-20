@@ -175,7 +175,8 @@ var emptyGemmaCall = regexp.MustCompile(`<\|tool_call>\s*call:([a-zA-Z_][\w./-]*
 var bareEmptyGemmaCall = regexp.MustCompile(`^\s*call:([a-zA-Z_][\w./-]*)\{\s*\}\s*$`)
 
 func parsedToolParts(result TextGenerationResult, definitions []*ai.ToolDefinition, choice ai.ToolChoice) ([]*ai.Part, error) {
-	wireCalls, text, err := parseWireToolCalls(result.Text)
+	prose := toolProse{source: result.Text}
+	wireCalls, text, err := prose.parseWireCalls()
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +190,8 @@ func parsedToolParts(result TextGenerationResult, definitions []*ai.ToolDefiniti
 		return toolTextPart(text, choice)
 	}
 
-	raw, sentinel := result.Text, ""
+	fallback := prose.fallbackInput()
+	raw, sentinel := fallback, ""
 	if emptyGemmaCall.MatchString(raw) || bareEmptyGemmaCall.MatchString(raw) {
 		sentinel = "__yzma_empty_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 		raw = emptyGemmaCall.ReplaceAllString(raw, `<|tool_call>call:$1{`+sentinel+`:true}<tool_call|>`)
@@ -201,7 +203,7 @@ func parsedToolParts(result TextGenerationResult, definitions []*ai.ToolDefiniti
 			strings.Contains(raw, "<function=") || strings.Contains(raw, "<arg_key>") {
 			return nil, fmt.Errorf("yzma: malformed or incomplete tool call")
 		}
-		return toolTextPart(message.StripMarkup(result.Text), choice)
+		return toolTextPart(prose.clean(fallback), choice)
 	}
 	// GPT calls are executable only when the lossless parser recognized them.
 	if message.DetectFormat(raw) == message.FormatGPT {
@@ -217,7 +219,7 @@ func parsedToolParts(result TextGenerationResult, definitions []*ai.ToolDefiniti
 		}
 		wireCalls = append(wireCalls, wireToolCall{name: call.Function.Name, untyped: call.Function.Arguments})
 	}
-	return validatedToolParts(message.StripMarkup(raw), wireCalls, definitions, choice)
+	return validatedToolParts(prose.clean(raw), wireCalls, definitions, choice)
 }
 
 func toolTextPart(text string, choice ai.ToolChoice) ([]*ai.Part, error) {
@@ -252,7 +254,7 @@ func validatedToolParts(text string, calls []wireToolCall, definitions []*ai.Too
 		if err := validateToolArguments(args, tool.InputSchema); err != nil {
 			return nil, fmt.Errorf("tool %q: %w", tool.Name, err)
 		}
-		if err := validateToolNumberTransport(args); err != nil {
+		if err := validateToolTransport(args); err != nil {
 			return nil, fmt.Errorf("tool %q: %w", tool.Name, err)
 		}
 		parts = append(parts, ai.NewToolRequestPart(&ai.ToolRequest{
@@ -262,19 +264,22 @@ func validatedToolParts(text string, calls []wireToolCall, definitions []*ai.Too
 	return parts, nil
 }
 
-// validateToolNumberTransport rejects numbers that Genkit v1.9's RunJSON would
-// change when it decodes through float64 before normalizing the tool input.
-func validateToolNumberTransport(value any) error {
+// validateToolTransport rejects values that Genkit v1.9's RunJSON would
+// change by decoding numbers through float64 or dropping null object members.
+func validateToolTransport(value any) error {
 	switch v := value.(type) {
 	case map[string]any:
 		for key, child := range v {
-			if err := validateToolNumberTransport(child); err != nil {
+			if child == nil {
+				return fmt.Errorf("%s: null object member would be dropped in Genkit tool dispatch", key)
+			}
+			if err := validateToolTransport(child); err != nil {
 				return fmt.Errorf("%s: %w", key, err)
 			}
 		}
 	case []any:
 		for i, child := range v {
-			if err := validateToolNumberTransport(child); err != nil {
+			if err := validateToolTransport(child); err != nil {
 				return fmt.Errorf("[%d]: %w", i, err)
 			}
 		}

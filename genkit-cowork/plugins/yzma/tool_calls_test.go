@@ -358,7 +358,8 @@ func TestHarmonyToolCallFraming(t *testing.T) {
 func TestJSONToolCallsKeepStructureAndRejectBadBatches(t *testing.T) {
 	def := &ai.ToolDefinition{Name: "echo", InputSchema: map[string]any{"type": "object"}}
 	const large = `<tool_call>{"name":"echo","arguments":{"arguments":{"n":9007199254740993},"list":[null,"42",false],"parameters":{"x":1}}}</tool_call>`
-	calls, _, err := parseWireToolCalls(large)
+	prose := toolProse{source: large}
+	calls, _, err := prose.parseWireCalls()
 	if err != nil || len(calls) != 1 {
 		t.Fatalf("parse = (%v, %v)", calls, err)
 	}
@@ -434,6 +435,106 @@ func TestGenkitToolDispatchPreservesNestedArguments(t *testing.T) {
 				t.Fatalf("response = %v, error = %v, executed = %v; want completed tool chain", resp, err, executed)
 			}
 		})
+	}
+}
+
+func TestGenkitToolDispatchRejectsNullObjectMembers(t *testing.T) {
+	for _, tc := range []struct {
+		name, args, wantInput string
+	}{
+		{name: "top-level null", args: `{"optional":null}`},
+		{name: "nested null", args: `{"nested":{"optional":null}}`},
+		{name: "object in array with null", args: `{"list":[{"optional":null}]}`},
+		{name: "absent optional field", args: `{}`, wantInput: `{}`},
+		{name: "null array element", args: `{"list":[null,{}]}`, wantInput: `{"list":[null,{}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			op := &testTextOperator{
+				testModelOperator: &testModelOperator{load: func(context.Context, ModelOptions) (llama.Model, error) {
+					return 42, nil
+				}},
+				generate: func(_ context.Context, _ llama.Model, input TextGenerationInput, _ func(context.Context, string) error) (TextGenerationResult, error) {
+					if input.Messages[len(input.Messages)-1].GetRole() == "tool" {
+						return TextGenerationResult{Text: "Done."}, nil
+					}
+					return TextGenerationResult{Text: `{"name":"echo","arguments":` + tc.args + `}`}, nil
+				},
+			}
+			plugin, g := initLoadingTest(t, op)
+			def := testModelDefinition()
+			def.ToolCalling = true
+			model := plugin.DefineModel(g, def, nil)
+			object := map[string]any{"type": "object", "properties": map[string]any{
+				"optional": map[string]any{"type": "null"},
+			}}
+			schema := map[string]any{"type": "object", "properties": map[string]any{
+				"optional": map[string]any{"type": "null"},
+				"nested":   object,
+				"list": map[string]any{"type": "array", "items": map[string]any{
+					"anyOf": []any{map[string]any{"type": "null"}, object},
+				}},
+			}}
+			executions := 0
+			tool := genkit.DefineTool(g, "echo", "Echo the input", func(_ *ai.ToolContext, in any) (string, error) {
+				executions++
+				body, err := json.Marshal(in)
+				if err != nil || string(body) != tc.wantInput {
+					t.Errorf("tool input = (%s, %v), want %s", body, err, tc.wantInput)
+				}
+				return "ok", nil
+			}, ai.WithInputSchema(schema))
+			resp, err := genkit.Generate(t.Context(), g, ai.WithModel(model), ai.WithTools(tool), ai.WithPrompt("Use echo."))
+			if tc.wantInput == "" {
+				if executions != 0 || err == nil || !strings.Contains(err.Error(), "null object member") {
+					t.Fatalf("executions = %d, error = %v; want a null transport error before execution", executions, err)
+				}
+			} else if err != nil || executions != 1 || resp.Text() != "Done." {
+				t.Fatalf("response = %v, error = %v, executions = %d; want completed tool chain", resp, err, executions)
+			}
+		})
+	}
+}
+
+func TestNamedJSONProseSurvivesToolMarkupCleaning(t *testing.T) {
+	const prose = `{"name":"Ada","meta":{"args":{"x":1}}}`
+	const nestedCall = `{"name":"Ada","meta":{"name":"add","args":{"a":2,"b":3}}}`
+	for _, tc := range []struct {
+		name, raw, want string
+		wantCall        bool
+	}{
+		{name: "text only", raw: "Profile: " + prose + " \n", want: "Profile: " + prose},
+		{name: "nested call shape is text", raw: nestedCall, want: nestedCall},
+		{name: "reasoning stays hidden", raw: "<think>" + prose + "</think>" + prose, want: prose},
+		{
+			name:     "with JSON tool call",
+			raw:      prose + ` <tool_call>{"name":"add","arguments":{"a":2,"b":3}}</tool_call> ` + prose + " \n",
+			want:     prose + "  " + prose,
+			wantCall: true,
+		},
+		{
+			name:     "with Gemma fallback call",
+			raw:      prose + ` <|tool_call>call:add{a:2,b:3}<tool_call|> ` + prose + " \n",
+			want:     prose + "  " + prose,
+			wantCall: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parts, err := parsedToolParts(TextGenerationResult{Text: tc.raw}, []*ai.ToolDefinition{testAddDefinition()}, ai.ToolChoiceAuto)
+			if err != nil || len(parts) == 0 || !parts[0].IsText() || parts[0].Text != tc.want {
+				t.Fatalf("parse = (%v, %v), want text %q", parts, err, tc.want)
+			}
+			if tc.wantCall {
+				if len(parts) != 2 || !parts[1].IsToolRequest() || parts[1].ToolRequest.Name != "add" {
+					t.Fatalf("parts = %v, want text and one add request", parts)
+				}
+			} else if len(parts) != 1 {
+				t.Fatalf("parts = %v, want only text", parts)
+			}
+		})
+	}
+	malformed := prose + ` {"name":"add","args":{"a":2,"b":`
+	if parts, err := parsedToolParts(TextGenerationResult{Text: malformed}, []*ai.ToolDefinition{testAddDefinition()}, ai.ToolChoiceAuto); err == nil || parts != nil {
+		t.Errorf("parse = (%v, %v), want an error and no parts for a malformed call after prose", parts, err)
 	}
 }
 

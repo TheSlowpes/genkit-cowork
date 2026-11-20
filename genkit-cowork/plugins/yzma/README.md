@@ -340,6 +340,8 @@ the arguments and tool results in subsequent turns.
 Tool-enabled turns are buffered until parsing completes. Streaming callbacks
 receive complete text/tool parts, not raw tool-call syntax. Ordinary chat without
 `ToolCalling` continues streaming text incrementally.
+Inline JSON with a `name` field but no top-level `args` or `arguments` stays
+in the text, even if a nested object has one of those keys.
 Tool inputs must use JSON object schemas. Local schema references are expanded
 for rendering; recursive schemas are rejected rather than silently omitted.
 
@@ -347,6 +349,9 @@ Before returning executable calls, the adapter checks offered tool names,
 structural completeness, and input schemas. Truncated calls, unknown tools,
 invalid arguments, and ambiguous argument types return errors. It does not
 execute Yzma's repaired/truncated JSON calls.
+The adapter also rejects numbers that would lose precision and explicit null
+object fields that Genkit would drop during dispatch. Omit optional object fields
+instead. Array elements can be null if the tool schema allows it.
 
 The opt-in native test runs a real Genkit tool with a local Gemma 4 model. It
 checks that Genkit executes it once, correlates the result with the call ID, and

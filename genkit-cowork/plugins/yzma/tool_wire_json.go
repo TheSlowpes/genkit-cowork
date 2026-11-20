@@ -20,8 +20,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
+	"unicode"
 
+	"github.com/google/uuid"
 	"github.com/hybridgroup/yzma/pkg/message"
 )
 
@@ -29,6 +32,49 @@ type wireToolCall struct {
 	name    string
 	args    map[string]any
 	untyped map[string]string
+}
+
+// toolProse shields complete JSON objects classified as text from Yzma's
+// family parser and substring-based markup cleaner. Only restore text that
+// survives cleaning, so blocks containing a placeholder can still be removed.
+type toolProse struct {
+	source       string
+	prefix       string
+	replacements []string
+	masked       strings.Builder
+	end          int
+}
+
+func (p *toolProse) shield(start, end int) string {
+	if p.prefix == "" {
+		for {
+			p.prefix = "\x00" + uuid.NewString() + "_"
+			if !strings.Contains(p.source, p.prefix) {
+				break
+			}
+		}
+	}
+	token := p.prefix + strconv.Itoa(len(p.replacements)/2) + "\x00"
+	p.replacements = append(p.replacements, token, p.source[start:end])
+	p.masked.WriteString(p.source[p.end:start])
+	p.masked.WriteString(token)
+	p.end = end
+	return token
+}
+
+func (p *toolProse) fallbackInput() string {
+	if p.end == 0 {
+		return p.source
+	}
+	return p.masked.String() + p.source[p.end:]
+}
+
+func (p *toolProse) clean(raw string) string {
+	text := message.StripMarkup(raw)
+	if len(p.replacements) > 0 {
+		text = strings.NewReplacer(p.replacements...).Replace(text)
+	}
+	return text
 }
 
 const (
@@ -52,10 +98,13 @@ var (
 	lfmPython       = regexp.MustCompile(`^\[\s*` + wireToolName + `\s*\(`)
 )
 
-// parseWireToolCalls reads JSON and Qwen envelopes before falling back to the
+// parseWireCalls reads JSON and Qwen envelopes before falling back to the
 // family parsers. A non-nil empty slice means a Harmony text frame was
 // consumed and must not be reinterpreted as a legacy tool call.
-func parseWireToolCalls(raw string) ([]wireToolCall, string, error) {
+func (p *toolProse) parseWireCalls() ([]wireToolCall, string, error) {
+	// Keep each scanner tail a suffix of input, even when a parser trims space.
+	input := strings.TrimRightFunc(p.source, unicode.IsSpace)
+	raw := input
 	var calls, qwenCalls []wireToolCall
 	var text strings.Builder
 	nonJSON, harmonyText := false, false
@@ -224,7 +273,8 @@ func parseWireToolCalls(raw string) ([]wireToolCall, string, error) {
 				_, hasArgs := v["arguments"]
 				_, hasAlias := v["args"]
 				if !hasArgs && !hasAlias {
-					text.WriteString(rest[:decoder.InputOffset()])
+					start := len(input) - len(rest)
+					text.WriteString(p.shield(start, start+int(decoder.InputOffset())))
 					continue
 				}
 			}
@@ -256,8 +306,11 @@ func parseWireToolCalls(raw string) ([]wireToolCall, string, error) {
 	if calls == nil && harmonyText {
 		calls = []wireToolCall{}
 	}
+	if calls == nil {
+		return nil, "", nil // The family fallback needs the original markup.
+	}
 	text.WriteString(raw)
-	return calls, message.StripMarkup(text.String()), nil
+	return calls, p.clean(text.String()), nil
 }
 
 // hasMalformedInlineArguments looks for an argument key even when JSON
