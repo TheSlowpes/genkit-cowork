@@ -338,6 +338,8 @@ the answer. Prose outside those frames stays intact apart from outer whitespace
 and recognized protocol markers. JSON objects and arrays in prose are opaque
 unless an outer object has both `name` and `args` or `arguments`, in either
 order. A call-shaped object inside another object or array is still prose.
+A balanced outer object with both call keys is still a candidate when either
+key is unquoted. Strict JSON parsing rejects it rather than repairing it.
 An unclosed non-call JSON-shaped span does not hide a later explicit call
 marker outside a quoted string.
 Outside a Harmony text frame, Markdown fences do not change call detection.
@@ -369,14 +371,15 @@ The parser does not repair older Mistral `[TOOL_CALLS][…]` arrays, alternate
 `<toolcall>` wrappers, bare Gemma strings or missing commas, or Qwen/GLM values
 with unquoted occurrences of their own delimiters. Those delimiters can appear
 inside a leading JSON value in a Qwen or GLM argument, unless a value's closing
-tag is followed by another argument opener or, in Qwen, a function or wrapper
-closer. A Gemma quote token cannot appear inside a string delimited by that
-same token; use JSON quotes instead.
+tag is followed by another argument opener or, in Qwen, a function opener,
+function closer, or wrapper closer. A Gemma quote token cannot appear inside
+a string delimited by that same token; use JSON quotes instead.
 
 LFM2 Python accepts keyword arguments, strings, lists, dictionaries
 with string keys, numbers in JSON notation, and Python or JSON spellings of
 booleans and null. Strings accept quote and backslash escapes, `\a\b\f\n\r\t\v`,
-and `\x`, `\u`, and `\U` escapes. Positional arguments, expressions, tuples,
+and `\x`, `\u`, and `\U` escapes. JSON-style double-quoted strings also accept
+paired UTF-16 escapes. Positional arguments, expressions, tuples,
 string prefixes, and other escapes are rejected rather than reinterpreted.
 
 Tool inputs must use JSON object schemas. Local schema references are expanded

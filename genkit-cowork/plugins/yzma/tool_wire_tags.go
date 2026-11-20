@@ -65,7 +65,7 @@ func parseQwenFunction(raw string) (wireToolCall, string, error) {
 		if !ok {
 			return wireToolCall{}, "", fmt.Errorf("yzma: expected a Qwen parameter or </function> in %q", name)
 		}
-		arg, tail, err := taggedValue(value, qwenDelimiter, "</parameter>", "<parameter=", "</function>", jsonClose)
+		arg, tail, err := taggedValue(value, qwenDelimiter, "</parameter>", "<parameter=", "<function=", "</function>", jsonClose)
 		if err != nil {
 			return wireToolCall{}, "", fmt.Errorf("yzma: Qwen parameter %q: %w", key, err)
 		}

@@ -97,6 +97,9 @@ func TestToolWireVisibleTextUsesFrameSpans(t *testing.T) {
 	}{
 		{"generic object and array", object + " " + array, object + " " + array, 0},
 		{"ordinary args-only data", `{"args":[1,2]}`, `{"args":[1,2]}`, 0},
+		{"ordinary object with an unquoted key", `{note:42}`, `{note:42}`, 0},
+		{"nested unquoted call keys are prose", `{"payload":{name:"echo",args:{}}}`, `{"payload":{name:"echo",args:{}}}`, 0},
+		{"unquoted key names in string values are prose", `{"name":"Ada","note":"args:{}"}`, `{"name":"Ada","note":"args:{}"}`, 0},
 		{"unclosed prose does not expose nested inline JSON", `Related [2 notes. {"name":"echo","args":{"text":"nested"}}`, `Related [2 notes. {"name":"echo","args":{"text":"nested"}}`, 0},
 		{"ordinary prose before and after", "status: 200 " + wireTestGemma + " After [a bracket", "status: 200  After [a bracket", 1},
 		{"ordinary call prefix", "We call: this a demo. " + wireTestGemma, "We call: this a demo.", 1},
@@ -152,6 +155,7 @@ func TestGenkitToolFrameDispatch(t *testing.T) {
 	const openProse = " Related [2 notes. "
 	const qwenLeft = `<function=echo><parameter=text>"left</parameter></function>`
 	const qwenRight = `<function=echo><parameter=text>right"</parameter></function>`
+	const gemmaDuplicate = `<|tool_call>call:echo{text:"first",text:<|"|><tool_call|></think><|"|>}<tool_call|>`
 	for _, tc := range []struct {
 		name, raw string
 		wantInput *input
@@ -199,6 +203,11 @@ func TestGenkitToolFrameDispatch(t *testing.T) {
 			wantInput: &input{Text: "Ab' <|tool_call_end|>", Items: []string{" one ", "two"}, Object: &object{Value: "line\nnext"}},
 		},
 		{
+			name:      "LFM2 JSON Unicode in a Python collection",
+			raw:       `<|tool_call_start|>[echo(text='ok',items=["\ud83d\ude80",'\x41'],object={'value': "\ud83d\ude80"})]<|tool_call_end|>`,
+			wantInput: &input{Text: "ok", Items: []string{"🚀", "A"}, Object: &object{Value: "🚀"}},
+		},
+		{
 			name:      "LFM2 JSON marker and whitespace in array",
 			raw:       `<|tool_call_start|>[ {"name":"echo","args":{"text":"<|tool_call_end|>","items":[" a "]}} ]<|tool_call_end|>`,
 			wantInput: &input{Text: "<|tool_call_end|>", Items: []string{" a "}},
@@ -242,6 +251,22 @@ func TestGenkitToolFrameDispatch(t *testing.T) {
 			name:     "fully framed hidden duplicate preserves answer",
 			raw:      `<think><tool_call>{"name":"echo","args":{"text":"first","text":"</think>"}}</tool_call></think>` + done,
 			wantText: done,
+		},
+		{
+			name:     "fully framed hidden Gemma duplicate preserves answer",
+			raw:      "<think>" + gemmaDuplicate + "</think>" + done,
+			wantText: done,
+		},
+		{
+			name:     "Gemma duplicate without a genuine wrapper close stays hidden",
+			raw:      done + "<think>" + strings.TrimSuffix(gemmaDuplicate, "<tool_call|>") + "</think>Not visible.",
+			wantText: done,
+		},
+		{
+			name:    "visible Gemma duplicate rejects previous request",
+			raw:     wireTestGemma + gemmaDuplicate,
+			wantErr: true,
+			errText: `duplicate argument "text"`,
 		},
 		{
 			name:    "unclosed prose bracket before truncated explicit call",
@@ -296,6 +321,48 @@ func TestGenkitToolFrameDispatch(t *testing.T) {
 			raw:     harmonyCall + ".echo <|messag",
 			wantErr: true,
 			errText: "incomplete or misplaced tool call delimiter",
+		},
+		{
+			name:    "malformed explicit Harmony recipient after valid call",
+			raw:     harmonyCall + `<|channel|>commentary to=<|message|>Oops<|end|>`,
+			wantErr: true,
+			errText: "unsupported or malformed Harmony recipient",
+		},
+		{
+			name:    "unquoted args after valid JSON call",
+			raw:     wireTestJSON + `{"name":"echo",args:{"text":"second"}}`,
+			wantErr: true,
+			errText: "invalid JSON tool call body",
+		},
+		{
+			name:    "unquoted name and arguments after valid JSON call",
+			raw:     wireTestJSON + `{note:1,arguments:{"text":"second"},name:"echo"}`,
+			wantErr: true,
+			errText: "invalid JSON tool call body",
+		},
+		{
+			name:    "unquoted args with missing comma after valid JSON call",
+			raw:     wireTestJSON + `{"name":"echo" args:{"text":"second"}}`,
+			wantErr: true,
+			errText: "invalid JSON tool call body",
+		},
+		{
+			name:    "Qwen quote spanning function opener without first closer",
+			raw:     wireTestQwen + strings.TrimSuffix(qwenLeft, "</function>") + qwenRight,
+			wantErr: true,
+			errText: "ambiguous </parameter> before <function=",
+		},
+		{
+			name:    "LFM2 unpaired JSON surrogate in collection",
+			raw:     wireTestPython + `<|tool_call_start|>[echo(text='bad',items=["\ud83d"])]<|tool_call_end|>`,
+			wantErr: true,
+			errText: "invalid Python escape",
+		},
+		{
+			name:    "LFM2 duplicate dictionary key after Unicode decoding",
+			raw:     wireTestPython + `<|tool_call_start|>[echo(text='bad',object={'🚀':1,"\ud83d\ude80":2})]<|tool_call_end|>`,
+			wantErr: true,
+			errText: `duplicate argument "🚀"`,
 		},
 		{
 			name:    "Qwen nested duplicates after valid call",

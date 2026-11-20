@@ -61,7 +61,7 @@ var (
 	// intentionally short; each family consumes its own body and closing token.
 	wireToken = regexp.MustCompile(`(?m)` + glmStart + `|\bcall:(?:\s*` + wireToolName + `\s*\{|` + wireToolName + `\z)|` +
 		`\.` + wireToolName + `\s*<\|message\|>|` +
-		`\{\s*["}]|\[\s*(?:[[{"\]0-9-]|(?:true|false|null)\b)|["<\[]`)
+		`\{\s*(?:["}]|` + bareJSONKey + `)|\[\s*(?:[[{"\]0-9-]|(?:true|false|null)\b)|["<\[]`)
 	lfmPythonStart = regexp.MustCompile(`^\[\s*` + wireToolName + `\s*\(`)
 	turnBoundary   = regexp.MustCompile(`^(?:<\|?(?:im_start|im_end)\|?>|<\|(?:user|assistant|system|eot_id|end|return|endoftext)\|>|` +
 		`<\|?turn\|?>|</turn>|<end_of_turn>|<start_of_turn>|</s>|<\|?turnend\|?>|<\|tool_response_start\|>)`)
@@ -320,9 +320,6 @@ func readCallSpan(raw, token string) (wireFamily, []wireToolCall, string, error)
 		}
 		if body, ok := strings.CutPrefix(body, "call:"); open == phiOpen && ok {
 			call, tail, err := parseGemmaCall(body, true)
-			if err != nil {
-				return wireGemma, nil, "", err
-			}
 			return wireGemma, []wireToolCall{call}, tail, err
 		}
 		return jsonCallSpan(wireJSON, body, "", jsonClose)
@@ -331,9 +328,6 @@ func readCallSpan(raw, token string) (wireFamily, []wireToolCall, string, error)
 		return wireQwen, calls, tail, err
 	case strings.HasPrefix(token, "call:"):
 		call, tail, err := parseGemmaCall(raw[len("call:"):], false)
-		if err != nil {
-			return wireGemma, nil, "", err
-		}
 		return wireGemma, []wireToolCall{call}, tail, err
 	case strings.HasSuffix(token, glmKeyOpen):
 		call, tail, err := parseGLMCall(raw)

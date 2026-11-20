@@ -56,6 +56,9 @@ func (t *wireTurn) harmony(raw string) (string, error) {
 	if loc := harmonyChannelTo.FindStringIndex(raw); loc != nil {
 		raw = raw[loc[1]:]
 		header = harmonyRecipient.FindStringSubmatch(raw)
+		if header == nil {
+			return "", fmt.Errorf("unsupported or malformed Harmony recipient")
+		}
 	}
 	if header != nil {
 		kind, calls, tail, err := jsonCallSpan(wireHarmony, raw[len(header[0]):], header[1], harmonyCallEnd)

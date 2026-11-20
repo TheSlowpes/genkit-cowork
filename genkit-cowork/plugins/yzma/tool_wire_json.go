@@ -19,10 +19,15 @@ package yzma
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 )
+
+const bareJSONKey = `[a-zA-Z_]\w*\s*:`
+
+var bareCallKey = regexp.MustCompile(`^(name|args|arguments)\s*:`)
 
 // inlineJSONSpan classifies a JSON-shaped span without decoding its values.
 // It also identifies call keys in broken objects. In either case a nested
@@ -30,6 +35,7 @@ import (
 func inlineJSONSpan(raw string) (end int, candidate, complete bool) {
 	var stack []byte
 	var name, args, keyPosition bool
+	var bareName, bareArgs bool
 	var previous byte
 	for i := 0; i < len(raw); {
 		ch := raw[i]
@@ -63,7 +69,7 @@ func inlineJSONSpan(raw string) (end int, candidate, complete bool) {
 			stack = stack[:len(stack)-1]
 			i++
 			if len(stack) == 0 {
-				return i, name && args, true
+				return i, (name || bareName) && (args || bareArgs), true
 			}
 		case ',':
 			keyPosition = len(stack) == 1
@@ -72,6 +78,15 @@ func inlineJSONSpan(raw string) (end int, candidate, complete bool) {
 			i++
 			continue
 		default:
+			// Unquoted keys classify only a bounded outer object, and
+			// only the strict JSON decoder may accept its syntax.
+			if len(stack) == 1 && stack[0] == '{' &&
+				(keyPosition || previous == '"' || previous == '}' || previous == ']') {
+				if match := bareCallKey.FindStringSubmatch(raw[i:]); match != nil {
+					bareName = bareName || match[1] == "name"
+					bareArgs = bareArgs || match[1] != "name"
+				}
+			}
 			keyPosition = false
 			i++
 		}

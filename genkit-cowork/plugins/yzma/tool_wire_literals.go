@@ -28,8 +28,9 @@ import (
 // subset of LFM2 Python literals. Neither dialect searches ahead for a missing
 // separator or treats arbitrary bare expressions as strings.
 type literalReader struct {
-	tail   string
-	python bool
+	tail      string
+	python    bool
+	duplicate error
 }
 
 func (r *literalReader) take(token string) bool {
@@ -77,12 +78,23 @@ func (r *literalReader) object(close, assign string, quoted bool, depth int) (ma
 		if !r.take(assign) {
 			return nil, fmt.Errorf("expected %s after argument %q", assign, key)
 		}
-		if _, exists := args[key]; exists {
-			return nil, fmt.Errorf("duplicate argument %q", key)
+		_, exists := args[key]
+		if exists {
+			if r.python {
+				return nil, fmt.Errorf("duplicate argument %q", key)
+			}
+			// Keep reading with the Gemma grammar so a hidden frame
+			// can resume after its closer, not a marker inside a value.
+			if r.duplicate == nil {
+				r.duplicate = fmt.Errorf("duplicate argument %q", key)
+			}
 		}
-		args[key], err = r.value(depth + 1)
+		value, err := r.value(depth + 1)
 		if err != nil {
 			return nil, fmt.Errorf("argument %q: %w", key, err)
+		}
+		if !exists {
+			args[key] = value
 		}
 		if done, err := r.next(close); done || err != nil {
 			return args, err
@@ -170,15 +182,19 @@ func (r *literalReader) string() (string, bool, error) {
 	}
 	raw := r.tail[:end]
 	r.tail = r.tail[end:]
-	if r.python {
-		value, err := decodePythonString(raw[1 : end-1])
-		return value, true, err
+	if raw[0] == '"' {
+		// LFM2 emits JSON collections inside Python calls. Decode the
+		// shared string syntax first, including paired UTF-16 escapes.
+		value, _, err := splitWireJSON(raw)
+		if err == nil {
+			return value.(string), true, nil
+		}
+		if !r.python {
+			return "", true, err
+		}
 	}
-	value, _, err := splitWireJSON(raw)
-	if err != nil {
-		return "", true, err
-	}
-	return value.(string), true, nil
+	value, err := decodePythonString(raw[1 : end-1])
+	return value, true, err
 }
 
 func decodePythonString(body string) (string, error) {
@@ -214,13 +230,19 @@ func parseGemmaCall(raw string, wrapped bool) (wireToolCall, string, error) {
 	r := literalReader{tail: raw}
 	name := r.name()
 	if name == "" || !r.take("{") {
-		return wireToolCall{}, r.tail, fmt.Errorf("expected Gemma tool name and argument object")
+		return wireToolCall{}, "", fmt.Errorf("expected Gemma tool name and argument object")
 	}
 	args, err := r.object("}", ":", true, 0)
-	if err == nil && wrapped && !r.take("<tool_call|>") {
-		err = fmt.Errorf("missing <tool_call|> after Gemma call")
+	if err != nil {
+		return wireToolCall{}, "", err
 	}
-	return wireToolCall{name: name, args: args, legacy: true}, r.tail, err
+	if wrapped && !r.take("<tool_call|>") {
+		return wireToolCall{}, "", fmt.Errorf("missing <tool_call|> after Gemma call")
+	}
+	if r.duplicate != nil {
+		return wireToolCall{}, r.tail, r.duplicate
+	}
+	return wireToolCall{name: name, args: args, legacy: true}, r.tail, nil
 }
 
 func parseLFMPython(raw string) ([]wireToolCall, string, error) {
