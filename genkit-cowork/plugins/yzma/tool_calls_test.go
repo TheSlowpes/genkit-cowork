@@ -495,6 +495,69 @@ func TestGenkitToolDispatchRejectsNullObjectMembers(t *testing.T) {
 	}
 }
 
+func TestGenkitGLMToolDispatch(t *testing.T) {
+	type input struct {
+		Text  string `json:"text"`
+		Extra string `json:"extra,omitempty"`
+	}
+	const text = `{"name":"Ada"}`
+	const extra = `{"name": "Grace", "labels": [" A ", "B"]}`
+	const key = `echo<arg_key>text</arg_key>`
+	const value = `<arg_value>` + text + `</arg_value>`
+	for _, tc := range []struct {
+		name, raw string
+		want      input
+	}{
+		{name: "space", raw: key + " " + value, want: input{Text: text}},
+		{
+			name: "tab and multiple arguments",
+			raw:  key + "\t" + value + "<arg_key>extra</arg_key> \t<arg_value>" + extra + "</arg_value>",
+			want: input{Text: text, Extra: extra},
+		},
+		{name: "non-whitespace gap", raw: key + " stray " + value},
+		{name: "line break", raw: key + "\n" + value},
+		{name: "unclosed value", raw: key + " <arg_value>" + text},
+		{
+			name: "tool envelope inside the argument",
+			raw:  key + ` <arg_value>{"name":"echo","args":{"text":"not the GLM argument"}}</arg_value>`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			op := &testTextOperator{
+				testModelOperator: &testModelOperator{load: func(context.Context, ModelOptions) (llama.Model, error) {
+					return 42, nil
+				}},
+				generate: func(_ context.Context, _ llama.Model, in TextGenerationInput, _ func(context.Context, string) error) (TextGenerationResult, error) {
+					if in.Messages[len(in.Messages)-1].GetRole() == "tool" {
+						return TextGenerationResult{Text: "Done."}, nil
+					}
+					return TextGenerationResult{Text: tc.raw}, nil
+				},
+			}
+			plugin, g := initLoadingTest(t, op)
+			def := testModelDefinition()
+			def.ToolCalling = true
+			model := plugin.DefineModel(g, def, nil)
+			var got input
+			calls := 0
+			tool := genkit.DefineTool(g, "echo", "Echo the input", func(_ *ai.ToolContext, in input) (string, error) {
+				calls++
+				got = in
+				return "ok", nil
+			})
+			resp, err := genkit.Generate(t.Context(), g, ai.WithModel(model), ai.WithTools(tool), ai.WithPrompt("Use echo."))
+			if tc.want == (input{}) {
+				if err == nil || calls != 0 {
+					t.Fatalf("calls = %d, input = %+q, error = %v; want an error before dispatch", calls, got, err)
+				}
+			} else if err != nil || calls != 1 || got != tc.want || resp.Text() != "Done." {
+				t.Fatalf("calls = %d, input = %+q, error = %v; want one call with %+q and a completed tool chain",
+					calls, got, err, tc.want)
+			}
+		})
+	}
+}
+
 func TestNamedJSONProseSurvivesToolMarkupCleaning(t *testing.T) {
 	const prose = `{"name":"Ada","meta":{"args":{"x":1}}}`
 	const nestedCall = `{"name":"Ada","meta":{"name":"add","args":{"a":2,"b":3}}}`

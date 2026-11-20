@@ -365,7 +365,10 @@ YZMA_TEST_TOOL_MODEL="$HOME/models/gemma-4-E4B-it-Q4_0.gguf" \
 
 For non-JSON calls, argument types are restored from the offered schema.
 String values such as `"0123"` stay strings. Unions without a single
-unambiguous type are not supported. Genkit v1.9 decodes numbers through
+unambiguous type are not supported. GLM allows spaces and tabs between its
+key and value tags on the same line. JSON-shaped string values such as
+`<arg_key>text</arg_key> <arg_value>{"name":"Ada"}</arg_value>` keep the
+original argument text. Genkit v1.9 decodes numbers through
 `float64` before dispatching tools. The adapter rejects values that would
 change in that conversion, including nested IDs such as `9007199254740993`.
 Use string fields for IDs that may exceed that precision. Some Gemma parser

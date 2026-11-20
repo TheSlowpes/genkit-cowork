@@ -217,6 +217,17 @@ func parsedToolParts(result TextGenerationResult, definitions []*ai.ToolDefiniti
 		if sentinel != "" {
 			delete(call.Function.Arguments, sentinel)
 		}
+		if prose.prefix != "" {
+			for key, value := range call.Function.Arguments {
+				if replacements := prose.glmValues[key]; len(replacements) > 0 {
+					value = strings.NewReplacer(replacements...).Replace(value)
+				}
+				if strings.Contains(value, prose.prefix) || strings.Contains(key, prose.prefix) {
+					return nil, fmt.Errorf("yzma: legacy tool call contains a prose placeholder")
+				}
+				call.Function.Arguments[key] = value
+			}
+		}
 		wireCalls = append(wireCalls, wireToolCall{name: call.Function.Name, untyped: call.Function.Arguments})
 	}
 	return validatedToolParts(prose.clean(raw), wireCalls, definitions, choice)

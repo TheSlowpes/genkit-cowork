@@ -41,6 +41,7 @@ type toolProse struct {
 	source       string
 	prefix       string
 	replacements []string
+	glmValues    map[string][]string // Per-key replacements inside confirmed GLM values.
 	masked       strings.Builder
 	end          int
 }
@@ -107,6 +108,8 @@ func (p *toolProse) parseWireCalls() ([]wireToolCall, string, error) {
 	raw := input
 	var calls, qwenCalls []wireToolCall
 	var text strings.Builder
+	var glmKey string
+	var glmValueStart, glmValueEnd int
 	nonJSON, harmonyText := false, false
 	for {
 		loc := toolSyntax.FindStringIndex(raw)
@@ -159,13 +162,21 @@ func (p *toolProse) parseWireCalls() ([]wireToolCall, string, error) {
 		case marker == "<arg_key>":
 			nonJSON = true
 			// GLM's parser treats everything in an argument value as text.
-			// Skip the value only if its delimiters are on the same line.
-			if _, afterKey, ok := strings.Cut(rest, "</arg_key>"); ok {
-				if value, ok := strings.CutPrefix(afterKey, "<arg_value>"); ok {
-					if _, tail, ok := strings.Cut(value, "</arg_value>"); ok &&
-						!strings.Contains(rest[:len(rest)-len(tail)], "\n") {
-						raw = tail
-						continue
+			// Recognize horizontal spacing, but don't search past stray text.
+			if key, afterKey, ok := strings.Cut(raw[loc[1]:], "</arg_key>"); ok {
+				afterGap := strings.TrimLeft(afterKey, " \t")
+				if value, ok := strings.CutPrefix(afterGap, "<arg_value>"); ok {
+					if body, tail, ok := strings.Cut(value, "</arg_value>"); ok &&
+						!strings.Contains(raw[loc[1]:len(raw)-len(tail)], "\n") {
+						if afterGap == afterKey {
+							raw = tail
+							continue
+						}
+						// Keep the scanner's existing mixed-syntax checks for
+						// spaced pairs. Restore shielded data only as an argument.
+						glmKey = key
+						glmValueStart = len(input) - len(value)
+						glmValueEnd = glmValueStart + len(body)
 					}
 				}
 			}
@@ -274,7 +285,15 @@ func (p *toolProse) parseWireCalls() ([]wireToolCall, string, error) {
 				_, hasAlias := v["args"]
 				if !hasArgs && !hasAlias {
 					start := len(input) - len(rest)
-					text.WriteString(p.shield(start, start+int(decoder.InputOffset())))
+					end := start + int(decoder.InputOffset())
+					token := p.shield(start, end)
+					if start >= glmValueStart && end <= glmValueEnd {
+						if p.glmValues == nil {
+							p.glmValues = make(map[string][]string)
+						}
+						p.glmValues[glmKey] = append(p.glmValues[glmKey], token, input[start:end])
+					}
+					text.WriteString(token)
 					continue
 				}
 			}
