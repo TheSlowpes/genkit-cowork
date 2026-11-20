@@ -431,7 +431,7 @@ Plugins can be used independently of the rest of the framework.
 | [Skills](#skills) | Discover and load domain knowledge from `SKILL.md` files |
 | [Yzma](genkit-cowork/plugins/yzma/README.md) | Run local GGUFs in-process for chat, completion, tool calling, constrained JSON, image prompts, text embeddings, speech synthesis, and typed decisions |
 
-The Yzma guide covers Dev UI discovery, constrained JSON, [native Genkit tool calling](genkit-cowork/plugins/yzma/README.md#tool-calling), and [bounding boxes with a grounding check](genkit-cowork/plugins/yzma/README.md#predict-a-bounding-box).
+The Yzma guide covers Dev UI discovery, constrained JSON, [native Genkit tool calling and accepted call formats](genkit-cowork/plugins/yzma/README.md#tool-calling), and [bounding boxes with a grounding check](genkit-cowork/plugins/yzma/README.md#predict-a-bounding-box).
 It also includes examples for [local speech synthesis](genkit-cowork/plugins/yzma/README.md#speech-output) and [typed System One decisions](genkit-cowork/plugins/yzma/README.md#typed-system-one-decisions).
 For speech recognition, see [transcribe an inline WAV](genkit-cowork/plugins/yzma/README.md#transcribe-an-inline-wav).
 

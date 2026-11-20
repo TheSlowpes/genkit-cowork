@@ -329,29 +329,58 @@ even after Genkit has executed a tool. To require a call only on the first
 turn, use `required` with `ai.WithReturnToolRequests(true)` and make a separate
 `auto` request after handling the tool result.
 
-The adapter reads JSON call envelopes directly so numbers, strings, nulls,
-objects, and arrays keep their original types during schema validation. Harmony
-commentary calls to `functions.*` must close with `<|call|>`. The adapter also
-checks Qwen's function and parameter tags directly, so an incomplete optional
-parameter cannot be silently dropped. Other non-JSON formats, such as Gemma's
-`call:` format, use Yzma's family parser. Calls get unique IDs, which stay with
-the arguments and tool results in subsequent turns.
-
 Tool-enabled turns are buffered until parsing completes. Streaming callbacks
 receive complete text/tool parts, not raw tool-call syntax. Ordinary chat without
 `ToolCalling` continues streaming text incrementally.
-Inline JSON with a `name` field but no top-level `args` or `arguments` stays
-in the text, even if a nested object has one of those keys.
-Tool inputs must use JSON object schemas. Local schema references are expanded
-for rendering; recursive schemas are rejected rather than silently omitted.
 
-Before returning executable calls, the adapter checks offered tool names,
-structural completeness, and input schemas. Truncated calls, unknown tools,
-invalid arguments, and ambiguous argument types return errors. It does not
-execute Yzma's repaired/truncated JSON calls.
-The adapter also rejects numbers that would lose precision and explicit null
-object fields that Genkit would drop during dispatch. Omit optional object fields
-instead. Array elements can be null if the tool schema allows it.
+The adapter uses the same frames to read arguments and remove call syntax from
+the answer. Prose outside those frames stays intact apart from outer whitespace
+and recognized protocol markers. JSON objects and arrays in prose are opaque
+unless an outer object has both `name` and `args` or `arguments`, in either
+order. A call-shaped object inside another object or array is still prose.
+Outside a Harmony text frame, Markdown fences do not change call detection.
+Explicit thinking frames and prompt-injected thinking prefixes ending in
+`</think>` or `<channel|>` never produce calls. An unclosed thinking frame, or
+a malformed call inside one whose end cannot be located, hides the remainder.
+Text after an end-of-turn marker is ignored, including simulated calls.
+
+| Format | Accepted call framing |
+| --- | --- |
+| JSON / Phi | `<tool_call>{"name":"echo","args":{"text":"hi"}}</tool_call>`, also with the Phi opener `<\|tool_call>`, or as an inline object. Exactly one of `args` and `arguments` must be an object. |
+| Qwen | `<function=echo><parameter=text>hi</parameter></function>`, bare or inside `<tool_call>…</tool_call>`. Inline spaces are literal; one matching pair of edge newlines is treated as template formatting. |
+| Gemma | `call:echo{text:<\|"\|>hi<\|"\|>,items:[1,2]}`, bare or inside `<\|tool_call>…<tool_call\|>`. Supports nested objects, arrays, JSON strings, and the Gemma quote tokens `<\|"\|>`, `<">`, and `<\|>`. |
+| GLM | `echo<arg_key>text</arg_key> <arg_value>hi</arg_value>`, starting on its own line. Spaces and tabs are allowed between a key and its value tag, but not a line break. The value body is literal and may contain line breaks. |
+| LFM2 | `<\|tool_call_start\|>…<\|tool_call_end\|>` around a JSON call object, a nonempty list of those objects, or a nonempty Python-style list such as `[echo(text='hi')]`. |
+| Mistral / Devstral | `[TOOL_CALLS]echo[ARGS]{"text":"hi"}`, optionally followed by `[/TOOL_CALLS]`. Repeat the entire frame for each call. |
+| Harmony | Commentary calls addressed to `functions.*` with a JSON object and a closing `<\|call\|>`. The recipient may be in the role or commentary header. The older `.echo <\|message\|>{"text":"hi"}` shorthand ends at its JSON object. Analysis is hidden. Final message bodies are visible text, even when they contain call examples. |
+
+The whole batch returns an error before dispatch if any visible candidate is
+malformed, has a missing closer, contains duplicate keys (including nested
+objects), names an unoffered tool, or fails its input schema. Recognizable
+truncated prefixes also fail, including inline JSON that starts with an argument
+key but never finishes. Batch members cannot mix formats. Wrapped, inline, and
+Phi JSON count as one format; LFM2 JSON and Python count separately.
+A turn that hits its output or context limit does not dispatch even a
+complete-looking call.
+
+The parser does not repair older Mistral `[TOOL_CALLS][…]` arrays, alternate
+`<toolcall>` wrappers, bare Gemma strings or missing commas, or Qwen/GLM values
+with unquoted occurrences of their own delimiters. Those delimiters can appear
+inside a leading JSON value in a Qwen or GLM argument. A Gemma quote token
+cannot appear inside a string delimited by that same token; use JSON quotes
+instead. LFM2 Python accepts keyword arguments, strings, lists, dictionaries
+with string keys, numbers in JSON notation, and Python or JSON spellings of
+booleans and null. Strings accept quote and backslash escapes, `\a\b\f\n\r\t\v`,
+and `\x`, `\u`, and `\U` escapes. Positional arguments, expressions, tuples,
+string prefixes, and other escapes are rejected rather than reinterpreted.
+
+Tool inputs must use JSON object schemas. Local schema references are expanded
+for rendering; recursive schemas are rejected. Qwen and GLM argument tags
+provide text, so the offered schema must give each parameter an unambiguous
+type to interpret it. Typed literals keep their types. Numbers that would lose
+precision and explicit null object fields that Genkit would drop return errors.
+Omit optional object fields instead. Arrays may contain null if allowed by the
+schema. Call IDs stay with the arguments and tool results in later turns.
 
 The opt-in native test runs a real Genkit tool with a local Gemma 4 model. It
 checks that Genkit executes it once, correlates the result with the call ID, and
@@ -363,17 +392,11 @@ YZMA_TEST_TOOL_MODEL="$HOME/models/gemma-4-E4B-it-Q4_0.gguf" \
   task test:yzma:tools:native
 ```
 
-For non-JSON calls, argument types are restored from the offered schema.
-String values such as `"0123"` stay strings. Unions without a single
-unambiguous type are not supported. GLM allows spaces and tabs between its
-key and value tags on the same line. JSON-shaped string values such as
-`<arg_key>text</arg_key> <arg_value>{"name":"Ada"}</arg_value>` keep the
-original argument text. Genkit v1.9 decodes numbers through
-`float64` before dispatching tools. The adapter rejects values that would
-change in that conversion, including nested IDs such as `9007199254740993`.
-Use string fields for IDs that may exceed that precision. Some Gemma parser
-forms also flatten nested objects. Use JSON calls for tools that require the
-original nesting.
+For example, if `text` is a string, GLM's
+`<arg_key>text</arg_key> <arg_value>{"name":"Ada"}</arg_value>` passes the
+original JSON-shaped text, not a new call or a decoded object. Use string
+fields for IDs such as `9007199254740993` that would change when Genkit v1.9
+decodes numbers through `float64`.
 
 ## Constrained structured output
 

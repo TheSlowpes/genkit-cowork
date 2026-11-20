@@ -22,8 +22,8 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/google/uuid"
@@ -169,68 +169,18 @@ func jsonObject(value any) (map[string]any, error) {
 	return result, nil
 }
 
-// Yzma v1.33 skips Gemma calls with empty arguments. Normalize complete empty
-// Gemma envelopes with a temporary argument so its parser also handles those.
-var emptyGemmaCall = regexp.MustCompile(`<\|tool_call>\s*call:([a-zA-Z_][\w./-]*)\{\s*\}<tool_call\|>`)
-var bareEmptyGemmaCall = regexp.MustCompile(`^\s*call:([a-zA-Z_][\w./-]*)\{\s*\}\s*$`)
-
 func parsedToolParts(result TextGenerationResult, definitions []*ai.ToolDefinition, choice ai.ToolChoice) ([]*ai.Part, error) {
-	prose := toolProse{source: result.Text}
-	wireCalls, text, err := prose.parseWireCalls()
+	wireCalls, text, err := parseWireCalls(result.Text)
 	if err != nil {
 		return nil, err
 	}
-	if len(wireCalls) > 0 {
-		if result.Limited {
-			return nil, fmt.Errorf("yzma: incomplete tool call; increase the output/context limit")
-		}
-		return validatedToolParts(text, wireCalls, definitions, choice)
-	}
-	if wireCalls != nil {
+	if len(wireCalls) == 0 {
 		return toolTextPart(text, choice)
 	}
-
-	fallback := prose.fallbackInput()
-	raw, sentinel := fallback, ""
-	if emptyGemmaCall.MatchString(raw) || bareEmptyGemmaCall.MatchString(raw) {
-		sentinel = "__yzma_empty_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-		raw = emptyGemmaCall.ReplaceAllString(raw, `<|tool_call>call:$1{`+sentinel+`:true}<tool_call|>`)
-		raw = bareEmptyGemmaCall.ReplaceAllString(raw, `call:$1{`+sentinel+`:true}`)
-	}
-	calls := message.ParseToolCalls(raw)
-	if len(calls) == 0 {
-		if strings.Contains(raw, "<tool_call") || strings.Contains(raw, "<|tool_call") ||
-			strings.Contains(raw, "<function=") || strings.Contains(raw, "<arg_key>") {
-			return nil, fmt.Errorf("yzma: malformed or incomplete tool call")
-		}
-		return toolTextPart(prose.clean(fallback), choice)
-	}
-	// GPT calls are executable only when the lossless parser recognized them.
-	if message.DetectFormat(raw) == message.FormatGPT {
-		return nil, fmt.Errorf("yzma: unsupported GPT tool call syntax")
-	}
-	// Yzma repairs truncated JSON. Never execute a repaired, incomplete call.
-	if result.Limited || !completeToolOutput(raw) {
+	if result.Limited {
 		return nil, fmt.Errorf("yzma: incomplete tool call; increase the output/context limit")
 	}
-	for _, call := range calls {
-		if sentinel != "" {
-			delete(call.Function.Arguments, sentinel)
-		}
-		if prose.prefix != "" {
-			for key, value := range call.Function.Arguments {
-				if replacements := prose.glmValues[key]; len(replacements) > 0 {
-					value = strings.NewReplacer(replacements...).Replace(value)
-				}
-				if strings.Contains(value, prose.prefix) || strings.Contains(key, prose.prefix) {
-					return nil, fmt.Errorf("yzma: legacy tool call contains a prose placeholder")
-				}
-				call.Function.Arguments[key] = value
-			}
-		}
-		wireCalls = append(wireCalls, wireToolCall{name: call.Function.Name, untyped: call.Function.Arguments})
-	}
-	return validatedToolParts(prose.clean(raw), wireCalls, definitions, choice)
+	return validatedToolParts(text, wireCalls, definitions, choice)
 }
 
 func toolTextPart(text string, choice ai.ToolChoice) ([]*ai.Part, error) {
@@ -260,6 +210,25 @@ func validatedToolParts(text string, calls []wireToolCall, definitions []*ai.Too
 			args, err = untypedToolArguments(call.untyped, tool.InputSchema)
 			if err != nil {
 				return nil, fmt.Errorf("tool %q: %w", tool.Name, err)
+			}
+		} else if call.legacy {
+			// Keep the existing range restriction for non-JSON top-level
+			// integer arguments even when the wire format now parses them.
+			root, err := dereferenceSchema(tool.InputSchema, tool.InputSchema)
+			if err != nil {
+				return nil, fmt.Errorf("tool %q: %w", tool.Name, err)
+			}
+			for key, value := range args {
+				if _, ok := value.(json.Number); !ok {
+					continue
+				}
+				kind, err := toolArgumentType(key, root, tool.InputSchema)
+				if err == nil && kind == "integer" {
+					err = validateLegacyInteger(key, value)
+				}
+				if err != nil {
+					return nil, fmt.Errorf("tool %q: %w", tool.Name, err)
+				}
 			}
 		}
 		if err := validateToolArguments(args, tool.InputSchema); err != nil {
@@ -315,60 +284,6 @@ func validateToolTransport(value any) error {
 	return nil
 }
 
-// completeToolOutput checks structural completeness independently of the
-// forgiving family parsers. Quoted braces and Gemma string delimiters are literal.
-func completeToolOutput(raw string) bool {
-	_, ok := scanToolStructure(raw, false)
-	return ok
-}
-
-// scanToolStructure can also stop at the end of one argument object to keep
-// literal tag text inside Gemma arguments out of the envelope scanner.
-func scanToolStructure(raw string, oneObject bool) (int, bool) {
-	var stack []byte
-	quote := ""
-	for i := 0; i < len(raw); {
-		if quote != "" {
-			if strings.HasPrefix(raw[i:], quote) {
-				i += len(quote)
-				quote = ""
-			} else if raw[i] == '\\' && len(quote) == 1 {
-				i += min(2, len(raw)-i)
-			} else {
-				i++
-			}
-			continue
-		}
-		if len(stack) > 0 {
-			for _, delimiter := range []string{`<|"|>`, `<">`, `<|>`, `"`, `'`} {
-				if strings.HasPrefix(raw[i:], delimiter) {
-					quote = delimiter
-					i += len(delimiter)
-					break
-				}
-			}
-			if quote != "" {
-				continue
-			}
-		}
-		switch raw[i] {
-		case '{', '[':
-			stack = append(stack, raw[i])
-		case '}', ']':
-			if len(stack) == 0 || (raw[i] == '}' && stack[len(stack)-1] != '{') ||
-				(raw[i] == ']' && stack[len(stack)-1] != '[') {
-				return 0, false
-			}
-			stack = stack[:len(stack)-1]
-			if oneObject && len(stack) == 0 {
-				return i + 1, true
-			}
-		}
-		i++
-	}
-	return len(raw), !oneObject && len(stack) == 0 && quote == ""
-}
-
 // untypedToolArguments interprets non-JSON family syntax using the offered
 // schema. JSON envelopes never take this path.
 func untypedToolArguments(raw map[string]string, schema map[string]any) (map[string]any, error) {
@@ -379,45 +294,55 @@ func untypedToolArguments(raw map[string]string, schema map[string]any) (map[str
 	if err != nil {
 		return nil, err
 	}
-	properties, _ := root["properties"].(map[string]any)
 	args := make(map[string]any, len(raw))
 	for key, value := range raw {
-		property, _ := properties[key].(map[string]any)
-		if property == nil {
-			property, _ = root["additionalProperties"].(map[string]any)
-		}
-		property, err = dereferenceSchema(property, schema)
+		kind, err := toolArgumentType(key, root, schema)
 		if err != nil {
 			return nil, err
 		}
-		kind, _ := property["type"].(string)
 		switch kind {
 		case "string":
+			if !utf8.ValidString(value) {
+				return nil, fmt.Errorf("argument %q is not valid UTF-8", key)
+			}
 			args[key] = value
 		case "integer", "number", "boolean", "array", "object", "null":
-			decoder := json.NewDecoder(bytes.NewBufferString(value))
-			decoder.UseNumber()
-			var decoded any
-			if !json.Valid([]byte(value)) {
-				return nil, fmt.Errorf("argument %q is not valid JSON for type %s", key, kind)
-			}
-			if err := decoder.Decode(&decoded); err != nil {
-				return nil, err
+			decoded, tail, err := splitWireJSON(value)
+			if err != nil || strings.TrimSpace(tail) != "" {
+				return nil, fmt.Errorf("argument %q is not valid JSON for type %s: %v", key, kind, err)
 			}
 			if kind == "integer" {
-				if n, ok := decoded.(json.Number); ok {
-					integer, err := n.Float64()
-					if err != nil || math.Abs(integer) >= 1<<53 {
-						return nil, fmt.Errorf("argument %q exceeds the parser's lossless integer range", key)
-					}
+				if err := validateLegacyInteger(key, decoded); err != nil {
+					return nil, err
 				}
 			}
 			args[key] = decoded
 		default:
-			return nil, fmt.Errorf("argument %q requires an unambiguous schema type; got %v", key, property["type"])
+			return nil, fmt.Errorf("argument %q requires an unambiguous schema type", key)
 		}
 	}
 	return args, nil
+}
+
+func toolArgumentType(key string, root, schema map[string]any) (string, error) {
+	properties, _ := root["properties"].(map[string]any)
+	property, _ := properties[key].(map[string]any)
+	if property == nil {
+		property, _ = root["additionalProperties"].(map[string]any)
+	}
+	property, err := dereferenceSchema(property, schema)
+	kind, _ := property["type"].(string)
+	return kind, err
+}
+
+func validateLegacyInteger(key string, value any) error {
+	if n, ok := value.(json.Number); ok {
+		integer, err := n.Float64()
+		if err != nil || math.Abs(integer) >= 1<<53 {
+			return fmt.Errorf("argument %q exceeds the parser's lossless integer range", key)
+		}
+	}
+	return nil
 }
 
 func validateToolArguments(args, schema map[string]any) error {

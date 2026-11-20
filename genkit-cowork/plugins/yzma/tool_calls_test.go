@@ -358,8 +358,7 @@ func TestHarmonyToolCallFraming(t *testing.T) {
 func TestJSONToolCallsKeepStructureAndRejectBadBatches(t *testing.T) {
 	def := &ai.ToolDefinition{Name: "echo", InputSchema: map[string]any{"type": "object"}}
 	const large = `<tool_call>{"name":"echo","arguments":{"arguments":{"n":9007199254740993},"list":[null,"42",false],"parameters":{"x":1}}}</tool_call>`
-	prose := toolProse{source: large}
-	calls, _, err := prose.parseWireCalls()
+	calls, _, err := parseWireCalls(large)
 	if err != nil || len(calls) != 1 {
 		t.Fatalf("parse = (%v, %v)", calls, err)
 	}
@@ -520,6 +519,7 @@ func TestGenkitGLMToolDispatch(t *testing.T) {
 		{
 			name: "tool envelope inside the argument",
 			raw:  key + ` <arg_value>{"name":"echo","args":{"text":"not the GLM argument"}}</arg_value>`,
+			want: input{Text: `{"name":"echo","args":{"text":"not the GLM argument"}}`},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -719,19 +719,6 @@ func TestToolHistoryRejectsMismatchedReferences(t *testing.T) {
 		})))
 	if _, err := generationMessages(input, true); err == nil {
 		t.Error("mismatched tool response must not be fed to the model")
-	}
-}
-
-func TestCompleteToolOutput(t *testing.T) {
-	for raw, want := range map[string]bool{
-		`<tool_call>{"name":"echo","arguments":{"text":"{braces}"}}</tool_call>`: true,
-		`<|tool_call>call:echo{text:<|"|>a } brace<|"|>}<tool_call|>`:            true,
-		`<tool_call>{"name":"echo","arguments":{"text":"unfinished`:              false,
-		`call:echo{text:[1,2}`: false,
-	} {
-		if got := completeToolOutput(raw); got != want {
-			t.Errorf("completeToolOutput(%q) = %v, want %v", raw, got, want)
-		}
 	}
 }
 
