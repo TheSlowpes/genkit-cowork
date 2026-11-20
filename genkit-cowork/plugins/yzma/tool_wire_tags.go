@@ -65,7 +65,7 @@ func parseQwenFunction(raw string) (wireToolCall, string, error) {
 		if !ok {
 			return wireToolCall{}, "", fmt.Errorf("yzma: expected a Qwen parameter or </function> in %q", name)
 		}
-		arg, tail, err := taggedValue(value, qwenDelimiter, "</parameter>", "<parameter=")
+		arg, tail, err := taggedValue(value, qwenDelimiter, "</parameter>", "<parameter=", "</function>", jsonClose)
 		if err != nil {
 			return wireToolCall{}, "", fmt.Errorf("yzma: Qwen parameter %q: %w", key, err)
 		}
@@ -126,9 +126,9 @@ func parseGLMCall(raw string) (wireToolCall, string, error) {
 }
 
 // taggedValue respects literal delimiters in a leading JSON value. JSON
-// syntax can locate the boundary, but must not merge two apparent argument
-// pairs when a quote from the second would also close the first.
-func taggedValue(raw string, delimiter *regexp.Regexp, close, next string) (string, string, error) {
+// syntax can locate the boundary, but must not borrow a quote from another
+// argument, function, or wrapper to close the current value.
+func taggedValue(raw string, delimiter *regexp.Regexp, close string, boundaries ...string) (string, string, error) {
 	body := strings.TrimLeft(raw, " \r\n\t")
 	start := 0
 	if body != "" && strings.ContainsRune(`{["`, rune(body[0])) {
@@ -142,8 +142,11 @@ func taggedValue(raw string, delimiter *regexp.Regexp, close, next string) (stri
 				if !ok {
 					break
 				}
-				if strings.HasPrefix(strings.TrimSpace(after), next) {
-					return "", raw, fmt.Errorf("ambiguous %s before another argument inside JSON", close)
+				next := strings.TrimSpace(after)
+				for _, boundary := range boundaries {
+					if strings.HasPrefix(next, boundary) {
+						return "", raw, fmt.Errorf("ambiguous %s before %s inside JSON", close, boundary)
+					}
 				}
 				protected = after
 			}

@@ -121,6 +121,22 @@ func TestToolWireVisibleTextUsesFrameSpans(t *testing.T) {
 	}
 }
 
+func TestGLMQuotedValuesStayOnTheirOwnLines(t *testing.T) {
+	// A raw newline cannot be part of the JSON string, so lookahead must
+	// leave the quotes in the two complete GLM arguments as literal text.
+	const raw = `echo<arg_key>text</arg_key><arg_value>"left</arg_value>` + "\n" +
+		`echo<arg_key>text</arg_key><arg_value>right"</arg_value>`
+	calls, text, err := parseWireCalls(raw)
+	if err != nil || text != "" || len(calls) != 2 {
+		t.Fatalf("parse = (%v, %q, %v), want two calls without prose", calls, text, err)
+	}
+	for i, want := range []string{`"left`, `right"`} {
+		if got := calls[i].untyped["text"]; got != want {
+			t.Errorf("call %d text = %q, want %q", i, got, want)
+		}
+	}
+}
+
 func TestGenkitToolFrameDispatch(t *testing.T) {
 	type object struct {
 		Value string `json:"value"`
@@ -134,6 +150,8 @@ func TestGenkitToolFrameDispatch(t *testing.T) {
 	const harmonyExample = `Example: <|start|>assistant<|channel|>commentary to=functions.echo<|message|>{"text":"<|return|>"}<|call|> Done.`
 	const harmonyCall = `<|channel|>commentary to=functions.echo<|message|>{"text":"ok"}<|call|>`
 	const openProse = " Related [2 notes. "
+	const qwenLeft = `<function=echo><parameter=text>"left</parameter></function>`
+	const qwenRight = `<function=echo><parameter=text>right"</parameter></function>`
 	for _, tc := range []struct {
 		name, raw string
 		wantInput *input
@@ -157,8 +175,8 @@ func TestGenkitToolFrameDispatch(t *testing.T) {
 		},
 		{
 			name:      "Qwen unambiguous quoted closing tag",
-			raw:       `<function=echo><parameter=text>"left</parameter>right"</parameter></function>`,
-			wantInput: &input{Text: `"left</parameter>right"`},
+			raw:       `<function=echo><parameter=text>"left</parameter>right </function></tool_call>"</parameter></function>`,
+			wantInput: &input{Text: `"left</parameter>right </function></tool_call>"`},
 		},
 		{
 			name:      "Gemma arrays, nested marker, whitespace and JSON escapes",
@@ -242,6 +260,30 @@ func TestGenkitToolFrameDispatch(t *testing.T) {
 			raw:     `<function=echo><parameter=text>"left</parameter><parameter=text>right"</parameter></function>`,
 			wantErr: true,
 			errText: "ambiguous </parameter>",
+		},
+		{
+			name:    "Qwen quote spanning bare functions",
+			raw:     qwenLeft + qwenRight,
+			wantErr: true,
+			errText: "ambiguous </parameter> before </function>",
+		},
+		{
+			name:    "Qwen quote spanning functions in one wrapper after valid call",
+			raw:     `<tool_call>` + wireTestQwen + qwenLeft + qwenRight + `</tool_call>`,
+			wantErr: true,
+			errText: "ambiguous </parameter> before </function>",
+		},
+		{
+			name:    "Qwen quote spanning two wrappers",
+			raw:     `<tool_call>` + qwenLeft + `</tool_call><tool_call>` + qwenRight + `</tool_call>`,
+			wantErr: true,
+			errText: "ambiguous </parameter> before </function>",
+		},
+		{
+			name:    "Qwen value cannot swallow an early wrapper close",
+			raw:     `<tool_call><function=echo><parameter=text>"left</parameter></tool_call>right"</parameter></function></tool_call>`,
+			wantErr: true,
+			errText: "ambiguous </parameter> before </tool_call>",
 		},
 		{
 			name:    "GLM quote spanning duplicate arguments",

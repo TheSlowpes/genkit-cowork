@@ -368,10 +368,12 @@ complete-looking call.
 The parser does not repair older Mistral `[TOOL_CALLS][…]` arrays, alternate
 `<toolcall>` wrappers, bare Gemma strings or missing commas, or Qwen/GLM values
 with unquoted occurrences of their own delimiters. Those delimiters can appear
-inside a leading JSON value in a Qwen or GLM argument, unless a literal closing
-tag is followed by what could be another argument. A Gemma quote token
-cannot appear inside a string delimited by that same token; use JSON quotes
-instead. LFM2 Python accepts keyword arguments, strings, lists, dictionaries
+inside a leading JSON value in a Qwen or GLM argument, unless a value's closing
+tag is followed by another argument opener or, in Qwen, a function or wrapper
+closer. A Gemma quote token cannot appear inside a string delimited by that
+same token; use JSON quotes instead.
+
+LFM2 Python accepts keyword arguments, strings, lists, dictionaries
 with string keys, numbers in JSON notation, and Python or JSON spellings of
 booleans and null. Strings accept quote and backslash escapes, `\a\b\f\n\r\t\v`,
 and `\x`, `\u`, and `\U` escapes. Positional arguments, expressions, tuples,
